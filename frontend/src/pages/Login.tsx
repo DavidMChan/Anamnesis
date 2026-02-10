@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useNavigate, useLocation } from 'react-router-dom'
+import { Link, useNavigate, useLocation, Navigate } from 'react-router-dom'
 import { useAuthContext } from '@/contexts/AuthContext'
 import { PublicLayout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
@@ -14,14 +14,26 @@ export function Login() {
   const [error, setError] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
 
-  const { signIn } = useAuthContext()
+  const { signIn, user, loading: authLoading } = useAuthContext()
   const navigate = useNavigate()
   const location = useLocation()
 
   const from = location.state?.from?.pathname || '/surveys'
 
+  // Redirect logged-in users to surveys (don't wait for loading - that can hang)
+  if (user) {
+    return <Navigate to="/surveys" replace />
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    // If already logged in, just redirect (don't try to sign in again)
+    if (user) {
+      navigate(from, { replace: true })
+      return
+    }
+
     setError(null)
     setLoading(true)
 
@@ -87,8 +99,8 @@ export function Login() {
               </div>
             </CardContent>
             <CardFooter className="flex flex-col space-y-4">
-              <Button type="submit" className="w-full" loading={loading}>
-                Sign in
+              <Button type="submit" className="w-full" loading={loading} disabled={authLoading}>
+                {authLoading ? 'Checking session...' : 'Sign in'}
               </Button>
               <p className="text-sm text-muted-foreground text-center">
                 Don't have an account?{' '}

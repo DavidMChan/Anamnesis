@@ -1,15 +1,15 @@
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { useAuthContext } from '@/contexts/AuthContext'
 import { Button } from '@/components/ui/button'
 import { ClipboardList, BookOpen, Settings, LogOut, User } from 'lucide-react'
 
 export function Navbar() {
   const { user, profile, signOut } = useAuthContext()
-  const navigate = useNavigate()
 
   const handleSignOut = async () => {
     await signOut()
-    navigate('/login')
+    // Use hard navigation to avoid ProtectedRoute redirect race condition
+    window.location.href = '/'
   }
 
   return (
