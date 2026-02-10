@@ -8,13 +8,13 @@ import { Progress } from '@/components/ui/progress'
 import { supabase } from '@/lib/supabase'
 import { useAuthContext } from '@/contexts/AuthContext'
 import type { Survey } from '@/types/database'
-import { Plus, Eye, Download, Trash2 } from 'lucide-react'
+import { Plus, Eye, BarChart3, Trash2, ClipboardList } from 'lucide-react'
 
-const statusColors: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+const statusVariants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info'> = {
   draft: 'secondary',
-  queued: 'outline',
-  running: 'default',
-  completed: 'default',
+  queued: 'warning',
+  running: 'info',
+  completed: 'success',
   failed: 'destructive',
 }
 
@@ -72,73 +72,79 @@ export function Surveys() {
 
   return (
     <Layout>
-      <div className="space-y-6">
-        <div className="flex items-center justify-between">
+      <div className="space-y-8">
+        {/* Page Header */}
+        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
-            <h1 className="text-3xl font-bold">My Surveys</h1>
-            <p className="text-muted-foreground">Create and manage your surveys</p>
+            <h1 className="text-2xl font-bold">Surveys</h1>
+            <p className="text-muted-foreground">Create and manage your research surveys</p>
           </div>
           <Link to="/surveys/new">
-            <Button>
-              <Plus className="h-4 w-4 mr-2" />
+            <Button className="gap-2">
+              <Plus className="h-4 w-4" />
               New Survey
             </Button>
           </Link>
         </div>
 
         {surveys.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-12">
-              <p className="text-muted-foreground mb-4">You haven't created any surveys yet.</p>
+          <Card className="border-dashed">
+            <CardContent className="flex flex-col items-center justify-center py-16">
+              <div className="h-12 w-12 rounded-xl bg-muted flex items-center justify-center mb-4">
+                <ClipboardList className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <h3 className="font-semibold mb-1">No surveys yet</h3>
+              <p className="text-muted-foreground text-sm mb-4 text-center max-w-sm">
+                Create your first survey to start collecting responses from virtual personas.
+              </p>
               <Link to="/surveys/new">
-                <Button>
-                  <Plus className="h-4 w-4 mr-2" />
+                <Button className="gap-2">
+                  <Plus className="h-4 w-4" />
                   Create Your First Survey
                 </Button>
               </Link>
             </CardContent>
           </Card>
         ) : (
-          <div className="grid gap-4">
+          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {surveys.map((survey) => (
-              <Card key={survey.id}>
-                <CardHeader className="pb-2">
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <CardTitle className="text-lg">
-                        {survey.name || 'Untitled Survey'}
-                      </CardTitle>
-                      <CardDescription>
-                        {survey.questions.length} questions
-                        {survey.matched_count ? ` • ${survey.matched_count} backstories` : ''}
-                      </CardDescription>
-                    </div>
-                    <Badge variant={statusColors[survey.status]}>
-                      {survey.status.charAt(0).toUpperCase() + survey.status.slice(1)}
+              <Card key={survey.id} interactive className="flex flex-col">
+                <CardHeader className="pb-3">
+                  <div className="flex items-start justify-between gap-2">
+                    <CardTitle className="text-base line-clamp-1">
+                      {survey.name || 'Untitled Survey'}
+                    </CardTitle>
+                    <Badge variant={statusVariants[survey.status]}>
+                      {survey.status}
                     </Badge>
                   </div>
+                  <CardDescription className="text-xs">
+                    {survey.questions.length} questions
+                    {survey.matched_count ? ` · ${survey.matched_count} backstories` : ''}
+                  </CardDescription>
                 </CardHeader>
-                <CardContent>
+                <CardContent className="flex-1 flex flex-col">
                   {(survey.status === 'running' || survey.status === 'queued') && (
                     <div className="mb-4">
-                      <div className="flex items-center justify-between text-sm mb-1">
-                        <span>Progress</span>
-                        <span>{getProgress(survey)}%</span>
+                      <div className="flex items-center justify-between text-xs mb-2">
+                        <span className="text-muted-foreground">Progress</span>
+                        <span className="font-medium">{getProgress(survey)}%</span>
                       </div>
                       <Progress value={getProgress(survey)} />
                     </div>
                   )}
-                  <div className="flex items-center gap-2">
-                    <Link to={`/surveys/${survey.id}`}>
-                      <Button variant="outline" size="sm">
-                        <Eye className="h-4 w-4 mr-1" />
+
+                  <div className="mt-auto pt-4 flex items-center gap-2 border-t border-border">
+                    <Link to={`/surveys/${survey.id}`} className="flex-1">
+                      <Button variant="outline" size="sm" className="w-full gap-1">
+                        <Eye className="h-3.5 w-3.5" />
                         View
                       </Button>
                     </Link>
                     {survey.status === 'completed' && (
                       <Link to={`/surveys/${survey.id}/results`}>
-                        <Button variant="outline" size="sm">
-                          <Download className="h-4 w-4 mr-1" />
+                        <Button variant="outline" size="sm" className="gap-1">
+                          <BarChart3 className="h-3.5 w-3.5" />
                           Results
                         </Button>
                       </Link>
@@ -147,13 +153,15 @@ export function Surveys() {
                       variant="ghost"
                       size="sm"
                       onClick={() => deleteSurvey(survey.id)}
+                      className="px-2"
                     >
-                      <Trash2 className="h-4 w-4 text-destructive" />
+                      <Trash2 className="h-3.5 w-3.5 text-destructive" />
                     </Button>
-                    <span className="text-xs text-muted-foreground ml-auto">
-                      Created {new Date(survey.created_at).toLocaleDateString()}
-                    </span>
                   </div>
+
+                  <p className="text-[10px] text-muted-foreground mt-3">
+                    Created {new Date(survey.created_at).toLocaleDateString()}
+                  </p>
                 </CardContent>
               </Card>
             ))}

@@ -1,10 +1,12 @@
 import { useState } from 'react'
 import { Link, useNavigate, useLocation } from 'react-router-dom'
 import { useAuthContext } from '@/contexts/AuthContext'
+import { PublicLayout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { BookOpen } from 'lucide-react'
 
 export function Login() {
   const [email, setEmail] = useState('')
@@ -24,9 +26,7 @@ export function Login() {
     setLoading(true)
 
     try {
-      console.log('Attempting login with:', email)
       const { error } = await signIn(email, password)
-      console.log('Login response:', error ? error.message : 'success')
 
       if (error) {
         setError(error.message)
@@ -35,63 +35,71 @@ export function Login() {
         navigate(from, { replace: true })
       }
     } catch (err) {
-      console.error('Login exception:', err)
       setError(err instanceof Error ? err.message : 'An unexpected error occurred')
       setLoading(false)
     }
   }
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-background">
-      <Card className="w-full max-w-md">
-        <CardHeader className="space-y-1">
-          <CardTitle className="text-2xl font-bold">Sign in</CardTitle>
-          <CardDescription>
-            Enter your email and password to access your account
-          </CardDescription>
-        </CardHeader>
-        <form onSubmit={handleSubmit}>
-          <CardContent className="space-y-4">
-            {error && (
-              <div className="p-3 text-sm text-red-500 bg-red-50 border border-red-200 rounded-md">
-                {error}
+    <PublicLayout>
+      <div className="flex items-center justify-center min-h-screen px-4">
+        <Card className="w-full max-w-md">
+          <CardHeader className="space-y-4 text-center">
+            <div className="mx-auto flex h-12 w-12 items-center justify-center rounded-xl bg-primary">
+              <BookOpen className="h-6 w-6 text-primary-foreground" />
+            </div>
+            <div className="space-y-1">
+              <CardTitle className="text-2xl font-bold">Welcome back</CardTitle>
+              <CardDescription>
+                Sign in to your account to continue
+              </CardDescription>
+            </div>
+          </CardHeader>
+          <form onSubmit={handleSubmit}>
+            <CardContent className="space-y-4">
+              {error && (
+                <div className="p-3 text-sm text-destructive bg-destructive/10 border border-destructive/20 rounded-xl">
+                  {error}
+                </div>
+              )}
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <Input
+                  id="email"
+                  type="email"
+                  placeholder="you@example.com"
+                  value={email}
+                  onChange={(e) => setEmail(e.target.value)}
+                  required
+                  autoComplete="email"
+                />
               </div>
-            )}
-            <div className="space-y-2">
-              <Label htmlFor="email">Email</Label>
-              <Input
-                id="email"
-                type="email"
-                placeholder="m@example.com"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                required
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="password">Password</Label>
-              <Input
-                id="password"
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                required
-              />
-            </div>
-          </CardContent>
-          <CardFooter className="flex flex-col space-y-4">
-            <Button type="submit" className="w-full" disabled={loading}>
-              {loading ? 'Signing in...' : 'Sign in'}
-            </Button>
-            <p className="text-sm text-muted-foreground text-center">
-              Don't have an account?{' '}
-              <Link to="/register" className="text-primary hover:underline">
-                Sign up
-              </Link>
-            </p>
-          </CardFooter>
-        </form>
-      </Card>
-    </div>
+              <div className="space-y-2">
+                <Label htmlFor="password">Password</Label>
+                <Input
+                  id="password"
+                  type="password"
+                  value={password}
+                  onChange={(e) => setPassword(e.target.value)}
+                  required
+                  autoComplete="current-password"
+                />
+              </div>
+            </CardContent>
+            <CardFooter className="flex flex-col space-y-4">
+              <Button type="submit" className="w-full" loading={loading}>
+                Sign in
+              </Button>
+              <p className="text-sm text-muted-foreground text-center">
+                Don't have an account?{' '}
+                <Link to="/register" className="text-primary font-medium hover:underline">
+                  Create one
+                </Link>
+              </p>
+            </CardFooter>
+          </form>
+        </Card>
+      </div>
+    </PublicLayout>
   )
 }

@@ -1,125 +1,179 @@
 import { Link } from 'react-router-dom'
 import { useAuthContext } from '@/contexts/AuthContext'
-import { Layout } from '@/components/layout/Layout'
+import { PublicLayout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
-import { ClipboardList, BookOpen, Zap, Users } from 'lucide-react'
+import { ArrowRight, Sparkles, Users, FileQuestion, BarChart3 } from 'lucide-react'
 
 export function Home() {
   const { user } = useAuthContext()
 
   return (
-    <Layout>
-      <div className="max-w-4xl mx-auto space-y-8">
-        <div className="text-center space-y-4">
-          <h1 className="text-4xl font-bold tracking-tight">Virtual Personas Arena</h1>
-          <p className="text-xl text-muted-foreground max-w-2xl mx-auto">
-            Create surveys and run them on AI-generated personas to understand how different
-            demographics might respond to your questions.
-          </p>
-          {!user && (
-            <div className="flex gap-4 justify-center">
+    <PublicLayout>
+      <div className="min-h-screen">
+        {/* Navigation Bar */}
+        <nav className="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-md border-b border-border">
+          <div className="container max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
+            <Link to="/" className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center">
+                <Sparkles className="h-4 w-4 text-primary-foreground" />
+              </div>
+              <span className="font-semibold">Survey Arena</span>
+            </Link>
+            <div className="flex items-center gap-3">
+              {user ? (
+                <Link to="/surveys">
+                  <Button>Dashboard</Button>
+                </Link>
+              ) : (
+                <>
+                  <Link to="/login">
+                    <Button variant="ghost">Sign In</Button>
+                  </Link>
+                  <Link to="/register">
+                    <Button>Get Started</Button>
+                  </Link>
+                </>
+              )}
+            </div>
+          </div>
+        </nav>
+
+        {/* Hero Section */}
+        <section className="pt-32 pb-16 px-4">
+          <div className="container max-w-4xl mx-auto text-center space-y-6">
+            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-primary/10 text-primary text-sm font-medium">
+              <Sparkles className="h-4 w-4" />
+              BAIR Lab @ UC Berkeley
+            </div>
+            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-tight">
+              Understand how{' '}
+              <span className="text-primary">different perspectives</span>{' '}
+              respond to your questions
+            </h1>
+            <p className="text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto">
+              Run surveys on AI-generated personas with diverse backstories.
+              Get insights into how different demographics might respond.
+            </p>
+            {!user && (
+              <div className="flex flex-col sm:flex-row gap-4 justify-center pt-4">
+                <Link to="/register">
+                  <Button size="lg" className="w-full sm:w-auto gap-2">
+                    Start Free <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </Link>
+                <Link to="/login">
+                  <Button size="lg" variant="outline" className="w-full sm:w-auto">
+                    Sign In
+                  </Button>
+                </Link>
+              </div>
+            )}
+            {user && (
+              <div className="flex flex-col sm:flex-row gap-4 justify-center pt-4">
+                <Link to="/surveys">
+                  <Button size="lg" className="w-full sm:w-auto gap-2">
+                    Go to Dashboard <ArrowRight className="h-4 w-4" />
+                  </Button>
+                </Link>
+              </div>
+            )}
+          </div>
+        </section>
+
+        {/* How It Works - Steps */}
+        <section className="py-20 px-4 bg-muted/30 overflow-hidden">
+          <div className="container max-w-5xl mx-auto">
+            <div className="text-center mb-16">
+              <h2 className="text-3xl font-bold mb-4">How it works</h2>
+              <p className="text-muted-foreground">Three simple steps to get insights</p>
+            </div>
+
+            {/* Steps */}
+            <div className="grid md:grid-cols-3 gap-8">
+              {/* Step 1 */}
+              <div
+                className="relative flex flex-col items-center text-center group animate-fade-in-up"
+                style={{ animationDelay: '0ms' }}
+              >
+                {/* Connector line to next step */}
+                <div className="hidden md:block absolute top-8 left-[60%] w-[80%] h-0.5 bg-gradient-to-r from-primary/40 to-primary/10" />
+
+                <div className="relative z-10 h-16 w-16 rounded-2xl bg-primary text-primary-foreground flex items-center justify-center mb-5 shadow-lg group-hover:scale-105 group-hover:shadow-xl transition-all duration-300">
+                  <Users className="h-7 w-7" />
+                  <span className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-card border-2 border-primary text-primary text-xs font-bold flex items-center justify-center">
+                    1
+                  </span>
+                </div>
+                <h3 className="font-semibold text-lg mb-2">Prepare Backstories</h3>
+                <p className="text-sm text-muted-foreground leading-relaxed max-w-[240px]">
+                  Create, use, or upload backstories based on your target demographics
+                </p>
+              </div>
+
+              {/* Step 2 */}
+              <div
+                className="relative flex flex-col items-center text-center group animate-fade-in-up"
+                style={{ animationDelay: '150ms' }}
+              >
+                {/* Connector line to next step */}
+                <div className="hidden md:block absolute top-8 left-[60%] w-[80%] h-0.5 bg-gradient-to-r from-primary/40 to-primary/10" />
+
+                <div className="relative z-10 h-16 w-16 rounded-2xl bg-primary text-primary-foreground flex items-center justify-center mb-5 shadow-lg group-hover:scale-105 group-hover:shadow-xl transition-all duration-300">
+                  <FileQuestion className="h-7 w-7" />
+                  <span className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-card border-2 border-primary text-primary text-xs font-bold flex items-center justify-center">
+                    2
+                  </span>
+                </div>
+                <h3 className="font-semibold text-lg mb-2">Create Survey</h3>
+                <p className="text-sm text-muted-foreground leading-relaxed max-w-[240px]">
+                  Design your survey with multiple question types
+                </p>
+              </div>
+
+              {/* Step 3 */}
+              <div
+                className="relative flex flex-col items-center text-center group animate-fade-in-up"
+                style={{ animationDelay: '300ms' }}
+              >
+                <div className="relative z-10 h-16 w-16 rounded-2xl bg-primary text-primary-foreground flex items-center justify-center mb-5 shadow-lg group-hover:scale-105 group-hover:shadow-xl transition-all duration-300">
+                  <BarChart3 className="h-7 w-7" />
+                  <span className="absolute -top-2 -right-2 h-6 w-6 rounded-full bg-card border-2 border-primary text-primary text-xs font-bold flex items-center justify-center">
+                    3
+                  </span>
+                </div>
+                <h3 className="font-semibold text-lg mb-2">Run & Analyze</h3>
+                <p className="text-sm text-muted-foreground leading-relaxed max-w-[240px]">
+                  Execute surveys and visualize results instantly
+                </p>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* CTA Section */}
+        <section className="py-20 px-4">
+          <div className="container max-w-4xl mx-auto text-center">
+            <h2 className="text-3xl font-bold mb-4">Ready to get started?</h2>
+            <p className="text-muted-foreground mb-8 max-w-xl mx-auto">
+              Create your free account and start exploring how different perspectives respond to your surveys.
+            </p>
+            {!user && (
               <Link to="/register">
-                <Button size="lg">Get Started</Button>
-              </Link>
-              <Link to="/login">
-                <Button size="lg" variant="outline">
-                  Sign In
+                <Button size="lg" className="gap-2">
+                  Create Free Account <ArrowRight className="h-4 w-4" />
                 </Button>
               </Link>
-            </div>
-          )}
-        </div>
-
-        <div className="grid md:grid-cols-2 gap-6">
-          <Card>
-            <CardHeader>
-              <ClipboardList className="h-8 w-8 text-primary mb-2" />
-              <CardTitle>Create Surveys</CardTitle>
-              <CardDescription>
-                Build surveys with multiple question types: multiple choice, multi-select,
-                open response, and ranking questions.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ul className="text-sm text-muted-foreground space-y-1">
-                <li>- Multiple choice questions</li>
-                <li>- Multi-select options</li>
-                <li>- Open-ended responses</li>
-                <li>- Ranking questions</li>
-              </ul>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <Users className="h-8 w-8 text-primary mb-2" />
-              <CardTitle>Target Demographics</CardTitle>
-              <CardDescription>
-                Filter backstories by demographic characteristics to understand how different
-                groups might respond.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ul className="text-sm text-muted-foreground space-y-1">
-                <li>- Age ranges</li>
-                <li>- Gender</li>
-                <li>- Political affiliation</li>
-                <li>- Education level</li>
-              </ul>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <BookOpen className="h-8 w-8 text-primary mb-2" />
-              <CardTitle>Upload Backstories</CardTitle>
-              <CardDescription>
-                Contribute your own backstories to the pool or keep them private for your
-                own research.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ul className="text-sm text-muted-foreground space-y-1">
-                <li>- Upload custom backstories</li>
-                <li>- Public or private visibility</li>
-                <li>- Custom demographic tagging</li>
-              </ul>
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <Zap className="h-8 w-8 text-primary mb-2" />
-              <CardTitle>Run & Analyze</CardTitle>
-              <CardDescription>
-                Execute surveys using your preferred LLM and analyze results with built-in
-                visualization and CSV export.
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <ul className="text-sm text-muted-foreground space-y-1">
-                <li>- Real-time progress tracking</li>
-                <li>- Distribution visualizations</li>
-                <li>- CSV export for analysis</li>
-              </ul>
-            </CardContent>
-          </Card>
-        </div>
-
-        {user && (
-          <div className="flex gap-4 justify-center pt-4">
-            <Link to="/surveys">
-              <Button size="lg">Go to My Surveys</Button>
-            </Link>
-            <Link to="/backstories">
-              <Button size="lg" variant="outline">
-                My Backstories
-              </Button>
-            </Link>
+            )}
           </div>
-        )}
+        </section>
+
+        {/* Footer */}
+        <footer className="py-8 px-4 border-t border-border">
+          <div className="container max-w-6xl mx-auto text-center text-sm text-muted-foreground">
+            <p>Survey Arena - <span className="font-medium">BAIR Lab</span>, UC Berkeley</p>
+          </div>
+        </footer>
       </div>
-    </Layout>
+    </PublicLayout>
   )
 }
