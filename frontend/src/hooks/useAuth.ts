@@ -98,6 +98,16 @@ export function useAuth() {
     return { error }
   }
 
+  const signInWithGoogle = async () => {
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider: 'google',
+      options: {
+        redirectTo: `${window.location.origin}/surveys`
+      }
+    })
+    return { error }
+  }
+
   const updateProfile = async (updates: Partial<User>) => {
     if (!state.user) return { error: new Error('Not authenticated') }
 
@@ -122,6 +132,7 @@ export function useAuth() {
     signIn,
     signUp,
     signOut,
+    signInWithGoogle,
     updateProfile,
   }
 }
