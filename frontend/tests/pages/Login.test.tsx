@@ -14,6 +14,7 @@ const mockAuthContext = {
   signIn: vi.fn(),
   signUp: vi.fn(),
   signOut: vi.fn(),
+  signInWithGoogle: vi.fn(),
   session: null,
   updateProfile: vi.fn(),
 }
@@ -65,6 +66,23 @@ describe('Login Page - Auth Redirect Guard', () => {
       expect(screen.getByLabelText(/email/i)).toBeInTheDocument()
       expect(screen.getByLabelText(/password/i)).toBeInTheDocument()
       expect(screen.getByRole('button', { name: /sign in/i })).toBeInTheDocument()
+    })
+
+    it('should show Google button above email form', () => {
+      mockAuthContext.user = null
+
+      renderLogin()
+
+      const googleButton = screen.getByRole('button', { name: /continue with google/i })
+      expect(googleButton).toBeInTheDocument()
+    })
+
+    it('should show divider with "or" text between Google button and form', () => {
+      mockAuthContext.user = null
+
+      renderLogin()
+
+      expect(screen.getByText('or')).toBeInTheDocument()
     })
   })
 
