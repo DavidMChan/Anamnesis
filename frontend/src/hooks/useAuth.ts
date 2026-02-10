@@ -35,32 +35,40 @@ export function useAuth() {
   useEffect(() => {
     // Get initial session
     supabase.auth.getSession().then(async ({ data: { session } }) => {
-      let profile: User | null = null
-      if (session?.user) {
-        profile = await fetchProfile(session.user.id)
-      }
-      setState({
+      // Set user and session immediately (don't wait for profile)
+      setState((prev) => ({
+        ...prev,
         user: session?.user ?? null,
-        profile,
         session,
         loading: false,
-      })
+      }))
+
+      // Fetch profile in background (don't block)
+      if (session?.user) {
+        fetchProfile(session.user.id).then((profile) => {
+          setState((prev) => ({ ...prev, profile }))
+        })
+      }
     })
 
     // Listen for auth changes
     const {
       data: { subscription },
     } = supabase.auth.onAuthStateChange(async (_event, session) => {
-      let profile: User | null = null
-      if (session?.user) {
-        profile = await fetchProfile(session.user.id)
-      }
-      setState({
+      // Set user and session immediately (don't wait for profile)
+      setState((prev) => ({
+        ...prev,
         user: session?.user ?? null,
-        profile,
         session,
         loading: false,
-      })
+      }))
+
+      // Fetch profile in background (don't block)
+      if (session?.user) {
+        fetchProfile(session.user.id).then((profile) => {
+          setState((prev) => ({ ...prev, profile }))
+        })
+      }
     })
 
     return () => subscription.unsubscribe()
