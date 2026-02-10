@@ -1,4 +1,4 @@
-import { Link, useLocation, useNavigate } from 'react-router-dom'
+import { Link, useLocation } from 'react-router-dom'
 import { useAuthContext } from '@/contexts/AuthContext'
 import { ThemeToggle } from '@/components/ui/theme-toggle'
 import { Button } from '@/components/ui/button'
@@ -33,12 +33,12 @@ const accountNavItems: NavItem[] = [
 export function Sidebar() {
   const { user, profile, signOut } = useAuthContext()
   const location = useLocation()
-  const navigate = useNavigate()
   const [isOpen, setIsOpen] = useState(false)
 
   const handleSignOut = async () => {
     await signOut()
-    navigate('/login')
+    // Use hard navigation to avoid ProtectedRoute redirect race condition
+    window.location.href = '/'
   }
 
   const isActive = (href: string) => {

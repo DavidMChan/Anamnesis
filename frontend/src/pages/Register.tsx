@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link, useNavigate, Navigate } from 'react-router-dom'
 import { useAuthContext } from '@/contexts/AuthContext'
 import { PublicLayout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
@@ -16,11 +16,23 @@ export function Register() {
   const [loading, setLoading] = useState(false)
   const [success, setSuccess] = useState(false)
 
-  const { signUp } = useAuthContext()
+  const { signUp, user, loading: authLoading } = useAuthContext()
   const navigate = useNavigate()
+
+  // Redirect logged-in users to surveys (don't wait for loading - that can hang)
+  if (user) {
+    return <Navigate to="/surveys" replace />
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
+
+    // If already logged in, just redirect
+    if (user) {
+      navigate('/surveys', { replace: true })
+      return
+    }
+
     setError(null)
     setLoading(true)
 
@@ -131,7 +143,7 @@ export function Register() {
               </div>
             </CardContent>
             <CardFooter className="flex flex-col space-y-4">
-              <Button type="submit" className="w-full" loading={loading}>
+              <Button type="submit" className="w-full" loading={loading} disabled={authLoading}>
                 Create account
               </Button>
               <p className="text-sm text-muted-foreground text-center">

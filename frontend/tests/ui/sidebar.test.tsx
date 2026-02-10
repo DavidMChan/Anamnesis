@@ -138,14 +138,19 @@ describe('Sidebar Component', () => {
       })
     })
 
-    it('should navigate to login after sign out', async () => {
+    it('should navigate to home after sign out', async () => {
+      const originalHref = window.location.href
+      window.location.href = 'http://localhost/surveys'
+
       renderSidebar()
 
       fireEvent.click(screen.getByRole('button', { name: /sign out/i }))
 
       await waitFor(() => {
-        expect(mockNavigate).toHaveBeenCalledWith('/login')
+        expect(new URL(window.location.href).pathname).toBe('/')
       })
+
+      window.location.href = originalHref
     })
   })
 
@@ -168,4 +173,3 @@ describe('Sidebar Component', () => {
     })
   })
 })
-
