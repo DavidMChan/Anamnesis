@@ -1,38 +1,68 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '@/lib/supabase'
 
 export function AuthCallback() {
   const navigate = useNavigate()
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    // Handle the OAuth callback
-    const handleAuthCallback = async () => {
-      // Get the hash fragment from the URL
-      const hashParams = new URLSearchParams(window.location.hash.substring(1))
-      const accessToken = hashParams.get('access_token')
-      const refreshToken = hashParams.get('refresh_token')
+    // Listen for auth state changes - Supabase will automatically
+    // detect and process the OAuth tokens from the URL hash
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      console.log('Auth event:', event, 'Session:', !!session)
 
-      if (accessToken && refreshToken) {
-        // Set the session manually using the tokens from the URL
-        const { error } = await supabase.auth.setSession({
-          access_token: accessToken,
-          refresh_token: refreshToken,
-        })
+      if (event === 'SIGNED_IN' && session) {
+        // Successfully signed in, redirect to surveys
+        navigate('/surveys', { replace: true })
+      } else if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') {
+        // Ignore these events
+      }
+    })
 
-        if (error) {
-          console.error('Error setting session:', error)
-          navigate('/login', { replace: true })
-          return
-        }
+    // Also check immediately if there's already a session
+    // (in case the auth state change already fired)
+    const checkSession = async () => {
+      // Give Supabase a moment to process the URL hash
+      await new Promise(resolve => setTimeout(resolve, 500))
+
+      const { data: { session }, error } = await supabase.auth.getSession()
+
+      if (error) {
+        console.error('Session error:', error)
+        setError(error.message)
+        return
       }
 
-      // Redirect to surveys page
-      navigate('/surveys', { replace: true })
+      if (session) {
+        navigate('/surveys', { replace: true })
+      } else {
+        // No session after waiting, something went wrong
+        console.error('No session found after OAuth callback')
+        setError('Failed to complete sign in. Please try again.')
+      }
     }
 
-    handleAuthCallback()
+    checkSession()
+
+    return () => subscription.unsubscribe()
   }, [navigate])
+
+  if (error) {
+    return (
+      <div className="flex items-center justify-center min-h-screen">
+        <div className="text-center space-y-4">
+          <p className="text-destructive">{error}</p>
+          <button
+            onClick={() => navigate('/login', { replace: true })}
+            className="text-primary underline"
+          >
+            Back to login
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="flex items-center justify-center min-h-screen">
