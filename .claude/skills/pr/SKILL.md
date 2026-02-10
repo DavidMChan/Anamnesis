@@ -1,6 +1,7 @@
 ---
 name: pr
 description: Create a pull request. ONLY proceeds if ALL tests pass.
+argument-hint: <feature-name>
 ---
 
 # Create Pull Request
@@ -13,61 +14,99 @@ description: Create a pull request. ONLY proceeds if ALL tests pass.
 
 ## Steps
 
-1. **Check current branch**:
-   ```bash
-   git branch --show-current
-   ```
-   - If on `main`: ERROR - "Cannot create PR from main branch"
+### Step 0: Locate Feature Worktree
 
-2. **Run ALL tests** (same as /test skill):
-   - Frontend unit tests
-   - Worker tests
-   - E2E tests
+If `$ARGUMENTS` is provided, the feature is in a worktree:
 
-   **If ANY test fails**:
-   ```
-   CANNOT CREATE PR
+```bash
+# Verify worktree exists
+ls ../arena-feature-$ARGUMENTS 2>/dev/null && echo "Worktree found" || echo "Not found"
+```
 
-   Tests are failing. Please fix the following issues:
-   [Show error details]
+If worktree exists, all commands should use the worktree path: `../arena-feature-$ARGUMENTS`
 
-   Run /test to see full results.
-   ```
-   **STOP HERE. Do not proceed.**
+If no argument provided, work in current directory.
 
-3. **If all tests pass**, check for CRITERIA.md:
-   ```bash
-   cat CRITERIA.md 2>/dev/null || echo "No CRITERIA.md found"
-   ```
+### Step 1: Check Current Branch
 
-4. **Push branch**:
-   ```bash
-   git push -u origin $(git branch --show-current)
-   ```
+```bash
+# If using worktree:
+cd ../arena-feature-$ARGUMENTS && git branch --show-current
 
-5. **Create PR** using gh cli:
-   - Title: branch name (e.g., "feature/login")
-   - Body: Contents of CRITERIA.md if exists, otherwise default template
+# If no worktree:
+git branch --show-current
+```
 
-   ```bash
-   gh pr create --title "$(git branch --show-current)" --body-file CRITERIA.md
-   ```
+- If on `main`: ERROR - "Cannot create PR from main branch"
 
-   If no CRITERIA.md, use:
-   ```bash
-   gh pr create --title "$(git branch --show-current)" --body "## Summary
+### Step 2: Run ALL Tests
 
-   [Description of changes]
+Run from the worktree (or current directory):
 
-   ## Test Plan
+```bash
+# Frontend unit tests
+cd ../arena-feature-$ARGUMENTS/frontend && npm run test:run
 
-   - [ ] Unit tests pass
-   - [ ] E2E tests pass
+# Worker tests
+cd ../arena-feature-$ARGUMENTS/worker && python -m pytest
 
-   ---
-   Generated with Claude Code"
-   ```
+# E2E tests
+cd ../arena-feature-$ARGUMENTS/frontend && npm run test:e2e
+```
 
-6. **Report the PR URL** to the user
+**If ANY test fails**:
+```
+CANNOT CREATE PR
+
+Tests are failing. Please fix the following issues:
+[Show error details]
+
+Run /test to see full results.
+```
+**STOP HERE. Do not proceed.**
+
+### Step 3: Check for CRITERIA.md
+
+```bash
+cat ../arena-feature-$ARGUMENTS/CRITERIA.md 2>/dev/null || echo "No CRITERIA.md found"
+```
+
+### Step 4: Push Branch
+
+```bash
+cd ../arena-feature-$ARGUMENTS && git push -u origin $(git branch --show-current)
+```
+
+### Step 5: Create PR
+
+Using gh cli:
+- Title: branch name (e.g., "feature/login")
+- Body: Contents of CRITERIA.md if exists, otherwise default template
+
+```bash
+cd ../arena-feature-$ARGUMENTS && gh pr create --title "$(git branch --show-current)" --body-file CRITERIA.md
+```
+
+If no CRITERIA.md, use:
+```bash
+cd ../arena-feature-$ARGUMENTS && gh pr create --title "$(git branch --show-current)" --body "$(cat <<'EOF'
+## Summary
+
+[Description of changes]
+
+## Test Plan
+
+- [x] Unit tests pass
+- [x] E2E tests pass
+
+---
+Generated with Claude Code
+EOF
+)"
+```
+
+### Step 6: Report PR URL
+
+Tell the user the PR URL so they can review it.
 
 ## Do NOT merge - the user will have another agent review it first.

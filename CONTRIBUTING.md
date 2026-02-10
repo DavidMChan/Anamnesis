@@ -10,37 +10,40 @@ This project uses Claude Skills for Test-Driven Development with a PM → Develo
 |---------|-------------|
 | `/plan-feature <name>` | **Recommended** - Discuss requirements and create detailed CRITERIA.md |
 | `/new-feature <name>` | Quick start with blank template (skip planning) |
-| `/implement` | Start implementation agent based on CRITERIA.md |
+| `/implement <name>` | Start implementation agent based on CRITERIA.md in worktree |
 | `/test` | Run all tests (unit + e2e + worker) |
 | `/test-unit` | Run unit tests only |
 | `/test-e2e` | Run E2E tests only |
-| `/pr` | Create PR (only if tests pass) |
+| `/pr <name>` | Create PR from feature worktree (only if tests pass) |
 | `/worktree-list` | List all worktrees |
 | `/worktree-clean <name>` | Remove a worktree |
 
 ### Recommended Workflow
 
 ```
-Phase 1: Planning
-─────────────────
+Phase 1: Planning (in main repo)
+─────────────────────────────────
 /plan-feature login
 ↓
 (Discuss requirements with Claude)
 ↓
+Creates worktree: ../arena-feature-login
 CRITERIA.md created with detailed spec
 
-Phase 2: Implementation
-───────────────────────
-/implement
+Phase 2: Implementation (new agent, still in main repo)
+───────────────────────────────────────────────────────
+/implement login
 ↓
+(Navigates to ../arena-feature-login)
 (Reads CRITERIA.md)
 (Writes tests first, then implements)
 (Stops if tests fail)
 
-Phase 3: PR
-───────────
-/pr
+Phase 3: PR (new agent, still in main repo)
+───────────────────────────────────────────
+/pr login
 ↓
+(Runs tests in worktree)
 (Creates PR if all tests pass)
 (Ready for code review)
 ```
