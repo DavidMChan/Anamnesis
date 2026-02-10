@@ -3,7 +3,6 @@ import { useAuthContext } from '@/contexts/AuthContext'
 import { ThemeToggle } from '@/components/ui/theme-toggle'
 import { Button } from '@/components/ui/button'
 import {
-  LayoutDashboard,
   ClipboardList,
   BookOpen,
   Settings,
@@ -21,7 +20,6 @@ interface NavItem {
 }
 
 const mainNavItems: NavItem[] = [
-  { label: 'Dashboard', href: '/', icon: LayoutDashboard },
   { label: 'Surveys', href: '/surveys', icon: ClipboardList },
   { label: 'Backstories', href: '/backstories', icon: BookOpen },
 ]
@@ -72,7 +70,7 @@ export function Sidebar() {
   const sidebarContent = (
     <>
       {/* Logo */}
-      <div className="flex items-center gap-3 px-3 py-2">
+      <div className="flex items-center gap-3 px-4 py-4 pt-5">
         <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
           <BookOpen className="h-5 w-5" />
         </div>
@@ -107,12 +105,6 @@ export function Sidebar() {
         {accountNavItems.map((item) => (
           <NavLink key={item.href} item={item} />
         ))}
-
-        {/* Theme Toggle */}
-        <div className="flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm font-medium text-muted-foreground">
-          <ThemeToggle />
-          <span>Theme</span>
-        </div>
       </div>
 
       {/* User Section */}
@@ -131,6 +123,7 @@ export function Sidebar() {
               {user?.email}
             </p>
           </div>
+          <ThemeToggle />
           <Button
             variant="ghost"
             size="icon"

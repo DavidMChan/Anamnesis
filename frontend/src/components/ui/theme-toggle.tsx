@@ -77,7 +77,7 @@ export function ThemeToggle() {
       size="icon"
       onClick={toggleTheme}
       aria-label="Toggle theme"
-      className="h-9 w-9"
+      className="h-8 w-8 shrink-0"
     >
       {effectiveTheme === 'dark' ? (
         <Sun className="h-4 w-4" data-testid="sun-icon" />
