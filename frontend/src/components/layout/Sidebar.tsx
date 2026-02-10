@@ -110,14 +110,23 @@ export function Sidebar() {
       {/* User Section */}
       <div className="mt-auto border-t border-border p-3">
         <div className="flex items-center gap-3 rounded-xl bg-muted/50 p-3">
-          <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary">
-            <span className="text-sm font-medium">
-              {(profile?.name?.[0] || user?.email?.[0] || 'U').toUpperCase()}
-            </span>
-          </div>
+          {user?.user_metadata?.avatar_url ? (
+            <img
+              src={user.user_metadata.avatar_url}
+              alt="Avatar"
+              className="h-9 w-9 rounded-full object-cover"
+              referrerPolicy="no-referrer"
+            />
+          ) : (
+            <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 text-primary">
+              <span className="text-sm font-medium">
+                {(profile?.name?.[0] || user?.email?.[0] || 'U').toUpperCase()}
+              </span>
+            </div>
+          )}
           <div className="flex-1 min-w-0">
             <p className="text-sm font-medium truncate">
-              {profile?.name || 'User'}
+              {profile?.name || user?.user_metadata?.full_name || 'User'}
             </p>
             <p className="text-xs text-muted-foreground truncate">
               {user?.email}
