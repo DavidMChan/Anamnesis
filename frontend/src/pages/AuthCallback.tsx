@@ -7,45 +7,59 @@ export function AuthCallback() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    // Listen for auth state changes - Supabase will automatically
-    // detect and process the OAuth tokens from the URL hash
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      console.log('Auth event:', event, 'Session:', !!session)
+    const handleCallback = async () => {
+      try {
+        // Parse tokens from URL hash
+        const hash = window.location.hash.substring(1)
+        const params = new URLSearchParams(hash)
 
-      if (event === 'SIGNED_IN' && session) {
-        // Successfully signed in, redirect to surveys
-        navigate('/surveys', { replace: true })
-      } else if (event === 'SIGNED_OUT' || event === 'TOKEN_REFRESHED') {
-        // Ignore these events
-      }
-    })
+        const accessToken = params.get('access_token')
+        const refreshToken = params.get('refresh_token')
 
-    // Also check immediately if there's already a session
-    // (in case the auth state change already fired)
-    const checkSession = async () => {
-      // Give Supabase a moment to process the URL hash
-      await new Promise(resolve => setTimeout(resolve, 500))
+        console.log('OAuth callback - has access_token:', !!accessToken, 'has refresh_token:', !!refreshToken)
 
-      const { data: { session }, error } = await supabase.auth.getSession()
+        if (!accessToken || !refreshToken) {
+          // No tokens, check if already have session
+          const { data: { session } } = await supabase.auth.getSession()
+          if (session) {
+            console.log('Already have session, redirecting')
+            navigate('/surveys', { replace: true })
+          } else {
+            console.error('No tokens in URL and no existing session')
+            setError('No authentication tokens found')
+          }
+          return
+        }
 
-      if (error) {
-        console.error('Session error:', error)
-        setError(error.message)
-        return
-      }
+        // Manually set the session with tokens from URL
+        console.log('Setting session with tokens...')
+        const { data, error: sessionError } = await supabase.auth.setSession({
+          access_token: accessToken,
+          refresh_token: refreshToken,
+        })
 
-      if (session) {
-        navigate('/surveys', { replace: true })
-      } else {
-        // No session after waiting, something went wrong
-        console.error('No session found after OAuth callback')
-        setError('Failed to complete sign in. Please try again.')
+        if (sessionError) {
+          console.error('Error setting session:', sessionError)
+          setError(sessionError.message)
+          return
+        }
+
+        if (data.session) {
+          console.log('Session set successfully, redirecting to /surveys')
+          // Clear the hash from URL before navigating
+          window.history.replaceState(null, '', window.location.pathname)
+          navigate('/surveys', { replace: true })
+        } else {
+          console.error('No session after setSession')
+          setError('Failed to establish session')
+        }
+      } catch (err) {
+        console.error('Unexpected error:', err)
+        setError(err instanceof Error ? err.message : 'Unexpected error')
       }
     }
 
-    checkSession()
-
-    return () => subscription.unsubscribe()
+    handleCallback()
   }, [navigate])
 
   if (error) {
