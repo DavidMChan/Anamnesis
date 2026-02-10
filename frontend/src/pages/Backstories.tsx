@@ -12,7 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { supabase } from '@/lib/supabase'
 import { useAuthContext } from '@/contexts/AuthContext'
 import type { Backstory, Demographics } from '@/types/database'
-import { Plus, Trash2, Eye, Globe, Lock } from 'lucide-react'
+import { Plus, Trash2, Eye, Globe, Lock, Sparkles, Upload } from 'lucide-react'
 
 export function Backstories() {
   const { user } = useAuthContext()
@@ -116,13 +116,18 @@ export function Backstories() {
               Upload and manage your own backstories
             </p>
           </div>
-          <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
-            <DialogTrigger asChild>
-              <Button>
-                <Plus className="h-4 w-4 mr-2" />
-                Upload Backstory
-              </Button>
-            </DialogTrigger>
+          <div className="flex gap-2">
+            <Button variant="outline" disabled title="Coming soon">
+              <Sparkles className="h-4 w-4 mr-2" />
+              Generate with LLM
+            </Button>
+            <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+              <DialogTrigger asChild>
+                <Button>
+                  <Upload className="h-4 w-4 mr-2" />
+                  Upload Backstory
+                </Button>
+              </DialogTrigger>
             <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Upload New Backstory</DialogTitle>
@@ -246,7 +251,8 @@ export function Backstories() {
                 </Button>
               </DialogFooter>
             </DialogContent>
-          </Dialog>
+            </Dialog>
+          </div>
         </div>
 
         {backstories.length === 0 ? (
