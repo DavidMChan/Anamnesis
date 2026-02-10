@@ -38,7 +38,8 @@ export function Sidebar() {
 
   const handleSignOut = async () => {
     await signOut()
-    navigate('/login')
+    // Use hard navigation to avoid ProtectedRoute redirect race condition
+    window.location.href = '/'
   }
 
   const isActive = (href: string) => {

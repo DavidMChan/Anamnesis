@@ -1,4 +1,4 @@
-import { Link } from 'react-router-dom'
+import { Link, Navigate } from 'react-router-dom'
 import { useAuthContext } from '@/contexts/AuthContext'
 import { PublicLayout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
@@ -6,6 +6,11 @@ import { ArrowRight, Sparkles, Users, FileQuestion, BarChart3 } from 'lucide-rea
 
 export function Home() {
   const { user } = useAuthContext()
+
+  // Redirect logged-in users to surveys (don't wait for loading - that can hang)
+  if (user) {
+    return <Navigate to="/surveys" replace />
+  }
 
   return (
     <PublicLayout>
@@ -20,20 +25,12 @@ export function Home() {
               <span className="font-semibold">Survey Arena</span>
             </Link>
             <div className="flex items-center gap-3">
-              {user ? (
-                <Link to="/surveys">
-                  <Button>Dashboard</Button>
-                </Link>
-              ) : (
-                <>
-                  <Link to="/login">
-                    <Button variant="ghost">Sign In</Button>
-                  </Link>
-                  <Link to="/register">
-                    <Button>Get Started</Button>
-                  </Link>
-                </>
-              )}
+              <Link to="/login">
+                <Button variant="ghost">Sign In</Button>
+              </Link>
+              <Link to="/register">
+                <Button>Get Started</Button>
+              </Link>
             </div>
           </div>
         </nav>
@@ -54,29 +51,18 @@ export function Home() {
               Run surveys on AI-generated personas with diverse backstories.
               Get insights into how different demographics might respond.
             </p>
-            {!user && (
-              <div className="flex flex-col sm:flex-row gap-4 justify-center pt-4">
-                <Link to="/register">
-                  <Button size="lg" className="w-full sm:w-auto gap-2">
-                    Start Free <ArrowRight className="h-4 w-4" />
-                  </Button>
-                </Link>
-                <Link to="/login">
-                  <Button size="lg" variant="outline" className="w-full sm:w-auto">
-                    Sign In
-                  </Button>
-                </Link>
-              </div>
-            )}
-            {user && (
-              <div className="flex flex-col sm:flex-row gap-4 justify-center pt-4">
-                <Link to="/surveys">
-                  <Button size="lg" className="w-full sm:w-auto gap-2">
-                    Go to Dashboard <ArrowRight className="h-4 w-4" />
-                  </Button>
-                </Link>
-              </div>
-            )}
+            <div className="flex flex-col sm:flex-row gap-4 justify-center pt-4">
+              <Link to="/register">
+                <Button size="lg" className="w-full sm:w-auto gap-2">
+                  Start Free <ArrowRight className="h-4 w-4" />
+                </Button>
+              </Link>
+              <Link to="/login">
+                <Button size="lg" variant="outline" className="w-full sm:w-auto">
+                  Sign In
+                </Button>
+              </Link>
+            </div>
           </div>
         </section>
 
@@ -157,13 +143,11 @@ export function Home() {
             <p className="text-muted-foreground mb-8 max-w-xl mx-auto">
               Create your free account and start exploring how different perspectives respond to your surveys.
             </p>
-            {!user && (
-              <Link to="/register">
-                <Button size="lg" className="gap-2">
-                  Create Free Account <ArrowRight className="h-4 w-4" />
-                </Button>
-              </Link>
-            )}
+            <Link to="/register">
+              <Button size="lg" className="gap-2">
+                Create Free Account <ArrowRight className="h-4 w-4" />
+              </Button>
+            </Link>
           </div>
         </section>
 
