@@ -1,15 +1,23 @@
 import type { ReactNode } from 'react'
-import { Navbar } from './Navbar'
+import { SidebarLayout } from './SidebarLayout'
+import { ThemeProvider } from '@/components/ui/theme-toggle'
 
 interface LayoutProps {
   children: ReactNode
 }
 
+// Layout for authenticated pages with sidebar
 export function Layout({ children }: LayoutProps) {
+  return <SidebarLayout>{children}</SidebarLayout>
+}
+
+// Layout for public pages (login, register, home)
+export function PublicLayout({ children }: LayoutProps) {
   return (
-    <div className="min-h-screen bg-background">
-      <Navbar />
-      <main className="container py-6">{children}</main>
-    </div>
+    <ThemeProvider>
+      <div className="min-h-screen bg-background">
+        {children}
+      </div>
+    </ThemeProvider>
   )
 }

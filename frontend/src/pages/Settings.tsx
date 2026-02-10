@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { User, Key, Check } from 'lucide-react'
 import type { LLMConfig } from '@/types/database'
 
 export function Settings() {
@@ -38,16 +39,25 @@ export function Settings() {
 
   return (
     <Layout>
-      <div className="max-w-2xl mx-auto space-y-6">
+      <div className="max-w-2xl space-y-8">
+        {/* Page Header */}
         <div>
-          <h1 className="text-3xl font-bold">Settings</h1>
+          <h1 className="text-2xl font-bold">Settings</h1>
           <p className="text-muted-foreground">Manage your account and LLM configuration</p>
         </div>
 
+        {/* Profile Card */}
         <Card>
           <CardHeader>
-            <CardTitle>Profile</CardTitle>
-            <CardDescription>Your personal information</CardDescription>
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                <User className="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <CardTitle className="text-lg">Profile</CardTitle>
+                <CardDescription>Your personal information</CardDescription>
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
@@ -61,18 +71,26 @@ export function Settings() {
             </div>
             <div className="space-y-2">
               <Label>Email</Label>
-              <Input value={profile?.email || ''} disabled />
+              <Input value={profile?.email || ''} disabled className="bg-muted" />
               <p className="text-xs text-muted-foreground">Email cannot be changed</p>
             </div>
           </CardContent>
         </Card>
 
+        {/* LLM Configuration Card */}
         <Card>
           <CardHeader>
-            <CardTitle>LLM Configuration</CardTitle>
-            <CardDescription>
-              Configure your LLM provider for running surveys. Your API key is encrypted and stored securely.
-            </CardDescription>
+            <div className="flex items-center gap-3">
+              <div className="h-10 w-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                <Key className="h-5 w-5 text-primary" />
+              </div>
+              <div>
+                <CardTitle className="text-lg">LLM Configuration</CardTitle>
+                <CardDescription>
+                  Configure your LLM provider for running surveys
+                </CardDescription>
+              </div>
+            </div>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
@@ -104,6 +122,9 @@ export function Settings() {
                 onChange={(e) => setLlmConfig({ ...llmConfig, api_key: e.target.value })}
                 placeholder="sk-..."
               />
+              <p className="text-xs text-muted-foreground">
+                Your API key is encrypted and stored securely
+              </p>
             </div>
 
             {llmConfig.provider === 'vllm' && (
@@ -130,11 +151,17 @@ export function Settings() {
           </CardContent>
         </Card>
 
+        {/* Save Button */}
         <div className="flex items-center gap-4">
-          <Button onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving...' : 'Save Changes'}
+          <Button onClick={handleSave} loading={saving}>
+            Save Changes
           </Button>
-          {saved && <span className="text-sm text-green-600">Changes saved!</span>}
+          {saved && (
+            <div className="flex items-center gap-2 text-sm text-green-600">
+              <Check className="h-4 w-4" />
+              <span>Changes saved!</span>
+            </div>
+          )}
         </div>
       </div>
     </Layout>
