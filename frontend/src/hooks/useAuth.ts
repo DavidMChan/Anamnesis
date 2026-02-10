@@ -102,8 +102,8 @@ export function useAuth() {
     const { error } = await supabase.auth.signInWithOAuth({
       provider: 'google',
       options: {
-        redirectTo: `${window.location.origin}/surveys`
-      }
+        redirectTo: `${window.location.origin}/auth/callback`,
+      },
     })
     return { error }
   }
