@@ -176,6 +176,26 @@ export function Home() {
         <footer className="py-8 px-4 border-t border-border">
           <div className="container max-w-6xl mx-auto text-center text-sm text-muted-foreground">
             <p>Survey Arena - <span className="font-medium">BAIR Lab</span>, UC Berkeley</p>
+            <p className="mt-2">
+              Built by{' '}
+              <a
+                href="https://github.com/vaclisinc"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="font-medium hover:text-foreground transition-colors"
+              >
+                Song-Ze Yu
+              </a>
+              {' · '}
+              <a
+                href="https://www.linkedin.com/in/vaclis/"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="hover:text-foreground transition-colors"
+              >
+                LinkedIn
+              </a>
+            </p>
           </div>
         </footer>
       </div>

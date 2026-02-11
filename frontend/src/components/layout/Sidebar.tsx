@@ -80,7 +80,25 @@ export function Sidebar() {
         </div>
         <div className="flex flex-col">
           <span className="text-sm font-semibold">Survey Arena</span>
-          <span className="text-xs text-muted-foreground">BAIR Lab</span>
+          <span className="text-xs text-muted-foreground">
+            <a
+              href="https://bair.berkeley.edu"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-foreground transition-colors"
+            >
+              BAIR Lab
+            </a>
+            {' · '}
+            <a
+              href="https://www.linkedin.com/in/vaclis/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hover:text-foreground transition-colors"
+            >
+              Song-Ze Yu
+            </a>
+          </span>
         </div>
       </div>
 
@@ -148,7 +166,8 @@ export function Sidebar() {
           </Button>
         </div>
       </div>
-    </>
+
+          </>
   )
 
   return (
