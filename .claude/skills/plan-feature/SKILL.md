@@ -40,6 +40,7 @@ You are acting as a PM helping the user convert their feature idea into concrete
 2. **Copy environment files** (gitignored files don't transfer to worktrees):
    ```bash
    cp frontend/.env "../arena-feature-$ARGUMENTS/frontend/.env" 2>/dev/null || true
+   cp worker/.env "../arena-feature-$ARGUMENTS/worker/.env" 2>/dev/null || true
    ```
 
 3. **Start discussion** - Ask the user about their requirements

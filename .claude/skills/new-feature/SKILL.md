@@ -21,6 +21,7 @@ For guided planning with discussion, use `/plan-feature` instead.
 2. **Copy environment files** (gitignored files don't transfer to worktrees):
    ```bash
    cp frontend/.env "../arena-feature-$ARGUMENTS/frontend/.env" 2>/dev/null || true
+   cp worker/.env "../arena-feature-$ARGUMENTS/worker/.env" 2>/dev/null || true
    ```
 
 3. **Create blank CRITERIA.md template** in the new worktree with the following structure:

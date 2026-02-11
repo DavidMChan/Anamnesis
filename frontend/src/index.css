@@ -133,3 +133,16 @@ html {
   animation: fade-in-up 0.6s ease-out forwards;
   opacity: 0;
 }
+
+@keyframes blink {
+  0%, 50% {
+    opacity: 1;
+  }
+  51%, 100% {
+    opacity: 0;
+  }
+}
+
+.animate-blink {
+  animation: blink 1s step-end infinite;
+}

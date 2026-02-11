@@ -2,7 +2,17 @@ import { Link, Navigate } from 'react-router-dom'
 import { useAuthContext } from '@/contexts/AuthContext'
 import { PublicLayout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
+import { Typewriter } from '@/components/ui/typewriter'
 import { ArrowRight, Sparkles, Users, FileQuestion, BarChart3 } from 'lucide-react'
+
+const HERO_WORDS = [
+  'perspectives',
+  'demographics',
+  'generations',
+  'cultures',
+  'beliefs',
+  'backgrounds',
+]
 
 export function Home() {
   const { user } = useAuthContext()
@@ -19,8 +29,12 @@ export function Home() {
         <nav className="fixed top-0 left-0 right-0 z-50 bg-background/80 backdrop-blur-md border-b border-border">
           <div className="container max-w-6xl mx-auto px-4 h-16 flex items-center justify-between">
             <Link to="/" className="flex items-center gap-2">
-              <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center">
-                <Sparkles className="h-4 w-4 text-primary-foreground" />
+              <div className="flex h-8 w-8 items-center justify-center rounded-full bg-white shadow-sm">
+                <img
+                  src="https://bair.berkeley.edu/logos/BAIR_Logo_Blue_BearOnly.svg"
+                  alt="BAIR Logo"
+                  className="h-6 w-6"
+                />
               </div>
               <span className="font-semibold">Survey Arena</span>
             </Link>
@@ -43,9 +57,16 @@ export function Home() {
               BAIR Lab @ UC Berkeley
             </div>
             <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-tight">
-              Understand how{' '}
-              <span className="text-primary">different perspectives</span>{' '}
-              respond to your questions
+              Understand how your questions
+              <br className="hidden sm:block" />
+              resonate across{' '}
+              <Typewriter
+                phrases={HERO_WORDS}
+                className="text-primary"
+                typingSpeed={70}
+                deletingSpeed={40}
+                pauseDuration={2500}
+              />
             </h1>
             <p className="text-lg sm:text-xl text-muted-foreground max-w-2xl mx-auto">
               Run surveys on AI-generated personas with diverse backstories.
