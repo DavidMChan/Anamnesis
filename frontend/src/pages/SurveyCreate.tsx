@@ -1,5 +1,20 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core'
+import type { DragEndEvent } from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
 import { Layout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -11,6 +26,7 @@ import { DemographicFilter } from '@/components/surveys/DemographicFilter'
 import { supabase } from '@/lib/supabase'
 import { useAuthContext } from '@/contexts/AuthContext'
 import type { Question, DemographicFilter as DemographicFilterType, Survey } from '@/types/database'
+import { toast } from '@/hooks/use-toast'
 import { Plus, Save, Play, ArrowLeft } from 'lucide-react'
 
 export function SurveyCreate() {
@@ -83,6 +99,38 @@ export function SurveyCreate() {
 
   const deleteQuestion = (index: number) => {
     setQuestions(questions.filter((_, i) => i !== index))
+  }
+
+  const duplicateQuestion = (index: number) => {
+    const questionToDuplicate = questions[index]
+    const newQuestion: Question = {
+      ...questionToDuplicate,
+      qkey: `q${Date.now()}`, // Unique key for the duplicated question
+      options: questionToDuplicate.options ? [...questionToDuplicate.options] : undefined,
+    }
+    const newQuestions = [...questions]
+    newQuestions.splice(index + 1, 0, newQuestion)
+    setQuestions(newQuestions)
+    toast({ title: 'Copied!' })
+  }
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  )
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+
+    if (over && active.id !== over.id) {
+      setQuestions((items) => {
+        const oldIndex = items.findIndex((item) => item.qkey === active.id)
+        const newIndex = items.findIndex((item) => item.qkey === over.id)
+        return arrayMove(items, oldIndex, newIndex)
+      })
+    }
   }
 
   const validateSurvey = (): string | null => {
@@ -239,17 +287,29 @@ export function SurveyCreate() {
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-4">
-              {questions.map((question, index) => (
-                <QuestionEditor
-                  key={question.qkey}
-                  question={question}
-                  index={index}
-                  onChange={(q) => updateQuestion(index, q)}
-                  onDelete={() => deleteQuestion(index)}
-                />
-              ))}
-            </div>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={questions.map((q) => q.qkey)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="space-y-4">
+                  {questions.map((question, index) => (
+                    <QuestionEditor
+                      key={question.qkey}
+                      question={question}
+                      index={index}
+                      onChange={(q) => updateQuestion(index, q)}
+                      onDelete={() => deleteQuestion(index)}
+                      onDuplicate={() => duplicateQuestion(index)}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
           )}
         </div>
 
