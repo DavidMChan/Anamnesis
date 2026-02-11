@@ -71,8 +71,12 @@ export function Sidebar() {
     <>
       {/* Logo */}
       <div className="flex items-center gap-3 px-4 py-4 pt-5">
-        <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-          <BookOpen className="h-5 w-5" />
+        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white shadow-sm">
+          <img
+            src="https://bair.berkeley.edu/logos/BAIR_Logo_Blue_BearOnly.svg"
+            alt="BAIR Logo"
+            className="h-7 w-7"
+          />
         </div>
         <div className="flex flex-col">
           <span className="text-sm font-semibold">Survey Arena</span>
