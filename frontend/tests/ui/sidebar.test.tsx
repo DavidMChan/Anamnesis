@@ -24,7 +24,7 @@ vi.mock('react-router-dom', async () => {
   return {
     ...actual,
     useNavigate: () => mockNavigate,
-    useLocation: () => ({ pathname: '/' }),
+    useLocation: () => ({ pathname: '/surveys' }),
   }
 })
 
@@ -54,7 +54,6 @@ describe('Sidebar Component', () => {
     it('should render all navigation items', () => {
       renderSidebar()
 
-      expect(screen.getByText('Dashboard')).toBeInTheDocument()
       expect(screen.getByText('Surveys')).toBeInTheDocument()
       expect(screen.getByText('Backstories')).toBeInTheDocument()
       expect(screen.getByText('Settings')).toBeInTheDocument()
@@ -88,13 +87,6 @@ describe('Sidebar Component', () => {
   })
 
   describe('Navigation', () => {
-    it('should have correct link for Dashboard', () => {
-      renderSidebar()
-
-      const dashboardLink = screen.getByText('Dashboard').closest('a')
-      expect(dashboardLink).toHaveAttribute('href', '/')
-    })
-
     it('should have correct link for Surveys', () => {
       renderSidebar()
 
@@ -119,11 +111,11 @@ describe('Sidebar Component', () => {
 
   describe('Active State', () => {
     it('should highlight active route', () => {
-      // The mock sets pathname to '/', so Dashboard should be active
+      // The mock sets pathname to '/surveys', so Surveys should be active
       renderSidebar()
 
-      const dashboardLink = screen.getByText('Dashboard').closest('a')
-      expect(dashboardLink).toHaveClass('bg-primary')
+      const surveysLink = screen.getByText('Surveys').closest('a')
+      expect(surveysLink).toHaveClass('bg-primary')
     })
   })
 
@@ -139,18 +131,27 @@ describe('Sidebar Component', () => {
     })
 
     it('should navigate to home after sign out', async () => {
-      const originalHref = window.location.href
-      window.location.href = 'http://localhost/surveys'
+      // Mock window.location.href setter
+      const hrefSetter = vi.fn()
+      const originalLocation = window.location
+
+      // @ts-expect-error - mocking location
+      delete window.location
+      window.location = { ...originalLocation, href: 'http://localhost/surveys' }
+      Object.defineProperty(window.location, 'href', {
+        set: hrefSetter,
+        get: () => 'http://localhost/surveys',
+      })
 
       renderSidebar()
 
       fireEvent.click(screen.getByRole('button', { name: /sign out/i }))
 
       await waitFor(() => {
-        expect(new URL(window.location.href).pathname).toBe('/')
+        expect(hrefSetter).toHaveBeenCalledWith('/')
       })
 
-      window.location.href = originalHref
+      window.location = originalLocation
     })
   })
 
@@ -169,7 +170,7 @@ describe('Sidebar Component', () => {
       // Mobile menu button should exist
       const mobileButton = screen.queryByTestId('mobile-menu-button')
       // It may or may not be rendered based on CSS, so we just check structure
-      expect(screen.getByText('Dashboard')).toBeInTheDocument()
+      expect(screen.getByText('Surveys')).toBeInTheDocument()
     })
   })
 })
