@@ -18,7 +18,12 @@ For guided planning with discussion, use `/plan-feature` instead.
    git worktree add "../arena-feature-$ARGUMENTS" "feature/$ARGUMENTS"
    ```
 
-2. **Create blank CRITERIA.md template** in the new worktree with the following structure:
+2. **Copy environment files** (gitignored files don't transfer to worktrees):
+   ```bash
+   cp frontend/.env "../arena-feature-$ARGUMENTS/frontend/.env" 2>/dev/null || true
+   ```
+
+3. **Create blank CRITERIA.md template** in the new worktree with the following structure:
 
 ```markdown
 # Feature: $ARGUMENTS
@@ -64,7 +69,7 @@ For guided planning with discussion, use `/plan-feature` instead.
 - [TODO: List what's not included]
 ```
 
-3. **Report success** with next steps:
+4. **Report success** with next steps:
    - Tell user worktree created at `../arena-feature-$ARGUMENTS`
    - Tell user to edit CRITERIA.md with their requirements
    - Tell user to run `/implement` when ready

@@ -37,13 +37,18 @@ You are acting as a PM helping the user convert their feature idea into concrete
    git worktree add "../arena-feature-$ARGUMENTS" "feature/$ARGUMENTS"
    ```
 
-2. **Start discussion** - Ask the user about their requirements
+2. **Copy environment files** (gitignored files don't transfer to worktrees):
+   ```bash
+   cp frontend/.env "../arena-feature-$ARGUMENTS/frontend/.env" 2>/dev/null || true
+   ```
 
-3. **Explore codebase** - Find relevant existing code and patterns
+3. **Start discussion** - Ask the user about their requirements
 
-4. **Write CRITERIA.md** - Create detailed spec (see template below)
+4. **Explore codebase** - Find relevant existing code and patterns
 
-5. **Review with user** - Confirm the criteria are correct before implementation
+5. **Write CRITERIA.md** - Create detailed spec (see template below)
+
+6. **Review with user** - Confirm the criteria are correct before implementation
 
 ## CRITERIA.md Template
 
