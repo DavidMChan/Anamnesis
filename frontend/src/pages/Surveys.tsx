@@ -8,7 +8,8 @@ import { Progress } from '@/components/ui/progress'
 import { supabase } from '@/lib/supabase'
 import { useAuthContext } from '@/contexts/AuthContext'
 import type { Survey } from '@/types/database'
-import { Plus, Eye, BarChart3, Trash2, ClipboardList } from 'lucide-react'
+import { toast } from '@/hooks/use-toast'
+import { Plus, Eye, BarChart3, Trash2, ClipboardList, Copy } from 'lucide-react'
 
 const statusVariants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info'> = {
   draft: 'secondary',
@@ -52,6 +53,32 @@ export function Surveys() {
       console.error('Error deleting survey:', error)
     } else {
       setSurveys(surveys.filter((s) => s.id !== id))
+    }
+  }
+
+  const duplicateSurvey = async (survey: Survey) => {
+    if (!user) return
+
+    const newSurveyData = {
+      user_id: user.id,
+      name: `${survey.name || 'Untitled Survey'} (Copy)`,
+      questions: survey.questions,
+      demographics: survey.demographics,
+      status: 'draft',
+    }
+
+    const { data, error } = await supabase
+      .from('surveys')
+      .insert(newSurveyData)
+      .select()
+      .single()
+
+    if (error) {
+      console.error('Error duplicating survey:', error)
+      toast({ title: 'Failed to copy', variant: 'destructive' })
+    } else if (data) {
+      setSurveys([data as Survey, ...surveys])
+      toast({ title: 'Copied!' })
     }
   }
 
@@ -152,8 +179,18 @@ export function Surveys() {
                     <Button
                       variant="ghost"
                       size="sm"
+                      onClick={() => duplicateSurvey(survey)}
+                      className="px-2"
+                      title="Duplicate survey"
+                    >
+                      <Copy className="h-3.5 w-3.5 text-muted-foreground" />
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       onClick={() => deleteSurvey(survey.id)}
                       className="px-2"
+                      title="Delete survey"
                     >
                       <Trash2 className="h-3.5 w-3.5 text-destructive" />
                     </Button>
