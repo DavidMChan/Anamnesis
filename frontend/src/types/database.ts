@@ -16,7 +16,7 @@ export interface LLMConfig {
 export interface Backstory {
   id: string
   contributor_id: string | null
-  source_type: 'llm_generated' | 'human_interview' | 'uploaded'
+  source_type: 'llm_generated' | 'human_interview' | 'uploaded' | 'anthology' | 'alterity'
   backstory_text: string
   transcript: TranscriptMessage[] | null
   demographics: Demographics
