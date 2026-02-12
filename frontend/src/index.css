@@ -1,26 +1,28 @@
 @import "tailwindcss";
 
 @theme {
-  /* Light Mode - Warm Palette inspired by Claude */
-  --color-background: hsl(40 30% 98%);
-  --color-foreground: hsl(30 10% 15%);
-  --color-card: hsl(40 25% 96%);
-  --color-card-foreground: hsl(30 10% 15%);
-  --color-popover: hsl(40 25% 96%);
-  --color-popover-foreground: hsl(30 10% 15%);
-  --color-primary: hsl(24 80% 55%);
+  /* Light Mode - BAIR Official Colors */
+  /* BAIR Blue: #003262 = hsl(209 100% 19%), #3B7EA1 = hsl(201 46% 43%) */
+  /* BAIR Gold: #C4820E = hsl(38 88% 41%), Berkeley Gold: #FDB515 */
+  --color-background: hsl(210 20% 98%);
+  --color-foreground: hsl(209 50% 15%);
+  --color-card: hsl(210 15% 97%);
+  --color-card-foreground: hsl(209 50% 15%);
+  --color-popover: hsl(210 15% 97%);
+  --color-popover-foreground: hsl(209 50% 15%);
+  --color-primary: hsl(201 46% 43%);
   --color-primary-foreground: hsl(0 0% 100%);
-  --color-secondary: hsl(35 20% 92%);
-  --color-secondary-foreground: hsl(30 10% 25%);
-  --color-muted: hsl(35 15% 90%);
-  --color-muted-foreground: hsl(30 8% 45%);
-  --color-accent: hsl(24 80% 55%);
+  --color-secondary: hsl(210 15% 92%);
+  --color-secondary-foreground: hsl(209 30% 25%);
+  --color-muted: hsl(210 10% 90%);
+  --color-muted-foreground: hsl(209 15% 45%);
+  --color-accent: hsl(201 46% 43%);
   --color-accent-foreground: hsl(0 0% 100%);
   --color-destructive: hsl(0 70% 55%);
   --color-destructive-foreground: hsl(0 0% 100%);
-  --color-border: hsl(35 15% 88%);
-  --color-input: hsl(35 15% 88%);
-  --color-ring: hsl(24 80% 55%);
+  --color-border: hsl(210 10% 88%);
+  --color-input: hsl(210 10% 88%);
+  --color-ring: hsl(201 46% 43%);
 
   /* Radius */
   --radius: 0.75rem;
@@ -35,27 +37,27 @@
   --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.05), 0 4px 6px -4px rgb(0 0 0 / 0.05);
 }
 
-/* Dark Mode - Warm Dark Palette */
+/* Dark Mode - BAIR Blue Dark Theme */
 .dark {
-  --color-background: hsl(30 10% 10%);
-  --color-foreground: hsl(40 20% 95%);
-  --color-card: hsl(30 10% 13%);
-  --color-card-foreground: hsl(40 20% 95%);
-  --color-popover: hsl(30 10% 13%);
-  --color-popover-foreground: hsl(40 20% 95%);
-  --color-primary: hsl(24 85% 60%);
-  --color-primary-foreground: hsl(30 10% 10%);
-  --color-secondary: hsl(30 10% 18%);
-  --color-secondary-foreground: hsl(40 15% 85%);
-  --color-muted: hsl(30 8% 20%);
-  --color-muted-foreground: hsl(35 10% 60%);
-  --color-accent: hsl(24 85% 60%);
-  --color-accent-foreground: hsl(30 10% 10%);
+  --color-background: hsl(209 30% 10%);
+  --color-foreground: hsl(210 15% 95%);
+  --color-card: hsl(209 25% 13%);
+  --color-card-foreground: hsl(210 15% 95%);
+  --color-popover: hsl(209 25% 13%);
+  --color-popover-foreground: hsl(210 15% 95%);
+  --color-primary: hsl(201 60% 55%);
+  --color-primary-foreground: hsl(209 50% 10%);
+  --color-secondary: hsl(209 15% 18%);
+  --color-secondary-foreground: hsl(210 10% 85%);
+  --color-muted: hsl(209 12% 20%);
+  --color-muted-foreground: hsl(209 10% 60%);
+  --color-accent: hsl(201 60% 55%);
+  --color-accent-foreground: hsl(209 50% 10%);
   --color-destructive: hsl(0 65% 55%);
   --color-destructive-foreground: hsl(0 0% 100%);
-  --color-border: hsl(30 8% 22%);
-  --color-input: hsl(30 8% 22%);
-  --color-ring: hsl(24 85% 60%);
+  --color-border: hsl(209 12% 22%);
+  --color-input: hsl(209 12% 22%);
+  --color-ring: hsl(201 60% 55%);
 
   /* Dark mode shadows */
   --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.1);
@@ -107,14 +109,14 @@ html {
   outline-offset: 2px;
 }
 
-/* Selection color */
+/* Selection color - BAIR Blue */
 ::selection {
-  background-color: hsl(24 80% 55% / 0.2);
+  background-color: hsl(201 46% 43% / 0.2);
   color: var(--color-foreground);
 }
 
 .dark ::selection {
-  background-color: hsl(24 85% 60% / 0.3);
+  background-color: hsl(201 60% 55% / 0.3);
 }
 
 /* Animations */
