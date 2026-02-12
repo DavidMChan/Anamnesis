@@ -367,16 +367,16 @@ class DatabaseClient:
 
         Returns runs that are:
         - status = 'pending' (just created, not started)
-        - status = 'running' but have pending tasks (retry scenario)
+        - status = 'running' (may have stale/lost tasks to re-dispatch)
 
         Returns:
             List of survey run records
         """
-        # Get runs with status 'pending' (newly created)
+        # Get runs with status 'pending' or 'running'
         result = (
             self.client.table("survey_runs")
             .select("*")
-            .eq("status", "pending")
+            .in_("status", ["pending", "running"])
             .execute()
         )
         return result.data or []
@@ -398,6 +398,34 @@ class DatabaseClient:
             .select("id, backstory_id")
             .eq("survey_run_id", run_id)
             .eq("status", "pending")
+            .execute()
+        )
+        return result.data or []
+
+    def get_stale_pending_tasks(self, run_id: str, stale_minutes: int = 5) -> List[Dict[str, Any]]:
+        """
+        Get pending tasks that have been stuck for too long.
+
+        These are tasks that were likely dispatched but lost in RabbitMQ.
+
+        Args:
+            run_id: UUID of the survey run
+            stale_minutes: Minutes after which a pending task is considered stale
+
+        Returns:
+            List of stale pending task records
+        """
+        from datetime import datetime, timedelta, timezone
+
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)
+        cutoff_str = cutoff.isoformat()
+
+        result = (
+            self.client.table("survey_tasks")
+            .select("id, backstory_id, created_at")
+            .eq("survey_run_id", run_id)
+            .eq("status", "pending")
+            .lt("created_at", cutoff_str)
             .execute()
         )
         return result.data or []

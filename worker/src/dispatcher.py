@@ -43,7 +43,10 @@ class TaskDispatcher:
 
     def dispatch_run(self, run: Dict[str, Any]) -> int:
         """
-        Dispatch all tasks for a survey run to RabbitMQ.
+        Dispatch tasks for a survey run to RabbitMQ.
+
+        For 'pending' runs: dispatch all pending tasks.
+        For 'running' runs: only dispatch stale tasks (stuck for >5 min).
 
         Args:
             run: Survey run record
@@ -52,13 +55,19 @@ class TaskDispatcher:
             Number of tasks dispatched
         """
         run_id = run["id"]
-        logger.info(f"Dispatching tasks for run {run_id}")
+        run_status = run.get("status", "pending")
 
-        # Get all pending tasks for this run
-        tasks = self.db.get_pending_tasks_for_dispatch(run_id)
+        # For running runs, only re-dispatch stale tasks
+        if run_status == "running":
+            tasks = self.db.get_stale_pending_tasks(run_id, stale_minutes=5)
+            if tasks:
+                logger.info(f"Found {len(tasks)} stale tasks for run {run_id}, re-dispatching...")
+        else:
+            # For pending runs, dispatch all tasks
+            logger.info(f"Dispatching tasks for new run {run_id}")
+            tasks = self.db.get_pending_tasks_for_dispatch(run_id)
 
         if not tasks:
-            logger.warning(f"No pending tasks found for run {run_id}")
             return 0
 
         # Publish each task to RabbitMQ
@@ -72,8 +81,8 @@ class TaskDispatcher:
 
         logger.info(f"Dispatched {dispatched}/{len(tasks)} tasks for run {run_id}")
 
-        # Update run status to 'running' if we dispatched tasks
-        if dispatched > 0:
+        # Update run status to 'running' if we dispatched tasks for a pending run
+        if dispatched > 0 and run_status == "pending":
             self.db.update_run_status(run_id, "running")
 
         return dispatched
