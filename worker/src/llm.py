@@ -1,0 +1,362 @@
+"""
+LLM client module supporting OpenRouter and vLLM.
+Uses structured outputs for reliable response parsing.
+"""
+import json
+import time
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Optional, Dict, Any
+
+import httpx
+from tenacity import (
+    retry,
+    stop_after_attempt,
+    wait_exponential,
+    retry_if_exception_type,
+)
+
+
+class LLMError(Exception):
+    """Base exception for LLM errors."""
+    pass
+
+
+class RetryableError(LLMError):
+    """Error that can be retried (rate limits, server errors)."""
+    pass
+
+
+class NonRetryableError(LLMError):
+    """Error that should not be retried (auth, bad request)."""
+    pass
+
+
+@dataclass
+class LLMResponse:
+    """Parsed LLM response."""
+    answer: str
+    reasoning: Optional[str] = None
+    raw: Optional[str] = None
+
+    @classmethod
+    def from_json(cls, json_str: str) -> "LLMResponse":
+        """Parse LLM response from JSON string."""
+        data = json.loads(json_str)
+        return cls(
+            answer=data.get("answer", data.get("answers", "")),
+            reasoning=data.get("reasoning"),
+            raw=json_str,
+        )
+
+    @classmethod
+    def from_text(cls, text: str) -> "LLMResponse":
+        """
+        Parse LLM response from plain text (anthology style).
+        Extracts the first letter (A, B, C, D, etc.) from the response.
+        """
+        import re
+        text = text.strip()
+
+        # Try to find answer letter at the start
+        # Patterns: "A", "(A)", "A.", "A:", "A)", "Answer: A", etc.
+        patterns = [
+            r'^[\(\[]?([A-Za-z])[\)\]\.\:]',  # (A), [A], A., A:, A)
+            r'^([A-Za-z])\b',  # Just "A" at start
+            r'[Aa]nswer[:\s]+[\(\[]?([A-Za-z])',  # "Answer: A" or "answer: (A)"
+            r'[\(\[]([A-Za-z])[\)\]]',  # (A) or [A] anywhere
+        ]
+
+        for pattern in patterns:
+            match = re.search(pattern, text)
+            if match:
+                answer = match.group(1).upper()
+                if answer in 'ABCDEFGHIJ':  # Valid MCQ options
+                    return cls(answer=answer, raw=text)
+
+        # Fallback: just return the first character if it's a letter
+        if text and text[0].upper() in 'ABCDEFGHIJ':
+            return cls(answer=text[0].upper(), raw=text)
+
+        # If nothing works, return the raw text as answer
+        return cls(answer=text[:100] if text else "", raw=text)
+
+
+class BaseLLMClient(ABC):
+    """Abstract base class for LLM clients."""
+
+    @abstractmethod
+    def complete(self, prompt: str, response_schema: dict) -> LLMResponse:
+        """
+        Get completion from LLM with structured output.
+
+        Args:
+            prompt: The input prompt
+            response_schema: JSON schema for expected response format
+
+        Returns:
+            Parsed LLMResponse
+
+        Raises:
+            RetryableError: For transient failures (rate limits, server errors)
+            NonRetryableError: For permanent failures (auth, bad request)
+        """
+        pass
+
+
+class OpenRouterClient(BaseLLMClient):
+    """Client for OpenRouter API (OpenAI-compatible)."""
+
+    BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+    def __init__(
+        self,
+        api_key: str,
+        model: str,
+        temperature: float = 0.0,
+        max_tokens: int = 64,
+        max_retries: int = 3,
+        timeout: float = 60.0,
+    ):
+        self.api_key = api_key
+        self.model = model
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.max_retries = max_retries
+        self.timeout = timeout
+
+    # JSON Schema for structured output
+    ANSWER_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "answer": {
+                "type": "string",
+                "description": "The letter of the chosen option (A, B, C, D, etc.)"
+            }
+        },
+        "required": ["answer"],
+        "additionalProperties": False
+    }
+
+    def _make_request(self, prompt: str, response_schema: dict) -> LLMResponse:
+        """Make a single API request with structured output."""
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://virtual-personas-arena.vercel.app",
+        }
+
+        # Use provided schema or default
+        schema = response_schema if response_schema else self.ANSWER_SCHEMA
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            # OpenRouter structured outputs - proper format for GPT models
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "answer",
+                    "strict": True,
+                    "schema": schema
+                }
+            }
+        }
+
+        with httpx.Client(timeout=self.timeout) as client:
+            response = client.post(self.BASE_URL, headers=headers, json=payload)
+
+            # Handle errors
+            if response.status_code == 401:
+                raise NonRetryableError(f"Authentication failed: {response.json()}")
+            elif response.status_code == 400:
+                raise NonRetryableError(f"Bad request: {response.json()}")
+            elif response.status_code == 429:
+                raise RetryableError(f"Rate limited: {response.json()}")
+            elif response.status_code >= 500:
+                raise RetryableError(f"Server error ({response.status_code}): {response.json()}")
+            elif response.status_code != 200:
+                raise LLMError(f"Unexpected status {response.status_code}: {response.json()}")
+
+            # Parse structured JSON response
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            return LLMResponse.from_json(content)
+
+    def complete(self, prompt: str, response_schema: dict) -> LLMResponse:
+        """Get completion with retry logic."""
+        last_error = None
+
+        for attempt in range(self.max_retries):
+            try:
+                return self._make_request(prompt, response_schema)
+            except NonRetryableError:
+                raise
+            except RetryableError as e:
+                last_error = e
+                if attempt < self.max_retries - 1:
+                    # Exponential backoff
+                    wait_time = min(2 ** attempt, 30)
+                    time.sleep(wait_time)
+            except httpx.TimeoutException as e:
+                last_error = RetryableError(f"Timeout: {e}")
+                if attempt < self.max_retries - 1:
+                    wait_time = min(2 ** attempt, 30)
+                    time.sleep(wait_time)
+
+        raise RetryableError(f"Max retries exceeded: {last_error}")
+
+
+class VLLMClient(BaseLLMClient):
+    """Client for vLLM server (local or remote with API key)."""
+
+    # Schema for guided JSON (vLLM supports this natively)
+    ANSWER_SCHEMA = {
+        "type": "object",
+        "properties": {
+            "answer": {"type": "string"}
+        },
+        "required": ["answer"]
+    }
+
+    def __init__(
+        self,
+        endpoint: str,
+        model: str,
+        api_key: Optional[str] = None,
+        temperature: float = 0.0,
+        max_tokens: int = 64,
+        max_retries: int = 3,
+        timeout: float = 120.0,
+    ):
+        self.endpoint = endpoint.rstrip("/")
+        self.model = model
+        self.api_key = api_key
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.max_retries = max_retries
+        self.timeout = timeout
+
+    def _make_request(self, prompt: str, response_schema: dict) -> LLMResponse:
+        """Make a single API request to vLLM with structured output."""
+        url = f"{self.endpoint}/chat/completions"
+
+        # Build headers (include auth if API key provided)
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        # Use provided schema or default to answer schema
+        schema = response_schema if response_schema else self.ANSWER_SCHEMA
+
+        payload = {
+            "model": self.model,
+            "messages": [
+                {"role": "user", "content": prompt},
+            ],
+            "temperature": self.temperature,
+            "max_tokens": self.max_tokens,
+            # vLLM structured outputs - uses guided_json in extra_body
+            # See: https://docs.vllm.ai/en/latest/features/structured_outputs/
+            "extra_body": {
+                "guided_json": schema
+            }
+        }
+
+        with httpx.Client(timeout=self.timeout) as client:
+            response = client.post(url, headers=headers, json=payload)
+
+            if response.status_code == 401:
+                raise NonRetryableError(f"Authentication failed: {response.json()}")
+            elif response.status_code == 400:
+                raise NonRetryableError(f"Bad request: {response.json()}")
+            elif response.status_code == 429:
+                raise RetryableError(f"Rate limited: {response.json()}")
+            elif response.status_code >= 500:
+                raise RetryableError(f"Server error ({response.status_code})")
+            elif response.status_code != 200:
+                raise LLMError(f"Unexpected status {response.status_code}")
+
+            # Parse structured JSON response
+            data = response.json()
+            content = data["choices"][0]["message"]["content"]
+            return LLMResponse.from_json(content)
+
+    def complete(self, prompt: str, response_schema: dict) -> LLMResponse:
+        """Get completion with retry logic."""
+        last_error = None
+
+        for attempt in range(self.max_retries):
+            try:
+                return self._make_request(prompt, response_schema)
+            except NonRetryableError:
+                raise
+            except RetryableError as e:
+                last_error = e
+                if attempt < self.max_retries - 1:
+                    wait_time = min(2 ** attempt, 30)
+                    time.sleep(wait_time)
+            except httpx.TimeoutException as e:
+                last_error = RetryableError(f"Timeout: {e}")
+                if attempt < self.max_retries - 1:
+                    wait_time = min(2 ** attempt, 30)
+                    time.sleep(wait_time)
+
+        raise RetryableError(f"Max retries exceeded: {last_error}")
+
+
+class LLMClient:
+    """Factory for creating LLM clients."""
+
+    @staticmethod
+    def create(
+        provider: str,
+        api_key: Optional[str] = None,
+        endpoint: Optional[str] = None,
+        model: Optional[str] = None,
+        temperature: float = 0.0,
+        max_tokens: int = 64,
+        max_retries: int = 3,
+    ) -> BaseLLMClient:
+        """
+        Create an LLM client based on provider.
+
+        Args:
+            provider: "openrouter" or "vllm"
+            api_key: API key (for openrouter)
+            endpoint: Server endpoint (for vllm)
+            model: Model name
+            temperature: Sampling temperature
+            max_tokens: Maximum tokens in response
+            max_retries: Maximum retry attempts
+
+        Returns:
+            Configured LLM client
+        """
+        if provider == "openrouter":
+            if not api_key:
+                raise ValueError("api_key required for openrouter provider")
+            return OpenRouterClient(
+                api_key=api_key,
+                model=model or "anthropic/claude-3-haiku",
+                temperature=temperature,
+                max_tokens=max_tokens,
+                max_retries=max_retries,
+            )
+        elif provider == "vllm":
+            if not endpoint:
+                raise ValueError("endpoint required for vllm provider")
+            return VLLMClient(
+                endpoint=endpoint,
+                model=model or "meta-llama/Llama-3-70b",
+                api_key=api_key,  # Optional: for authenticated vLLM servers
+                temperature=temperature,
+                max_tokens=max_tokens,
+                max_retries=max_retries,
+            )
+        else:
+            raise ValueError(f"Unknown provider: {provider}. Supported: openrouter, vllm")
