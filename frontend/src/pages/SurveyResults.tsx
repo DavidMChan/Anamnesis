@@ -98,10 +98,21 @@ export function SurveyResults() {
 
       const counts: Record<string, number> = {}
 
+      // Initialize counts with option text
       if (question.options) {
         question.options.forEach((opt) => {
           counts[opt] = 0
         })
+      }
+
+      // Map letter (A, B, C, D...) to option index
+      const letterToOption = (letter: string): string | null => {
+        if (!question.options) return null
+        const index = letter.charCodeAt(0) - 'A'.charCodeAt(0)
+        if (index >= 0 && index < question.options.length) {
+          return question.options[index]
+        }
+        return null
       }
 
       Object.values(results).forEach((response) => {
@@ -109,10 +120,12 @@ export function SurveyResults() {
         if (answer) {
           if (Array.isArray(answer)) {
             answer.forEach((a) => {
-              counts[a] = (counts[a] || 0) + 1
+              const optionText = letterToOption(a) || a
+              counts[optionText] = (counts[optionText] || 0) + 1
             })
           } else {
-            counts[answer] = (counts[answer] || 0) + 1
+            const optionText = letterToOption(answer) || answer
+            counts[optionText] = (counts[optionText] || 0) + 1
           }
         }
       })
@@ -133,6 +146,16 @@ export function SurveyResults() {
     setStats(questionStats)
   }
 
+  // Helper to map letter answer to option text
+  const mapAnswerToOption = (answer: string, question: Question): string => {
+    if (!question.options || question.type === 'open_response') return answer
+    const index = answer.charCodeAt(0) - 'A'.charCodeAt(0)
+    if (index >= 0 && index < question.options.length) {
+      return question.options[index]
+    }
+    return answer
+  }
+
   const downloadCSV = () => {
     if (!survey || !run) return
 
@@ -145,9 +168,9 @@ export function SurveyResults() {
         ...survey.questions.map((q) => {
           const answer = responses[q.qkey]
           if (Array.isArray(answer)) {
-            return answer.join('; ')
+            return answer.map((a) => mapAnswerToOption(a, q)).join('; ')
           }
-          return answer || ''
+          return answer ? mapAnswerToOption(answer, q) : ''
         }),
       ]
     })
