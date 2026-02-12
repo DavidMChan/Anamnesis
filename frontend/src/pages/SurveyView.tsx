@@ -9,7 +9,7 @@ import { useSurveyRun, useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
 import { useAuth } from '@/hooks/useAuth'
 import type { Survey, SurveyRun } from '@/types/database'
-import { ArrowLeft, Edit, Play, BarChart2, History } from 'lucide-react'
+import { ArrowLeft, Edit, Play, History } from 'lucide-react'
 
 const statusColors: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
   draft: 'secondary',

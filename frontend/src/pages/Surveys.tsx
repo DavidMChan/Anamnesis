@@ -4,7 +4,6 @@ import { Layout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Progress } from '@/components/ui/progress'
 import { supabase } from '@/lib/supabase'
 import { useAuthContext } from '@/contexts/AuthContext'
 import type { Survey } from '@/types/database'
@@ -13,10 +12,7 @@ import { Plus, Eye, BarChart3, Trash2, ClipboardList, Copy } from 'lucide-react'
 
 const statusVariants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info'> = {
   draft: 'secondary',
-  queued: 'warning',
-  running: 'info',
-  completed: 'success',
-  failed: 'destructive',
+  active: 'success',
 }
 
 export function Surveys() {
@@ -82,11 +78,6 @@ export function Surveys() {
     }
   }
 
-  const getProgress = (survey: Survey) => {
-    if (!survey.matched_count || survey.matched_count === 0) return 0
-    return Math.round(((survey.completed_count || 0) / survey.matched_count) * 100)
-  }
-
   if (loading) {
     return (
       <Layout>
@@ -147,20 +138,9 @@ export function Surveys() {
                   </div>
                   <CardDescription className="text-xs">
                     {survey.questions.length} questions
-                    {survey.matched_count ? ` · ${survey.matched_count} backstories` : ''}
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="flex-1 flex flex-col">
-                  {(survey.status === 'running' || survey.status === 'queued') && (
-                    <div className="mb-4">
-                      <div className="flex items-center justify-between text-xs mb-2">
-                        <span className="text-muted-foreground">Progress</span>
-                        <span className="font-medium">{getProgress(survey)}%</span>
-                      </div>
-                      <Progress value={getProgress(survey)} />
-                    </div>
-                  )}
-
                   <div className="mt-auto pt-4 flex items-center gap-2 border-t border-border">
                     <Link to={`/surveys/${survey.id}`} className="flex-1">
                       <Button variant="outline" size="sm" className="w-full gap-1">
@@ -168,7 +148,7 @@ export function Surveys() {
                         View
                       </Button>
                     </Link>
-                    {survey.status === 'completed' && (
+                    {survey.status === 'active' && (
                       <Link to={`/surveys/${survey.id}/results`}>
                         <Button variant="outline" size="sm" className="gap-1">
                           <BarChart3 className="h-3.5 w-3.5" />
