@@ -35,6 +35,8 @@ def format_mcq_question(question: Question) -> str:
         (B) Option 2
         ...
 
+        Select one answer.
+
         Answer:
     """
     if not question.options:
@@ -48,7 +50,7 @@ def format_mcq_question(question: Question) -> str:
 
     choices_str = "\n".join(choice_lines)
 
-    return f"Question: {question.text}\n{choices_str}\n\nAnswer:"
+    return f"Question: {question.text}\n{choices_str}\n\nSelect one answer.\n\nAnswer:"
 
 
 def format_open_response_question(question: Question) -> str:
@@ -58,20 +60,79 @@ def format_open_response_question(question: Question) -> str:
     Format:
         Question: {question_text}
 
+        Provide a free-form text response.
+
         Answer:
     """
-    return f"Question: {question.text}\n\nAnswer:"
+    return f"Question: {question.text}\n\nProvide a free-form text response.\n\nAnswer:"
+
+
+def format_multiple_select_question(question: Question) -> str:
+    """
+    Format a multiple select question.
+
+    Format:
+        Question: {question_text}
+        (A) Option 1
+        (B) Option 2
+        ...
+
+        Select all that apply.
+
+        Answer:
+    """
+    if not question.options:
+        raise ValueError(f"Multiple select question {question.qkey} has no options")
+
+    # Build choice string with (A), (B), etc.
+    choice_lines = []
+    for idx, option in enumerate(question.options):
+        letter = chr(65 + idx)  # 65 = 'A'
+        choice_lines.append(f"({letter}) {option}")
+
+    choices_str = "\n".join(choice_lines)
+
+    return f"Question: {question.text}\n{choices_str}\n\nSelect all that apply.\n\nAnswer:"
+
+
+def format_ranking_question(question: Question) -> str:
+    """
+    Format a ranking question.
+
+    Format:
+        Question: {question_text}
+        (A) Option 1
+        (B) Option 2
+        ...
+
+        Rank all options from most to least preferred (e.g., A, C, B, D).
+
+        Answer:
+    """
+    if not question.options:
+        raise ValueError(f"Ranking question {question.qkey} has no options")
+
+    # Build choice string with (A), (B), etc.
+    choice_lines = []
+    for idx, option in enumerate(question.options):
+        letter = chr(65 + idx)  # 65 = 'A'
+        choice_lines.append(f"({letter}) {option}")
+
+    choices_str = "\n".join(choice_lines)
+
+    return f"Question: {question.text}\n{choices_str}\n\nRank all options from most to least preferred (e.g., A, C, B, D).\n\nAnswer:"
 
 
 def format_question(question: Question) -> str:
     """Format a question based on its type."""
-    if question.type in ("mcq", "multiple_select"):
+    if question.type == "mcq":
         return format_mcq_question(question)
+    elif question.type == "multiple_select":
+        return format_multiple_select_question(question)
     elif question.type == "open_response":
         return format_open_response_question(question)
     elif question.type == "ranking":
-        # Ranking questions can be formatted as MCQ for now
-        return format_mcq_question(question)
+        return format_ranking_question(question)
     else:
         # Default to open response
         return format_open_response_question(question)
