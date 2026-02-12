@@ -25,6 +25,7 @@ import { QuestionEditor } from '@/components/surveys/QuestionEditor'
 import { DemographicFilter } from '@/components/surveys/DemographicFilter'
 import { supabase } from '@/lib/supabase'
 import { useAuthContext } from '@/contexts/AuthContext'
+import { useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import type { Question, DemographicFilter as DemographicFilterType, Survey } from '@/types/database'
 import { toast } from '@/hooks/use-toast'
 import { Plus, Save, Play, ArrowLeft } from 'lucide-react'
@@ -42,8 +43,9 @@ export function SurveyCreate() {
   const [includeOwnBackstories, setIncludeOwnBackstories] = useState(false)
   const [ownBackstoriesCount, setOwnBackstoriesCount] = useState(0)
   const [saving, setSaving] = useState(false)
-  const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const { createRun, loading: creatingRun } = useCreateSurveyRun()
 
   useEffect(() => {
     if (isEditing) {
@@ -227,14 +229,28 @@ export function SurveyCreate() {
   }
 
   const handleRunSurvey = async () => {
-    setRunning(true)
+    if (!user) return
+
     // Save as draft first, createSurveyRun will set it to 'active'
     const result = await saveSurvey('draft')
     if (result) {
-      // In a real implementation, this would also trigger the worker
-      navigate(`/surveys/${result.id}`)
+      // Get user's LLM config
+      const { data: userData } = await supabase
+        .from('users')
+        .select('llm_config')
+        .eq('id', user.id)
+        .single()
+
+      const llmConfig = userData?.llm_config || {}
+
+      // Actually create the run
+      const runId = await createRun(result.id, llmConfig)
+      if (runId) {
+        navigate(`/surveys/${result.id}`)
+      } else {
+        setError('Failed to start survey run')
+      }
     }
-    setRunning(false)
   }
 
   return (
@@ -352,9 +368,9 @@ export function SurveyCreate() {
             <Save className="h-4 w-4 mr-2" />
             {saving ? 'Saving...' : 'Save Draft'}
           </Button>
-          <Button onClick={handleRunSurvey} disabled={running || saving}>
+          <Button onClick={handleRunSurvey} disabled={creatingRun || saving}>
             <Play className="h-4 w-4 mr-2" />
-            {running ? 'Starting...' : 'Run Survey'}
+            {creatingRun ? 'Starting...' : 'Run Survey'}
           </Button>
         </div>
       </div>

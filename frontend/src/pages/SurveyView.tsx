@@ -11,9 +11,9 @@ import { useAuth } from '@/hooks/useAuth'
 import type { Survey, SurveyRun } from '@/types/database'
 import { ArrowLeft, Edit, Play, History } from 'lucide-react'
 
-const statusColors: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+const statusColors: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'gold'> = {
   draft: 'secondary',
-  active: 'default',
+  active: 'gold',
 }
 
 const questionTypeLabels: Record<string, string> = {

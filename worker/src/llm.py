@@ -32,6 +32,11 @@ class NonRetryableError(LLMError):
     pass
 
 
+class TruncationError(LLMError):
+    """Response was truncated (likely exceeded max_tokens)."""
+    pass
+
+
 @dataclass
 class LLMResponse:
     """Parsed LLM response."""
@@ -45,15 +50,35 @@ class LLMResponse:
         Parse LLM response from JSON string.
 
         Raises:
+            TruncationError: If JSON appears to be truncated.
             NonRetryableError: If JSON is invalid or malformed.
         """
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError as e:
+            # Detect truncation patterns
+            error_msg = str(e).lower()
+            if "unterminated string" in error_msg or "expecting" in error_msg:
+                raise TruncationError(f"Response appears truncated: {e}. Raw: {json_str[:200]}")
             raise NonRetryableError(f"Invalid JSON response from LLM: {e}. Raw: {json_str[:200]}")
 
+        # Handle different response formats: answer, answers (multiple_select), ranking
+        answer = data.get("answer")
+        if answer is None:
+            answers = data.get("answers")
+            if answers is not None:
+                # Multiple select: join array as comma-separated
+                answer = ",".join(answers) if isinstance(answers, list) else str(answers)
+            else:
+                ranking = data.get("ranking")
+                if ranking is not None:
+                    # Ranking: join array as comma-separated (preserves order)
+                    answer = ",".join(ranking) if isinstance(ranking, list) else str(ranking)
+                else:
+                    answer = ""
+
         return cls(
-            answer=data.get("answer", data.get("answers", "")),
+            answer=answer,
             reasoning=data.get("reasoning"),
             raw=json_str,
         )
@@ -123,7 +148,7 @@ class OpenRouterClient(BaseLLMClient):
         api_key: str,
         model: str,
         temperature: float = 0.0,
-        max_tokens: int = 64,
+        max_tokens: Optional[int] = None,
         max_retries: int = 3,
         timeout: float = 60.0,
     ):
@@ -147,8 +172,14 @@ class OpenRouterClient(BaseLLMClient):
         "additionalProperties": False
     }
 
-    def _make_request(self, prompt: str, response_schema: dict) -> LLMResponse:
-        """Make a single API request with structured output."""
+    def _make_request(self, prompt: str, response_schema: dict, max_tokens_override: Optional[int] = None) -> LLMResponse:
+        """Make a single API request with structured output.
+
+        Args:
+            prompt: The input prompt
+            response_schema: JSON schema for expected response format
+            max_tokens_override: Override max_tokens for this request (used for retry)
+        """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
@@ -158,13 +189,15 @@ class OpenRouterClient(BaseLLMClient):
         # Use provided schema or default
         schema = response_schema if response_schema else self.ANSWER_SCHEMA
 
-        payload = {
+        # Determine max_tokens: override > instance setting
+        effective_max_tokens = max_tokens_override if max_tokens_override is not None else self.max_tokens
+
+        payload: Dict[str, Any] = {
             "model": self.model,
             "messages": [
                 {"role": "user", "content": prompt},
             ],
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
             # OpenRouter structured outputs - proper format for GPT models
             "response_format": {
                 "type": "json_schema",
@@ -175,6 +208,10 @@ class OpenRouterClient(BaseLLMClient):
                 }
             }
         }
+
+        # Only add max_tokens if specified (None means no limit)
+        if effective_max_tokens is not None:
+            payload["max_tokens"] = effective_max_tokens
 
         with httpx.Client(timeout=self.timeout) as client:
             response = client.post(self.BASE_URL, headers=headers, json=payload)
@@ -197,12 +234,29 @@ class OpenRouterClient(BaseLLMClient):
             return LLMResponse.from_json(content)
 
     def complete(self, prompt: str, response_schema: dict) -> LLMResponse:
-        """Get completion with retry logic."""
+        """Get completion with retry logic and truncation handling."""
         last_error = None
+        truncation_retried = False
 
         for attempt in range(self.max_retries):
             try:
                 return self._make_request(prompt, response_schema)
+            except TruncationError as e:
+                # Retry once without max_tokens limit (only if we haven't tried already)
+                if not truncation_retried and self.max_tokens is not None:
+                    truncation_retried = True
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"Response truncated, retrying without max_tokens limit: {e}"
+                    )
+                    try:
+                        # Retry with no max_tokens (use a very large number instead of None
+                        # since OpenRouter might still need a value)
+                        return self._make_request(prompt, response_schema, max_tokens_override=16384)
+                    except TruncationError as retry_e:
+                        raise NonRetryableError(f"Response still truncated after retry: {retry_e}")
+                else:
+                    raise NonRetryableError(f"Response truncated: {e}")
             except NonRetryableError:
                 raise
             except RetryableError as e:
@@ -238,7 +292,7 @@ class VLLMClient(BaseLLMClient):
         model: str,
         api_key: Optional[str] = None,
         temperature: float = 0.0,
-        max_tokens: int = 64,
+        max_tokens: Optional[int] = None,
         max_retries: int = 3,
         timeout: float = 120.0,
     ):
@@ -250,8 +304,14 @@ class VLLMClient(BaseLLMClient):
         self.max_retries = max_retries
         self.timeout = timeout
 
-    def _make_request(self, prompt: str, response_schema: dict) -> LLMResponse:
-        """Make a single API request to vLLM with structured output."""
+    def _make_request(self, prompt: str, response_schema: dict, max_tokens_override: Optional[int] = None) -> LLMResponse:
+        """Make a single API request to vLLM with structured output.
+
+        Args:
+            prompt: The input prompt
+            response_schema: JSON schema for expected response format
+            max_tokens_override: Override max_tokens for this request (used for retry)
+        """
         url = f"{self.endpoint}/chat/completions"
 
         # Build headers (include auth if API key provided)
@@ -262,19 +322,25 @@ class VLLMClient(BaseLLMClient):
         # Use provided schema or default to answer schema
         schema = response_schema if response_schema else self.ANSWER_SCHEMA
 
-        payload = {
+        # Determine max_tokens: override > instance setting
+        effective_max_tokens = max_tokens_override if max_tokens_override is not None else self.max_tokens
+
+        payload: Dict[str, Any] = {
             "model": self.model,
             "messages": [
                 {"role": "user", "content": prompt},
             ],
             "temperature": self.temperature,
-            "max_tokens": self.max_tokens,
             # vLLM structured outputs - uses guided_json in extra_body
             # See: https://docs.vllm.ai/en/latest/features/structured_outputs/
             "extra_body": {
                 "guided_json": schema
             }
         }
+
+        # Only add max_tokens if specified (None means no limit)
+        if effective_max_tokens is not None:
+            payload["max_tokens"] = effective_max_tokens
 
         with httpx.Client(timeout=self.timeout) as client:
             response = client.post(url, headers=headers, json=payload)
@@ -296,12 +362,28 @@ class VLLMClient(BaseLLMClient):
             return LLMResponse.from_json(content)
 
     def complete(self, prompt: str, response_schema: dict) -> LLMResponse:
-        """Get completion with retry logic."""
+        """Get completion with retry logic and truncation handling."""
         last_error = None
+        truncation_retried = False
 
         for attempt in range(self.max_retries):
             try:
                 return self._make_request(prompt, response_schema)
+            except TruncationError as e:
+                # Retry once without max_tokens limit (only if we haven't tried already)
+                if not truncation_retried and self.max_tokens is not None:
+                    truncation_retried = True
+                    import logging
+                    logging.getLogger(__name__).warning(
+                        f"Response truncated, retrying without max_tokens limit: {e}"
+                    )
+                    try:
+                        # Retry with a much larger max_tokens
+                        return self._make_request(prompt, response_schema, max_tokens_override=16384)
+                    except TruncationError as retry_e:
+                        raise NonRetryableError(f"Response still truncated after retry: {retry_e}")
+                else:
+                    raise NonRetryableError(f"Response truncated: {e}")
             except NonRetryableError:
                 raise
             except RetryableError as e:
@@ -328,7 +410,7 @@ class LLMClient:
         endpoint: Optional[str] = None,
         model: Optional[str] = None,
         temperature: float = 0.0,
-        max_tokens: int = 64,
+        max_tokens: Optional[int] = None,
         max_retries: int = 3,
     ) -> BaseLLMClient:
         """

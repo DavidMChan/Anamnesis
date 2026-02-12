@@ -6,16 +6,37 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { supabase } from '@/lib/supabase'
 import type { Survey, SurveyRun, Question, SurveyResults as SurveyResultsType } from '@/types/database'
-import { ArrowLeft, Download, BarChart2, Table } from 'lucide-react'
+import { ArrowLeft, Download, BarChart2, Table, ImageDown } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
+import { useRef, useCallback } from 'react'
 
+// Chart colors (vibrant for data visualization)
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
+
+// BAIR Lab color palette (for future use)
+// const BAIR_COLORS = [
+//   '#003262', // BAIR dark blue (primary)
+//   '#3B7EA1', // BAIR medium blue
+//   '#00B0DA', // Berkeley bright blue
+//   '#CFDD45', // Berkeley chartreuse
+//   '#6C3302', // Berkeley brown
+//   '#DDD5C7', // Berkeley sandstone
+//   '#FDB515', // Berkeley gold
+//   '#C4820E', // BAIR gold accent
+// ]
 
 interface QuestionStats {
   qkey: string
   question: Question
   distribution: { option: string; count: number; percentage: number }[]
   openResponses?: string[]
+  // Ranking-specific stats
+  rankingStats?: {
+    option: string
+    avgRank: number
+    bordaScore: number
+    firstPlaceCount: number
+  }[]
 }
 
 export function SurveyResults() {
@@ -27,6 +48,7 @@ export function SurveyResults() {
   const [run, setRun] = useState<SurveyRun | null>(null)
   const [stats, setStats] = useState<QuestionStats[]>([])
   const [loading, setLoading] = useState(true)
+  const chartRefs = useRef<Map<string, HTMLDivElement>>(new Map())
 
   useEffect(() => {
     fetchData()
@@ -82,6 +104,16 @@ export function SurveyResults() {
   const calculateStats = (survey: Survey, results: SurveyResultsType) => {
     const totalResponses = Object.keys(results || {}).length
 
+    // Map letter (A, B, C, D...) to option index
+    const letterToOption = (letter: string, options: string[] | undefined): string | null => {
+      if (!options) return null
+      const index = letter.charCodeAt(0) - 'A'.charCodeAt(0)
+      if (index >= 0 && index < options.length) {
+        return options[index]
+      }
+      return null
+    }
+
     const questionStats: QuestionStats[] = survey.questions.map((question) => {
       if (question.type === 'open_response') {
         const openResponses = Object.values(results)
@@ -96,6 +128,67 @@ export function SurveyResults() {
         }
       }
 
+      // Handle ranking questions specially
+      if (question.type === 'ranking' && question.options) {
+        const numOptions = question.options.length
+        const rankSums: Record<string, number> = {}
+        const rankCounts: Record<string, number> = {}
+        const firstPlaceCounts: Record<string, number> = {}
+        const bordaScores: Record<string, number> = {}
+
+        // Initialize
+        question.options.forEach((opt) => {
+          rankSums[opt] = 0
+          rankCounts[opt] = 0
+          firstPlaceCounts[opt] = 0
+          bordaScores[opt] = 0
+        })
+
+        Object.values(results).forEach((response) => {
+          const answer = response[question.qkey] as string
+          if (!answer) return
+
+          // Parse ranking: "A,C,B,D,E" or ["A", "C", "B", "D", "E"]
+          const ranking = Array.isArray(answer) ? answer : answer.split(',').map(s => s.trim())
+
+          ranking.forEach((letter, position) => {
+            const optionText = letterToOption(letter, question.options)
+            if (optionText) {
+              // Position is 0-indexed, rank is 1-indexed
+              const rank = position + 1
+              rankSums[optionText] += rank
+              rankCounts[optionText] += 1
+
+              // First place count
+              if (position === 0) {
+                firstPlaceCounts[optionText] += 1
+              }
+
+              // Borda score: 1st place gets N points, 2nd gets N-1, etc.
+              bordaScores[optionText] += (numOptions - position)
+            }
+          })
+        })
+
+        const rankingStats = question.options.map((opt) => ({
+          option: opt,
+          avgRank: rankCounts[opt] > 0 ? Math.round((rankSums[opt] / rankCounts[opt]) * 10) / 10 : 0,
+          bordaScore: bordaScores[opt],
+          firstPlaceCount: firstPlaceCounts[opt],
+        }))
+
+        // Sort by Borda score (higher is better)
+        rankingStats.sort((a, b) => b.bordaScore - a.bordaScore)
+
+        return {
+          qkey: question.qkey,
+          question,
+          distribution: [],
+          rankingStats,
+        }
+      }
+
+      // MCQ and multiple_select
       const counts: Record<string, number> = {}
 
       // Initialize counts with option text
@@ -105,28 +198,18 @@ export function SurveyResults() {
         })
       }
 
-      // Map letter (A, B, C, D...) to option index
-      const letterToOption = (letter: string): string | null => {
-        if (!question.options) return null
-        const index = letter.charCodeAt(0) - 'A'.charCodeAt(0)
-        if (index >= 0 && index < question.options.length) {
-          return question.options[index]
-        }
-        return null
-      }
-
       Object.values(results).forEach((response) => {
         const answer = response[question.qkey]
         if (answer) {
-          if (Array.isArray(answer)) {
-            answer.forEach((a) => {
-              const optionText = letterToOption(a) || a
-              counts[optionText] = (counts[optionText] || 0) + 1
-            })
-          } else {
-            const optionText = letterToOption(answer) || answer
+          // Handle comma-separated answers (from multiple_select)
+          const answers = typeof answer === 'string' && answer.includes(',')
+            ? answer.split(',').map(s => s.trim())
+            : Array.isArray(answer) ? answer : [answer]
+
+          answers.forEach((a) => {
+            const optionText = letterToOption(a, question.options) || a
             counts[optionText] = (counts[optionText] || 0) + 1
-          }
+          })
         }
       })
 
@@ -145,6 +228,56 @@ export function SurveyResults() {
 
     setStats(questionStats)
   }
+
+  // Download chart as PNG
+  const downloadChart = useCallback((qkey: string, questionText: string) => {
+    const chartContainer = chartRefs.current.get(qkey)
+    if (!chartContainer) return
+
+    const svgElement = chartContainer.querySelector('svg')
+    if (!svgElement) return
+
+    // Clone SVG and add white background
+    const svgClone = svgElement.cloneNode(true) as SVGElement
+    svgClone.setAttribute('xmlns', 'http://www.w3.org/2000/svg')
+
+    // Add white background rect
+    const bgRect = document.createElementNS('http://www.w3.org/2000/svg', 'rect')
+    bgRect.setAttribute('width', '100%')
+    bgRect.setAttribute('height', '100%')
+    bgRect.setAttribute('fill', 'white')
+    svgClone.insertBefore(bgRect, svgClone.firstChild)
+
+    // Convert to data URL
+    const svgData = new XMLSerializer().serializeToString(svgClone)
+    const svgBlob = new Blob([svgData], { type: 'image/svg+xml;charset=utf-8' })
+    const svgUrl = URL.createObjectURL(svgBlob)
+
+    // Create canvas and draw
+    const img = new Image()
+    img.onload = () => {
+      const canvas = document.createElement('canvas')
+      const scale = 2 // Higher resolution
+      canvas.width = img.width * scale
+      canvas.height = img.height * scale
+
+      const ctx = canvas.getContext('2d')
+      if (ctx) {
+        ctx.scale(scale, scale)
+        ctx.fillStyle = 'white'
+        ctx.fillRect(0, 0, img.width, img.height)
+        ctx.drawImage(img, 0, 0)
+
+        // Download
+        const link = document.createElement('a')
+        link.download = `${questionText.slice(0, 50).replace(/[^a-zA-Z0-9]/g, '_')}.png`
+        link.href = canvas.toDataURL('image/png')
+        link.click()
+      }
+      URL.revokeObjectURL(svgUrl)
+    }
+    img.src = svgUrl
+  }, [])
 
   // Helper to map letter answer to option text
   const mapAnswerToOption = (answer: string, question: Question): string => {
@@ -167,10 +300,35 @@ export function SurveyResults() {
         backstoryId,
         ...survey.questions.map((q) => {
           const answer = responses[q.qkey]
+          if (!answer) return ''
+
+          // Handle ranking: "A,C,B,D,E" -> "Taiwan > China > United States > Italy > Mexico"
+          if (q.type === 'ranking' && typeof answer === 'string' && q.options) {
+            const ranking = answer.split(',').map(s => s.trim())
+            return ranking
+              .map((letter) => {
+                const index = letter.charCodeAt(0) - 'A'.charCodeAt(0)
+                return q.options && index >= 0 && index < q.options.length
+                  ? q.options[index]
+                  : letter
+              })
+              .join(' > ')
+          }
+
+          // Handle multiple select and arrays
           if (Array.isArray(answer)) {
             return answer.map((a) => mapAnswerToOption(a, q)).join('; ')
           }
-          return answer ? mapAnswerToOption(answer, q) : ''
+
+          // Handle comma-separated (multiple_select stored as string)
+          if (typeof answer === 'string' && answer.includes(',') && q.type === 'multiple_select') {
+            return answer
+              .split(',')
+              .map(s => mapAnswerToOption(s.trim(), q))
+              .join('; ')
+          }
+
+          return mapAnswerToOption(answer, q)
         }),
       ]
     })
@@ -247,8 +405,22 @@ export function SurveyResults() {
             {stats.map((stat, index) => (
               <Card key={stat.qkey}>
                 <CardHeader>
-                  <CardDescription>Q{index + 1}</CardDescription>
-                  <CardTitle className="text-lg">{stat.question.text}</CardTitle>
+                  <div className="flex items-start justify-between">
+                    <div>
+                      <CardDescription>Q{index + 1}</CardDescription>
+                      <CardTitle className="text-lg">{stat.question.text}</CardTitle>
+                    </div>
+                    {stat.question.type !== 'open_response' && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => downloadChart(stat.qkey, stat.question.text)}
+                        title="Download chart as PNG"
+                      >
+                        <ImageDown className="h-4 w-4" />
+                      </Button>
+                    )}
+                  </div>
                 </CardHeader>
                 <CardContent>
                   {stat.question.type === 'open_response' ? (
@@ -264,8 +436,77 @@ export function SurveyResults() {
                         </p>
                       )}
                     </div>
+                  ) : stat.question.type === 'ranking' && stat.rankingStats ? (
+                    <div className="space-y-4">
+                      {/* Borda Score Chart */}
+                      <div>
+                        <h4 className="text-sm font-medium mb-2 text-muted-foreground">
+                          Borda Score (higher = more preferred)
+                        </h4>
+                        <div
+                          className="h-48"
+                          ref={(el) => { if (el) chartRefs.current.set(stat.qkey, el) }}
+                        >
+                          <ResponsiveContainer width="100%" height="100%">
+                            <BarChart data={stat.rankingStats} layout="vertical">
+                              <CartesianGrid strokeDasharray="3 3" />
+                              <XAxis type="number" />
+                              <YAxis
+                                type="category"
+                                dataKey="option"
+                                width={150}
+                                tick={{ fontSize: 12 }}
+                              />
+                              <Tooltip
+                                formatter={(value, name) => {
+                                  if (name === 'bordaScore') return [`${value} points`, 'Borda Score']
+                                  return [value, name]
+                                }}
+                              />
+                              <Bar dataKey="bordaScore" radius={[0, 4, 4, 0]}>
+                                {stat.rankingStats.map((_, i) => (
+                                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
+                                ))}
+                              </Bar>
+                            </BarChart>
+                          </ResponsiveContainer>
+                        </div>
+                      </div>
+                      {/* Detailed Stats Table */}
+                      <div className="border rounded-md overflow-hidden">
+                        <table className="w-full text-sm">
+                          <thead className="bg-muted">
+                            <tr>
+                              <th className="text-left p-2 font-medium">Option</th>
+                              <th className="text-right p-2 font-medium">Avg Rank</th>
+                              <th className="text-right p-2 font-medium">Borda Score</th>
+                              <th className="text-right p-2 font-medium">#1 Votes</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {stat.rankingStats.map((item, i) => (
+                              <tr key={item.option} className="border-t">
+                                <td className="p-2 flex items-center gap-2">
+                                  <span
+                                    className="w-3 h-3 rounded-full"
+                                    style={{ backgroundColor: COLORS[i % COLORS.length] }}
+                                  />
+                                  {item.option}
+                                </td>
+                                <td className="text-right p-2">{item.avgRank || '-'}</td>
+                                <td className="text-right p-2 font-medium">{item.bordaScore}</td>
+                                <td className="text-right p-2">{item.firstPlaceCount}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
                   ) : (
-                    <div className="h-64">
+                    <div
+                      className="h-64"
+                      ref={(el) => { if (el) chartRefs.current.set(stat.qkey, el) }}
+                    >
                       <ResponsiveContainer width="100%" height="100%">
                         <BarChart data={stat.distribution} layout="vertical">
                           <CartesianGrid strokeDasharray="3 3" />

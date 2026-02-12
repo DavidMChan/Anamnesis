@@ -10,6 +10,22 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
+def parse_max_tokens(value: str) -> Optional[int]:
+    """
+    Parse max_tokens from environment variable.
+
+    Supports:
+    - Numeric values: "512", "1024" → int
+    - Unlimited: "INF", "unlimited", "-1" → None (no limit)
+
+    Returns:
+        int for numeric values, None for unlimited
+    """
+    if value.upper() in ("INF", "UNLIMITED", "-1"):
+        return None
+    return int(value)
+
+
 @dataclass
 class SupabaseConfig:
     """Supabase connection configuration."""
@@ -41,7 +57,7 @@ class LLMConfig:
 
     # Common settings
     temperature: float = field(default_factory=lambda: float(os.environ.get("LLM_TEMPERATURE", "0.0")))
-    max_tokens: int = field(default_factory=lambda: int(os.environ.get("LLM_MAX_TOKENS", "512")))
+    max_tokens: Optional[int] = field(default_factory=lambda: parse_max_tokens(os.environ.get("LLM_MAX_TOKENS", "512")))
 
 
 @dataclass

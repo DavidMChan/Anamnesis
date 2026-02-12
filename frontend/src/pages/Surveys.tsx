@@ -10,9 +10,9 @@ import type { Survey } from '@/types/database'
 import { toast } from '@/hooks/use-toast'
 import { Plus, Eye, BarChart3, Trash2, ClipboardList, Copy } from 'lucide-react'
 
-const statusVariants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info'> = {
+const statusVariants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info' | 'gold'> = {
   draft: 'secondary',
-  active: 'success',
+  active: 'gold',
 }
 
 export function Surveys() {
