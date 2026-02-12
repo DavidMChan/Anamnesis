@@ -38,6 +38,7 @@ export function SurveyCreate() {
   const [name, setName] = useState('')
   const [questions, setQuestions] = useState<Question[]>([])
   const [demographics, setDemographics] = useState<DemographicFilterType>({})
+  const [sampleSize, setSampleSize] = useState<number | undefined>(undefined)
   const [includeOwnBackstories, setIncludeOwnBackstories] = useState(false)
   const [ownBackstoriesCount, setOwnBackstoriesCount] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -66,7 +67,10 @@ export function SurveyCreate() {
       const survey = data as Survey
       setName(survey.name || '')
       setQuestions(survey.questions)
-      setDemographics(survey.demographics)
+      // Extract sample size from demographics if present
+      const { _sample_size, ...restDemographics } = survey.demographics as DemographicFilterType & { _sample_size?: number[] }
+      setDemographics(restDemographics)
+      setSampleSize(_sample_size?.[0])
     }
   }
 
@@ -155,7 +159,7 @@ export function SurveyCreate() {
     return null
   }
 
-  const saveSurvey = async (status: 'draft' | 'queued' = 'draft') => {
+  const saveSurvey = async (status: 'draft' | 'active' = 'draft') => {
     if (!user) return
 
     const validationError = validateSurvey()
@@ -167,11 +171,16 @@ export function SurveyCreate() {
     setError(null)
     setSaving(true)
 
+    // Combine demographics with sample size (if set)
+    const demographicsWithSampleSize = sampleSize
+      ? { ...demographics, _sample_size: [sampleSize] }
+      : demographics
+
     const surveyData = {
       user_id: user.id,
       name: name.trim(),
       questions: questions as unknown,
-      demographics: demographics as unknown,
+      demographics: demographicsWithSampleSize as unknown,
       status,
     } as Record<string, unknown>
 
@@ -219,7 +228,8 @@ export function SurveyCreate() {
 
   const handleRunSurvey = async () => {
     setRunning(true)
-    const result = await saveSurvey('queued')
+    // Save as draft first, createSurveyRun will set it to 'active'
+    const result = await saveSurvey('draft')
     if (result) {
       // In a real implementation, this would also trigger the worker
       navigate(`/surveys/${result.id}`)
@@ -313,7 +323,12 @@ export function SurveyCreate() {
           )}
         </div>
 
-        <DemographicFilter value={demographics} onChange={setDemographics} />
+        <DemographicFilter
+          value={demographics}
+          onChange={setDemographics}
+          sampleSize={sampleSize}
+          onSampleSizeChange={setSampleSize}
+        />
 
         {ownBackstoriesCount > 0 && (
           <Card>

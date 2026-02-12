@@ -62,5 +62,26 @@ class Config:
 
 
 def get_config() -> Config:
-    """Get the configuration singleton."""
-    return Config()
+    """
+    Get the configuration singleton.
+
+    Raises:
+        ValueError: If required environment variables are missing.
+    """
+    config = Config()
+
+    # Validate required Supabase config
+    if not config.supabase.url:
+        raise ValueError("SUPABASE_URL environment variable is required")
+    if not config.supabase.service_key:
+        raise ValueError("SUPABASE_SERVICE_KEY environment variable is required")
+
+    # Validate RabbitMQ config (url has default, but warn if using default)
+    if config.rabbitmq.url == "amqp://localhost":
+        import logging
+        logging.getLogger(__name__).warning(
+            "Using default RabbitMQ URL (amqp://localhost). "
+            "Set RABBITMQ_URL for production."
+        )
+
+    return config

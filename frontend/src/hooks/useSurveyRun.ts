@@ -3,7 +3,8 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
-import type { SurveyRun, SurveyRunStatus } from '@/types/database'
+import { createSurveyRun } from '@/lib/surveyRunner'
+import type { SurveyRun } from '@/types/database'
 
 interface UseSurveyRunOptions {
   /** Survey ID to fetch runs for */
@@ -121,6 +122,7 @@ function calculateProgress(run: SurveyRun): number {
 
 /**
  * Hook for creating a new survey run.
+ * Uses createSurveyRun from surveyRunner.ts which handles sample size, etc.
  */
 export function useCreateSurveyRun() {
   const [loading, setLoading] = useState(false)
@@ -131,69 +133,16 @@ export function useCreateSurveyRun() {
       setLoading(true)
       setError(null)
 
-      try {
-        // Get backstories
-        const { data: backstories, error: backstoriesError } = await supabase
-          .from('backstories')
-          .select('id')
-          .eq('is_public', true)
+      const result = await createSurveyRun({ surveyId, llmConfig })
 
-        if (backstoriesError) throw backstoriesError
-        if (!backstories || backstories.length === 0) {
-          throw new Error('No backstories found')
-        }
+      setLoading(false)
 
-        const backstoryIds = backstories.map((b) => b.id)
-
-        // Create run
-        const { data: run, error: runError } = await supabase
-          .from('survey_runs')
-          .insert({
-            survey_id: surveyId,
-            status: 'pending' as SurveyRunStatus,
-            total_tasks: backstoryIds.length,
-            completed_tasks: 0,
-            failed_tasks: 0,
-            results: {},
-            error_log: [],
-            llm_config: llmConfig,
-          })
-          .select()
-          .single()
-
-        if (runError) throw runError
-
-        // Create tasks
-        const tasks = backstoryIds.map((backstoryId) => ({
-          survey_run_id: run.id,
-          backstory_id: backstoryId,
-          status: 'pending',
-          attempts: 0,
-        }))
-
-        const { error: tasksError } = await supabase.from('survey_tasks').insert(tasks)
-
-        if (tasksError) {
-          await supabase.from('survey_runs').delete().eq('id', run.id)
-          throw tasksError
-        }
-
-        // Update to running
-        await supabase
-          .from('survey_runs')
-          .update({ status: 'running', started_at: new Date().toISOString() })
-          .eq('id', run.id)
-
-        // Mark survey as active
-        await supabase.from('surveys').update({ status: 'active' }).eq('id', surveyId)
-
-        return run.id
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'Failed to create run')
+      if (!result.success) {
+        setError(result.error || 'Failed to create run')
         return null
-      } finally {
-        setLoading(false)
       }
+
+      return result.runId || null
     },
     []
   )
