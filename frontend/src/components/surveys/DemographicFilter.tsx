@@ -12,6 +12,9 @@ import { Plus, X } from 'lucide-react'
 interface DemographicFilterProps {
   value: DemographicFilterType
   onChange: (value: DemographicFilterType) => void
+  /** Optional limit on number of backstories to use. undefined = use all matching */
+  sampleSize?: number
+  onSampleSizeChange?: (size: number | undefined) => void
 }
 
 interface ActiveFilter {
@@ -25,7 +28,7 @@ interface CustomFilter {
   value: string
 }
 
-export function DemographicFilter({ value, onChange }: DemographicFilterProps) {
+export function DemographicFilter({ value, onChange, sampleSize, onSampleSizeChange }: DemographicFilterProps) {
   const [demographicKeys, setDemographicKeys] = useState<DemographicKey[]>([])
   const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([])
   const [customFilters, setCustomFilters] = useState<CustomFilter[]>([])
@@ -345,12 +348,47 @@ export function DemographicFilter({ value, onChange }: DemographicFilterProps) {
           </p>
         )}
 
-        <div className="pt-4 border-t">
+        {/* Sample Size */}
+        <div className="pt-4 border-t space-y-4">
+          <div className="flex items-center justify-between">
+            <div>
+              <Label className="text-base">Sample Size</Label>
+              <p className="text-sm text-muted-foreground">
+                Limit how many backstories to run (leave empty for all)
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <Input
+                type="number"
+                className="w-32"
+                placeholder="All"
+                min={1}
+                value={sampleSize ?? ''}
+                onChange={(e) => {
+                  const val = e.target.value
+                  onSampleSizeChange?.(val === '' ? undefined : parseInt(val, 10))
+                }}
+              />
+              {sampleSize && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => onSampleSizeChange?.(undefined)}
+                >
+                  <X className="h-4 w-4" />
+                </Button>
+              )}
+            </div>
+          </div>
+
           <p className="text-sm text-muted-foreground">
             Estimated matches:{' '}
             <span className="font-semibold text-foreground">
               ~{matchCount ?? 0} backstories
             </span>
+            {sampleSize && matchCount && sampleSize < matchCount && (
+              <span className="text-primary"> → will use {sampleSize}</span>
+            )}
           </p>
         </div>
       </CardContent>

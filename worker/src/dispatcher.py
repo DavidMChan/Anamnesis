@@ -1,0 +1,184 @@
+"""
+Task Dispatcher - Publishes pending tasks from database to RabbitMQ.
+
+This is the "Backend (enqueue)" component in the architecture:
+    PostgreSQL → Dispatcher → RabbitMQ → Worker
+
+Run this alongside the worker:
+    python -m src.dispatcher
+"""
+import logging
+import signal
+import sys
+import time
+from typing import List, Dict, Any
+
+from .config import get_config
+from .db import DatabaseClient
+from .queue import QueuePublisher
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+)
+logger = logging.getLogger(__name__)
+
+
+class TaskDispatcher:
+    """
+    Watches for new survey runs and publishes their tasks to RabbitMQ.
+    """
+
+    def __init__(
+        self,
+        db: DatabaseClient,
+        publisher: QueuePublisher,
+        poll_interval: float = 2.0,
+    ):
+        self.db = db
+        self.publisher = publisher
+        self.poll_interval = poll_interval
+        self.running = False
+
+    def dispatch_run(self, run: Dict[str, Any]) -> int:
+        """
+        Dispatch tasks for a survey run to RabbitMQ.
+
+        For 'pending' runs: dispatch all pending tasks.
+        For 'running' runs: only dispatch stale tasks (stuck for >5 min).
+
+        Args:
+            run: Survey run record
+
+        Returns:
+            Number of tasks dispatched
+        """
+        run_id = run["id"]
+        run_status = run.get("status", "pending")
+
+        # For running runs, only re-dispatch stale tasks
+        if run_status == "running":
+            tasks = self.db.get_stale_pending_tasks(run_id, stale_minutes=5)
+            if tasks:
+                logger.info(f"Found {len(tasks)} stale tasks for run {run_id}, re-dispatching...")
+        else:
+            # For pending runs, dispatch all tasks
+            logger.info(f"Dispatching tasks for new run {run_id}")
+            tasks = self.db.get_pending_tasks_for_dispatch(run_id)
+
+        if not tasks:
+            return 0
+
+        # Publish each task to RabbitMQ
+        dispatched = 0
+        for task in tasks:
+            try:
+                self.publisher.publish_task(run_id, task["id"])
+                dispatched += 1
+            except Exception as e:
+                logger.error(f"Failed to publish task {task['id']}: {e}")
+
+        logger.info(f"Dispatched {dispatched}/{len(tasks)} tasks for run {run_id}")
+
+        # Update run status to 'running' if we dispatched tasks for a pending run
+        if dispatched > 0 and run_status == "pending":
+            self.db.update_run_status(run_id, "running")
+
+        return dispatched
+
+    def poll_and_dispatch(self) -> int:
+        """
+        Poll for pending runs and dispatch their tasks.
+
+        Returns:
+            Total number of tasks dispatched
+        """
+        # Find runs that are 'pending' or 'running' but have undispatched tasks
+        pending_runs = self.db.get_runs_needing_dispatch()
+
+        total_dispatched = 0
+        for run in pending_runs:
+            try:
+                dispatched = self.dispatch_run(run)
+                total_dispatched += dispatched
+            except Exception as e:
+                logger.error(f"Error dispatching run {run['id']}: {e}")
+
+        return total_dispatched
+
+    def start(self):
+        """Start the dispatcher loop with adaptive polling."""
+        self.running = True
+        idle_interval = 10.0  # Poll every 10s when idle
+        active_interval = self.poll_interval  # Poll every 2s when active
+        current_interval = idle_interval
+        idle_count = 0
+
+        logger.info(f"Dispatcher started (idle: {idle_interval}s, active: {active_interval}s)")
+
+        while self.running:
+            try:
+                dispatched = self.poll_and_dispatch()
+                if dispatched > 0:
+                    logger.info(f"Dispatched {dispatched} tasks this cycle")
+                    current_interval = active_interval
+                    idle_count = 0
+                else:
+                    idle_count += 1
+                    # After 5 idle cycles, switch to slower polling
+                    if idle_count >= 5:
+                        current_interval = idle_interval
+            except Exception as e:
+                logger.error(f"Error in dispatch cycle: {e}")
+
+            time.sleep(current_interval)
+
+    def stop(self):
+        """Stop the dispatcher loop."""
+        self.running = False
+        logger.info("Dispatcher stopping...")
+
+
+def main():
+    """Main entry point for the dispatcher."""
+    config = get_config()
+
+    # Initialize components
+    logger.info("Initializing dispatcher...")
+
+    db = DatabaseClient(config.supabase)
+    publisher = QueuePublisher(config.rabbitmq)
+
+    # Connect to RabbitMQ
+    publisher.connect()
+
+    # Create dispatcher
+    dispatcher = TaskDispatcher(
+        db=db,
+        publisher=publisher,
+        poll_interval=2.0,
+    )
+
+    # Signal handlers for graceful shutdown
+    def shutdown(signum, frame):
+        logger.info("Shutting down dispatcher...")
+        dispatcher.stop()
+        publisher.disconnect()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, shutdown)
+    signal.signal(signal.SIGTERM, shutdown)
+
+    # Start dispatcher
+    try:
+        logger.info("Dispatcher ready, watching for new survey runs...")
+        dispatcher.start()
+    except KeyboardInterrupt:
+        logger.info("Interrupted by user")
+    finally:
+        publisher.disconnect()
+
+
+if __name__ == "__main__":
+    main()

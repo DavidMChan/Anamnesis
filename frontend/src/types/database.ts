@@ -68,7 +68,7 @@ export interface Question {
   image_url?: string
 }
 
-export type SurveyStatus = 'draft' | 'queued' | 'running' | 'completed' | 'failed'
+export type SurveyStatus = 'draft' | 'active'
 
 export interface SurveyResults {
   [backstory_id: string]: {
@@ -82,11 +82,46 @@ export interface Survey {
   name?: string
   questions: Question[]
   demographics: DemographicFilter
-  results: SurveyResults
   status: SurveyStatus
-  matched_count?: number
-  completed_count?: number
   created_at: string
+}
+
+// Survey Run Types
+export type SurveyRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
+
+export interface SurveyRunErrorLog {
+  backstory_id: string
+  error: string
+  timestamp: string
+}
+
+export interface SurveyRun {
+  id: string
+  survey_id: string
+  status: SurveyRunStatus
+  total_tasks: number
+  completed_tasks: number
+  failed_tasks: number
+  results: SurveyResults
+  error_log: SurveyRunErrorLog[]
+  llm_config: LLMConfig
+  started_at: string | null
+  completed_at: string | null
+  created_at: string
+}
+
+export type SurveyTaskStatus = 'pending' | 'processing' | 'completed' | 'failed'
+
+export interface SurveyTask {
+  id: string
+  survey_run_id: string
+  backstory_id: string
+  status: SurveyTaskStatus
+  result: { [qkey: string]: string | string[] } | null
+  error: string | null
+  attempts: number
+  created_at: string
+  processed_at: string | null
 }
 
 export interface Database {
@@ -106,6 +141,16 @@ export interface Database {
         Row: Survey
         Insert: Omit<Survey, 'id' | 'created_at'>
         Update: Partial<Omit<Survey, 'id' | 'created_at'>>
+      }
+      survey_runs: {
+        Row: SurveyRun
+        Insert: Omit<SurveyRun, 'id' | 'created_at'>
+        Update: Partial<Omit<SurveyRun, 'id' | 'created_at'>>
+      }
+      survey_tasks: {
+        Row: SurveyTask
+        Insert: Omit<SurveyTask, 'id' | 'created_at'>
+        Update: Partial<Omit<SurveyTask, 'id' | 'created_at'>>
       }
     }
   }

@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react'
-import { useParams, useNavigate } from 'react-router-dom'
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { Layout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { supabase } from '@/lib/supabase'
-import type { Survey, Question, SurveyResults as SurveyResultsType } from '@/types/database'
+import type { Survey, SurveyRun, Question, SurveyResults as SurveyResultsType } from '@/types/database'
 import { ArrowLeft, Download, BarChart2, Table } from 'lucide-react'
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 
@@ -20,37 +20,67 @@ interface QuestionStats {
 
 export function SurveyResults() {
   const { id } = useParams()
+  const [searchParams] = useSearchParams()
+  const runId = searchParams.get('run')
   const navigate = useNavigate()
   const [survey, setSurvey] = useState<Survey | null>(null)
+  const [run, setRun] = useState<SurveyRun | null>(null)
   const [stats, setStats] = useState<QuestionStats[]>([])
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    fetchSurvey()
-  }, [id])
+    fetchData()
+  }, [id, runId])
 
-  const fetchSurvey = async () => {
+  const fetchData = async () => {
     if (!id) return
-    const { data, error } = await supabase
+
+    // Fetch survey
+    const { data: surveyData, error: surveyError } = await supabase
       .from('surveys')
       .select('*')
       .eq('id', id)
       .single()
 
-    if (error) {
-      console.error('Error fetching survey:', error)
+    if (surveyError) {
+      console.error('Error fetching survey:', surveyError)
       navigate('/surveys')
-    } else if (data) {
-      const surveyData = data as Survey
-      setSurvey(surveyData)
-      calculateStats(surveyData)
+      return
     }
+
+    const survey = surveyData as Survey
+    setSurvey(survey)
+
+    // Fetch run - either specific run or latest
+    let runQuery = supabase
+      .from('survey_runs')
+      .select('*')
+
+    if (runId) {
+      runQuery = runQuery.eq('id', runId)
+    } else {
+      runQuery = runQuery
+        .eq('survey_id', id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+    }
+
+    const { data: runData, error: runError } = await runQuery.single()
+
+    if (runError) {
+      console.error('Error fetching run:', runError)
+      setLoading(false)
+      return
+    }
+
+    const surveyRun = runData as SurveyRun
+    setRun(surveyRun)
+    calculateStats(survey, surveyRun.results)
     setLoading(false)
   }
 
-  const calculateStats = (survey: Survey) => {
-    const results = survey.results as SurveyResultsType
-    const totalResponses = Object.keys(results).length
+  const calculateStats = (survey: Survey, results: SurveyResultsType) => {
+    const totalResponses = Object.keys(results || {}).length
 
     const questionStats: QuestionStats[] = survey.questions.map((question) => {
       if (question.type === 'open_response') {
@@ -68,10 +98,21 @@ export function SurveyResults() {
 
       const counts: Record<string, number> = {}
 
+      // Initialize counts with option text
       if (question.options) {
         question.options.forEach((opt) => {
           counts[opt] = 0
         })
+      }
+
+      // Map letter (A, B, C, D...) to option index
+      const letterToOption = (letter: string): string | null => {
+        if (!question.options) return null
+        const index = letter.charCodeAt(0) - 'A'.charCodeAt(0)
+        if (index >= 0 && index < question.options.length) {
+          return question.options[index]
+        }
+        return null
       }
 
       Object.values(results).forEach((response) => {
@@ -79,10 +120,12 @@ export function SurveyResults() {
         if (answer) {
           if (Array.isArray(answer)) {
             answer.forEach((a) => {
-              counts[a] = (counts[a] || 0) + 1
+              const optionText = letterToOption(a) || a
+              counts[optionText] = (counts[optionText] || 0) + 1
             })
           } else {
-            counts[answer] = (counts[answer] || 0) + 1
+            const optionText = letterToOption(answer) || answer
+            counts[optionText] = (counts[optionText] || 0) + 1
           }
         }
       })
@@ -103,10 +146,20 @@ export function SurveyResults() {
     setStats(questionStats)
   }
 
-  const downloadCSV = () => {
-    if (!survey) return
+  // Helper to map letter answer to option text
+  const mapAnswerToOption = (answer: string, question: Question): string => {
+    if (!question.options || question.type === 'open_response') return answer
+    const index = answer.charCodeAt(0) - 'A'.charCodeAt(0)
+    if (index >= 0 && index < question.options.length) {
+      return question.options[index]
+    }
+    return answer
+  }
 
-    const results = survey.results as SurveyResultsType
+  const downloadCSV = () => {
+    if (!survey || !run) return
+
+    const results = run.results || {}
     const headers = ['backstory_id', ...survey.questions.map((q) => q.qkey)]
 
     const rows = Object.entries(results).map(([backstoryId, responses]) => {
@@ -115,9 +168,9 @@ export function SurveyResults() {
         ...survey.questions.map((q) => {
           const answer = responses[q.qkey]
           if (Array.isArray(answer)) {
-            return answer.join('; ')
+            return answer.map((a) => mapAnswerToOption(a, q)).join('; ')
           }
-          return answer || ''
+          return answer ? mapAnswerToOption(answer, q) : ''
         }),
       ]
     })
@@ -144,17 +197,20 @@ export function SurveyResults() {
     )
   }
 
-  if (!survey) {
+  if (!survey || !run) {
     return (
       <Layout>
         <div className="text-center py-12">
-          <p className="text-muted-foreground">Survey not found</p>
+          <p className="text-muted-foreground">
+            {!survey ? 'Survey not found' : 'No results available yet'}
+          </p>
         </div>
       </Layout>
     )
   }
 
-  const totalResponses = Object.keys(survey.results).length
+  const results = run.results || {}
+  const totalResponses = Object.keys(results).length
 
   return (
     <Layout>
@@ -262,7 +318,7 @@ export function SurveyResults() {
                       </tr>
                     </thead>
                     <tbody>
-                      {Object.entries(survey.results).slice(0, 20).map(([backstoryId, responses]) => (
+                      {Object.entries(results).slice(0, 20).map(([backstoryId, responses]) => (
                         <tr key={backstoryId} className="border-b">
                           <td className="p-2 font-mono text-xs">
                             {backstoryId.slice(0, 8)}...
@@ -278,9 +334,9 @@ export function SurveyResults() {
                       ))}
                     </tbody>
                   </table>
-                  {Object.keys(survey.results).length > 20 && (
+                  {Object.keys(results).length > 20 && (
                     <p className="text-sm text-muted-foreground mt-4">
-                      Showing 20 of {Object.keys(survey.results).length} responses. Download CSV for full data.
+                      Showing 20 of {Object.keys(results).length} responses. Download CSV for full data.
                     </p>
                   )}
                 </div>
