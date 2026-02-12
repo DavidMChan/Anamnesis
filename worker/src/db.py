@@ -96,18 +96,28 @@ class DatabaseClient:
         """
         self.client.table("survey_tasks").update({"error": error}).eq("id", task_id).execute()
 
-    def increment_task_attempts(self, task_id: str) -> None:
+    def increment_task_attempts(self, task_id: str) -> int:
         """
-        Increment the attempt counter for a task.
+        Atomically increment the attempt counter for a task.
 
         Args:
             task_id: UUID of the task
+
+        Returns:
+            The new attempt count.
+
+        Raises:
+            RuntimeError: If the RPC call fails.
         """
-        # Fetch current attempts
-        task = self.get_task(task_id)
-        if task:
-            new_attempts = (task.get("attempts") or 0) + 1
-            self.client.table("survey_tasks").update({"attempts": new_attempts}).eq("id", task_id).execute()
+        result = self.client.rpc(
+            "increment_task_attempts",
+            {"task_id": task_id}
+        ).execute()
+
+        if hasattr(result, 'error') and result.error:
+            raise RuntimeError(f"Failed to increment task attempts: {result.error}")
+
+        return result.data if result.data else 0
 
     # ==================== Backstory Operations ====================
 
@@ -155,33 +165,31 @@ class DatabaseClient:
         """
         Get questions for a survey run.
 
+        Uses a single query with join to avoid N+1 pattern.
+
         Args:
             run_id: UUID of the survey run
 
         Returns:
             List of question objects
         """
-        # First get the run to find the survey_id
-        run = self.get_survey_run(run_id)
-        if not run:
-            return []
-
-        survey_id = run.get("survey_id")
-        if not survey_id:
-            return []
-
-        # Get the survey
+        # Single query joining survey_runs -> surveys
         result = (
-            self.client.table("surveys")
-            .select("questions")
-            .eq("id", survey_id)
+            self.client.table("survey_runs")
+            .select("surveys(questions)")
+            .eq("id", run_id)
             .single()
             .execute()
         )
 
-        if result.data:
-            return result.data.get("questions", [])
-        return []
+        if not result.data:
+            return []
+
+        surveys_data = result.data.get("surveys")
+        if not surveys_data:
+            return []
+
+        return surveys_data.get("questions", [])
 
     def update_run_status(self, run_id: str, status: str) -> None:
         """
@@ -205,9 +213,13 @@ class DatabaseClient:
 
         Args:
             run_id: UUID of the survey run
+
+        Raises:
+            RuntimeError: If the RPC call fails.
         """
-        # Use RPC function for atomic increment
-        self.client.rpc("increment_completed_tasks", {"run_id": run_id}).execute()
+        result = self.client.rpc("increment_completed_tasks", {"run_id": run_id}).execute()
+        if hasattr(result, 'error') and result.error:
+            raise RuntimeError(f"Failed to increment completed tasks: {result.error}")
 
     def increment_failed_tasks(self, run_id: str) -> None:
         """
@@ -215,8 +227,13 @@ class DatabaseClient:
 
         Args:
             run_id: UUID of the survey run
+
+        Raises:
+            RuntimeError: If the RPC call fails.
         """
-        self.client.rpc("increment_failed_tasks", {"run_id": run_id}).execute()
+        result = self.client.rpc("increment_failed_tasks", {"run_id": run_id}).execute()
+        if hasattr(result, 'error') and result.error:
+            raise RuntimeError(f"Failed to increment failed tasks: {result.error}")
 
     def append_run_result(
         self,
@@ -232,10 +249,12 @@ class DatabaseClient:
             backstory_id: UUID of the backstory
             result: Result data for this backstory
         """
-        self.client.rpc(
+        rpc_result = self.client.rpc(
             "append_run_result",
             {"run_id": run_id, "backstory_uuid": backstory_id, "task_result": result},
         ).execute()
+        if hasattr(rpc_result, 'error') and rpc_result.error:
+            raise RuntimeError(f"Failed to append run result: {rpc_result.error}")
 
     def append_run_error(
         self,
@@ -251,10 +270,12 @@ class DatabaseClient:
             backstory_id: UUID of the backstory
             error: Error message
         """
-        self.client.rpc(
+        rpc_result = self.client.rpc(
             "append_run_error",
             {"run_id": run_id, "backstory_uuid": backstory_id, "error_msg": error},
         ).execute()
+        if hasattr(rpc_result, 'error') and rpc_result.error:
+            raise RuntimeError(f"Failed to append run error: {rpc_result.error}")
 
     def check_run_completion(self, run_id: str) -> None:
         """
@@ -262,8 +283,13 @@ class DatabaseClient:
 
         Args:
             run_id: UUID of the survey run
+
+        Raises:
+            RuntimeError: If the RPC call fails.
         """
-        self.client.rpc("check_run_completion", {"run_id": run_id}).execute()
+        result = self.client.rpc("check_run_completion", {"run_id": run_id}).execute()
+        if hasattr(result, 'error') and result.error:
+            raise RuntimeError(f"Failed to check run completion: {result.error}")
 
     # ==================== Survey Run Creation ====================
 

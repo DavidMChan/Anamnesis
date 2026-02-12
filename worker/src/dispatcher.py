@@ -99,19 +99,31 @@ class TaskDispatcher:
         return total_dispatched
 
     def start(self):
-        """Start the dispatcher loop."""
+        """Start the dispatcher loop with adaptive polling."""
         self.running = True
-        logger.info(f"Dispatcher started, polling every {self.poll_interval}s")
+        idle_interval = 10.0  # Poll every 10s when idle
+        active_interval = self.poll_interval  # Poll every 2s when active
+        current_interval = idle_interval
+        idle_count = 0
+
+        logger.info(f"Dispatcher started (idle: {idle_interval}s, active: {active_interval}s)")
 
         while self.running:
             try:
                 dispatched = self.poll_and_dispatch()
                 if dispatched > 0:
                     logger.info(f"Dispatched {dispatched} tasks this cycle")
+                    current_interval = active_interval
+                    idle_count = 0
+                else:
+                    idle_count += 1
+                    # After 5 idle cycles, switch to slower polling
+                    if idle_count >= 5:
+                        current_interval = idle_interval
             except Exception as e:
                 logger.error(f"Error in dispatch cycle: {e}")
 
-            time.sleep(self.poll_interval)
+            time.sleep(current_interval)
 
     def stop(self):
         """Stop the dispatcher loop."""

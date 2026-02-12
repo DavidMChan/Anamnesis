@@ -35,22 +35,53 @@ class QueueConsumer:
         self.connection: Optional[pika.BlockingConnection] = None
         self.channel: Optional[BlockingChannel] = None
 
-    def connect(self) -> None:
-        """Establish connection to RabbitMQ."""
-        params = pika.URLParameters(self.config.url)
-        self.connection = pika.BlockingConnection(params)
-        self.channel = self.connection.channel()
+    def connect(self, max_retries: int = 5, retry_delay: float = 2.0) -> None:
+        """
+        Establish connection to RabbitMQ with retry logic.
 
-        # Declare the queue
-        self.channel.queue_declare(
-            queue=self.config.queue_name,
-            durable=True,
+        Args:
+            max_retries: Maximum number of connection attempts.
+            retry_delay: Initial delay between retries (doubles each attempt).
+
+        Raises:
+            RuntimeError: If connection fails after all retries.
+        """
+        import time
+
+        current_delay = retry_delay
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                params = pika.URLParameters(self.config.url)
+                self.connection = pika.BlockingConnection(params)
+                self.channel = self.connection.channel()
+
+                # Declare the queue
+                self.channel.queue_declare(
+                    queue=self.config.queue_name,
+                    durable=True,
+                )
+
+                # Set prefetch count for fair dispatch
+                self.channel.basic_qos(prefetch_count=self.config.prefetch_count)
+
+                logger.info(f"Connected to RabbitMQ, queue: {self.config.queue_name}")
+                return
+
+            except pika.exceptions.AMQPConnectionError as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"RabbitMQ connection failed (attempt {attempt + 1}/{max_retries}), "
+                        f"retrying in {current_delay:.1f}s..."
+                    )
+                    time.sleep(current_delay)
+                    current_delay = min(current_delay * 2, 30.0)  # Cap at 30s
+
+        raise RuntimeError(
+            f"Failed to connect to RabbitMQ after {max_retries} attempts: {last_error}"
         )
-
-        # Set prefetch count for fair dispatch
-        self.channel.basic_qos(prefetch_count=self.config.prefetch_count)
-
-        logger.info(f"Connected to RabbitMQ, queue: {self.config.queue_name}")
 
     def disconnect(self) -> None:
         """Close connection to RabbitMQ."""
@@ -132,34 +163,80 @@ class QueuePublisher:
         self.connection: Optional[pika.BlockingConnection] = None
         self.channel: Optional[BlockingChannel] = None
 
-    def connect(self) -> None:
-        """Establish connection to RabbitMQ."""
-        params = pika.URLParameters(self.config.url)
-        self.connection = pika.BlockingConnection(params)
-        self.channel = self.connection.channel()
+    def connect(self, max_retries: int = 5, retry_delay: float = 2.0) -> None:
+        """
+        Establish connection to RabbitMQ with retry logic.
 
-        # Declare the queue
-        self.channel.queue_declare(
-            queue=self.config.queue_name,
-            durable=True,
+        Args:
+            max_retries: Maximum number of connection attempts.
+            retry_delay: Initial delay between retries (doubles each attempt).
+
+        Raises:
+            RuntimeError: If connection fails after all retries.
+        """
+        import time
+
+        current_delay = retry_delay
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                params = pika.URLParameters(self.config.url)
+                self.connection = pika.BlockingConnection(params)
+                self.channel = self.connection.channel()
+
+                # Declare the queue
+                self.channel.queue_declare(
+                    queue=self.config.queue_name,
+                    durable=True,
+                )
+
+                logger.info(f"Publisher connected to RabbitMQ, queue: {self.config.queue_name}")
+                return
+
+            except pika.exceptions.AMQPConnectionError as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"RabbitMQ connection failed (attempt {attempt + 1}/{max_retries}), "
+                        f"retrying in {current_delay:.1f}s..."
+                    )
+                    time.sleep(current_delay)
+                    current_delay = min(current_delay * 2, 30.0)  # Cap at 30s
+
+        raise RuntimeError(
+            f"Failed to connect to RabbitMQ after {max_retries} attempts: {last_error}"
         )
-
-        logger.info(f"Publisher connected to RabbitMQ, queue: {self.config.queue_name}")
 
     def disconnect(self) -> None:
         """Close connection to RabbitMQ."""
         if self.connection and not self.connection.is_closed:
             self.connection.close()
 
+    def is_connected(self) -> bool:
+        """Check if connection and channel are open."""
+        return (
+            self.connection is not None
+            and not self.connection.is_closed
+            and self.channel is not None
+            and self.channel.is_open
+        )
+
+    def ensure_connected(self) -> None:
+        """Ensure connection is open, reconnect if needed."""
+        if not self.is_connected():
+            logger.info("RabbitMQ connection lost, reconnecting...")
+            self.connect()
+
     def publish(self, message: dict) -> None:
         """
         Publish a message to the queue.
+        Automatically reconnects if connection is lost.
 
         Args:
             message: Message to publish (will be JSON encoded)
         """
-        if not self.channel:
-            raise RuntimeError("Not connected. Call connect() first.")
+        self.ensure_connected()
 
         body = json.dumps(message).encode("utf-8")
 

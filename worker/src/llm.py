@@ -41,8 +41,17 @@ class LLMResponse:
 
     @classmethod
     def from_json(cls, json_str: str) -> "LLMResponse":
-        """Parse LLM response from JSON string."""
-        data = json.loads(json_str)
+        """
+        Parse LLM response from JSON string.
+
+        Raises:
+            NonRetryableError: If JSON is invalid or malformed.
+        """
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            raise NonRetryableError(f"Invalid JSON response from LLM: {e}. Raw: {json_str[:200]}")
+
         return cls(
             answer=data.get("answer", data.get("answers", "")),
             reasoning=data.get("reasoning"),

@@ -19,10 +19,11 @@ interface CreateSurveyRunResult {
  * Create a new survey run.
  *
  * This function:
- * 1. Gets all matching backstory IDs (for now, all public backstories)
- * 2. Creates a survey_run record
- * 3. Creates survey_task records for each backstory
- * 4. Publishes tasks to the message queue (via edge function)
+ * 1. Gets survey config (including sample size from demographics._sample_size)
+ * 2. Gets matching backstory IDs (applying sample size limit if set)
+ * 3. Creates a survey_run record
+ * 4. Creates survey_task records for each backstory
+ * 5. Publishes tasks to the message queue (via edge function)
  */
 export async function createSurveyRun(
   options: CreateSurveyRunOptions
@@ -30,11 +31,37 @@ export async function createSurveyRun(
   const { surveyId, llmConfig } = options
 
   try {
-    // 1. Get matching backstories (all public for now)
-    const { data: backstories, error: backstoriesError } = await supabase
-      .from('backstories')
-      .select('id')
-      .eq('is_public', true)
+    // 1. Get survey to check for sample size setting
+    const { data: survey, error: surveyError } = await supabase
+      .from('surveys')
+      .select('demographics')
+      .eq('id', surveyId)
+      .single()
+
+    if (surveyError) {
+      return { success: false, error: surveyError.message }
+    }
+
+    // Extract sample size from demographics (stored as _sample_size: [number])
+    const demographics = survey?.demographics as Record<string, unknown> | null
+    const sampleSizeArray = demographics?._sample_size as number[] | undefined
+    const sampleSize = sampleSizeArray?.[0]
+
+    console.log('[createSurveyRun] demographics:', demographics)
+    console.log('[createSurveyRun] sampleSize:', sampleSize)
+
+    // 2. Get matching backstories (all public for now, with optional limit)
+    let query = supabase.from('backstories').select('id').eq('is_public', true)
+
+    // Apply sample size limit if set
+    if (sampleSize && sampleSize > 0) {
+      console.log('[createSurveyRun] Applying limit:', sampleSize)
+      query = query.limit(sampleSize)
+    }
+
+    const { data: backstories, error: backstoriesError } = await query
+
+    console.log('[createSurveyRun] backstories count:', backstories?.length)
 
     if (backstoriesError) {
       return { success: false, error: backstoriesError.message }
@@ -46,7 +73,9 @@ export async function createSurveyRun(
 
     const backstoryIds = backstories.map((b) => b.id)
 
-    // 2. Create survey run
+    // 2. Create survey run with 'pending' status
+    // IMPORTANT: We create with 'pending' first, insert all tasks, then update to 'running'
+    // This prevents the dispatcher from picking up the run before all tasks are created
     const { data: run, error: runError } = await supabase
       .from('survey_runs')
       .insert({
@@ -82,8 +111,11 @@ export async function createSurveyRun(
       return { success: false, error: tasksError.message }
     }
 
-    // 4. Update run status to running
-    await supabase.from('survey_runs').update({ status: 'running', started_at: new Date().toISOString() }).eq('id', run.id)
+    // 4. Keep run as 'pending' - dispatcher will:
+    //    - Find pending runs
+    //    - Publish tasks to RabbitMQ
+    //    - Update status to 'running'
+    // DO NOT update status here - let dispatcher handle it
 
     // 5. Mark survey as active (has been run at least once)
     await supabase.from('surveys').update({ status: 'active' }).eq('id', surveyId)
