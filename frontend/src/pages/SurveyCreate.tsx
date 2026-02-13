@@ -1,5 +1,20 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+} from '@dnd-kit/core'
+import type { DragEndEvent } from '@dnd-kit/core'
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  verticalListSortingStrategy,
+} from '@dnd-kit/sortable'
 import { Layout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -10,7 +25,9 @@ import { QuestionEditor } from '@/components/surveys/QuestionEditor'
 import { DemographicFilter } from '@/components/surveys/DemographicFilter'
 import { supabase } from '@/lib/supabase'
 import { useAuthContext } from '@/contexts/AuthContext'
+import { useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import type { Question, DemographicFilter as DemographicFilterType, Survey } from '@/types/database'
+import { toast } from '@/hooks/use-toast'
 import { Plus, Save, Play, ArrowLeft } from 'lucide-react'
 
 export function SurveyCreate() {
@@ -22,11 +39,13 @@ export function SurveyCreate() {
   const [name, setName] = useState('')
   const [questions, setQuestions] = useState<Question[]>([])
   const [demographics, setDemographics] = useState<DemographicFilterType>({})
+  const [sampleSize, setSampleSize] = useState<number | undefined>(undefined)
   const [includeOwnBackstories, setIncludeOwnBackstories] = useState(false)
   const [ownBackstoriesCount, setOwnBackstoriesCount] = useState(0)
   const [saving, setSaving] = useState(false)
-  const [running, setRunning] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const { createRun, loading: creatingRun } = useCreateSurveyRun()
 
   useEffect(() => {
     if (isEditing) {
@@ -50,7 +69,10 @@ export function SurveyCreate() {
       const survey = data as Survey
       setName(survey.name || '')
       setQuestions(survey.questions)
-      setDemographics(survey.demographics)
+      // Extract sample size from demographics if present
+      const { _sample_size, ...restDemographics } = survey.demographics as DemographicFilterType & { _sample_size?: number[] }
+      setDemographics(restDemographics)
+      setSampleSize(_sample_size?.[0])
     }
   }
 
@@ -85,6 +107,38 @@ export function SurveyCreate() {
     setQuestions(questions.filter((_, i) => i !== index))
   }
 
+  const duplicateQuestion = (index: number) => {
+    const questionToDuplicate = questions[index]
+    const newQuestion: Question = {
+      ...questionToDuplicate,
+      qkey: `q${Date.now()}`, // Unique key for the duplicated question
+      options: questionToDuplicate.options ? [...questionToDuplicate.options] : undefined,
+    }
+    const newQuestions = [...questions]
+    newQuestions.splice(index + 1, 0, newQuestion)
+    setQuestions(newQuestions)
+    toast({ title: 'Copied!' })
+  }
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  )
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event
+
+    if (over && active.id !== over.id) {
+      setQuestions((items) => {
+        const oldIndex = items.findIndex((item) => item.qkey === active.id)
+        const newIndex = items.findIndex((item) => item.qkey === over.id)
+        return arrayMove(items, oldIndex, newIndex)
+      })
+    }
+  }
+
   const validateSurvey = (): string | null => {
     if (!name.trim()) {
       return 'Please enter a survey name'
@@ -107,7 +161,7 @@ export function SurveyCreate() {
     return null
   }
 
-  const saveSurvey = async (status: 'draft' | 'queued' = 'draft') => {
+  const saveSurvey = async (status: 'draft' | 'active' = 'draft') => {
     if (!user) return
 
     const validationError = validateSurvey()
@@ -119,11 +173,16 @@ export function SurveyCreate() {
     setError(null)
     setSaving(true)
 
+    // Combine demographics with sample size (if set)
+    const demographicsWithSampleSize = sampleSize
+      ? { ...demographics, _sample_size: [sampleSize] }
+      : demographics
+
     const surveyData = {
       user_id: user.id,
       name: name.trim(),
       questions: questions as unknown,
-      demographics: demographics as unknown,
+      demographics: demographicsWithSampleSize as unknown,
       status,
     } as Record<string, unknown>
 
@@ -170,13 +229,28 @@ export function SurveyCreate() {
   }
 
   const handleRunSurvey = async () => {
-    setRunning(true)
-    const result = await saveSurvey('queued')
+    if (!user) return
+
+    // Save as draft first, createSurveyRun will set it to 'active'
+    const result = await saveSurvey('draft')
     if (result) {
-      // In a real implementation, this would also trigger the worker
-      navigate(`/surveys/${result.id}`)
+      // Get user's LLM config
+      const { data: userData } = await supabase
+        .from('users')
+        .select('llm_config')
+        .eq('id', user.id)
+        .single()
+
+      const llmConfig = userData?.llm_config || {}
+
+      // Actually create the run
+      const runId = await createRun(result.id, llmConfig)
+      if (runId) {
+        navigate(`/surveys/${result.id}`)
+      } else {
+        setError('Failed to start survey run')
+      }
     }
-    setRunning(false)
   }
 
   return (
@@ -239,21 +313,38 @@ export function SurveyCreate() {
               </CardContent>
             </Card>
           ) : (
-            <div className="space-y-4">
-              {questions.map((question, index) => (
-                <QuestionEditor
-                  key={question.qkey}
-                  question={question}
-                  index={index}
-                  onChange={(q) => updateQuestion(index, q)}
-                  onDelete={() => deleteQuestion(index)}
-                />
-              ))}
-            </div>
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={questions.map((q) => q.qkey)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="space-y-4">
+                  {questions.map((question, index) => (
+                    <QuestionEditor
+                      key={question.qkey}
+                      question={question}
+                      index={index}
+                      onChange={(q) => updateQuestion(index, q)}
+                      onDelete={() => deleteQuestion(index)}
+                      onDuplicate={() => duplicateQuestion(index)}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
           )}
         </div>
 
-        <DemographicFilter value={demographics} onChange={setDemographics} />
+        <DemographicFilter
+          value={demographics}
+          onChange={setDemographics}
+          sampleSize={sampleSize}
+          onSampleSizeChange={setSampleSize}
+        />
 
         {ownBackstoriesCount > 0 && (
           <Card>
@@ -277,9 +368,9 @@ export function SurveyCreate() {
             <Save className="h-4 w-4 mr-2" />
             {saving ? 'Saving...' : 'Save Draft'}
           </Button>
-          <Button onClick={handleRunSurvey} disabled={running || saving}>
+          <Button onClick={handleRunSurvey} disabled={creatingRun || saving}>
             <Play className="h-4 w-4 mr-2" />
-            {running ? 'Starting...' : 'Run Survey'}
+            {creatingRun ? 'Starting...' : 'Run Survey'}
           </Button>
         </div>
       </div>

@@ -4,17 +4,16 @@ import { Layout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
-import { Progress } from '@/components/ui/progress'
 import { supabase } from '@/lib/supabase'
-import type { Survey } from '@/types/database'
-import { ArrowLeft, Edit, Play, BarChart2, RefreshCw } from 'lucide-react'
+import { useSurveyRun, useCreateSurveyRun } from '@/hooks/useSurveyRun'
+import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
+import { useAuth } from '@/hooks/useAuth'
+import type { Survey, SurveyRun } from '@/types/database'
+import { ArrowLeft, Edit, Play, History } from 'lucide-react'
 
-const statusColors: Record<string, 'default' | 'secondary' | 'destructive' | 'outline'> = {
+const statusColors: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'gold'> = {
   draft: 'secondary',
-  queued: 'outline',
-  running: 'default',
-  completed: 'default',
-  failed: 'destructive',
+  active: 'gold',
 }
 
 const questionTypeLabels: Record<string, string> = {
@@ -27,19 +26,23 @@ const questionTypeLabels: Record<string, string> = {
 export function SurveyView() {
   const { id } = useParams()
   const navigate = useNavigate()
+  const { user } = useAuth()
   const [survey, setSurvey] = useState<Survey | null>(null)
   const [loading, setLoading] = useState(true)
+  const [showHistory, setShowHistory] = useState(false)
+  const [selectedRun, setSelectedRun] = useState<SurveyRun | null>(null)
+
+  // Fetch survey run data
+  const { run: latestRun, runs, isRunning, refresh: refreshRuns } = useSurveyRun({
+    surveyId: id,
+    autoPoll: true,
+    pollInterval: 3000,
+  })
+
+  const { createRun, loading: creatingRun, error: createError } = useCreateSurveyRun()
 
   useEffect(() => {
     fetchSurvey()
-    // Poll for updates if running
-    const interval = setInterval(() => {
-      if (survey?.status === 'running' || survey?.status === 'queued') {
-        fetchSurvey()
-      }
-    }, 5000)
-
-    return () => clearInterval(interval)
   }, [id])
 
   const fetchSurvey = async () => {
@@ -60,22 +63,26 @@ export function SurveyView() {
   }
 
   const runSurvey = async () => {
-    if (!survey) return
+    if (!survey || !user) return
 
-    const { error } = await supabase
-      .from('surveys')
-      .update({ status: 'queued' } as Record<string, unknown>)
-      .eq('id', survey.id)
+    // Get user's LLM config
+    const { data: userData } = await supabase
+      .from('users')
+      .select('llm_config')
+      .eq('id', user.id)
+      .single()
 
-    if (!error) {
+    const llmConfig = userData?.llm_config || {}
+
+    const runId = await createRun(survey.id, llmConfig)
+    if (runId) {
+      refreshRuns()
+      // Refresh survey to update status
       fetchSurvey()
     }
   }
 
-  const getProgress = () => {
-    if (!survey?.matched_count || survey.matched_count === 0) return 0
-    return Math.round(((survey.completed_count || 0) / survey.matched_count) * 100)
-  }
+  const displayRun = selectedRun || latestRun
 
   if (loading) {
     return (
@@ -100,6 +107,7 @@ export function SurveyView() {
   return (
     <Layout>
       <div className="max-w-4xl mx-auto space-y-6">
+        {/* Header */}
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="icon" onClick={() => navigate('/surveys')}>
             <ArrowLeft className="h-4 w-4" />
@@ -108,62 +116,64 @@ export function SurveyView() {
             <div className="flex items-center gap-3">
               <h1 className="text-3xl font-bold">{survey.name || 'Untitled Survey'}</h1>
               <Badge variant={statusColors[survey.status]}>
-                {survey.status.charAt(0).toUpperCase() + survey.status.slice(1)}
+                {survey.status === 'active' ? 'Active' : 'Draft'}
               </Badge>
             </div>
             <p className="text-muted-foreground">
               {survey.questions.length} questions • Created {new Date(survey.created_at).toLocaleDateString()}
+              {runs.length > 0 && ` • ${runs.length} run${runs.length > 1 ? 's' : ''}`}
             </p>
           </div>
           <div className="flex gap-2">
             {survey.status === 'draft' && (
-              <>
-                <Link to={`/surveys/${survey.id}/edit`}>
-                  <Button variant="outline">
-                    <Edit className="h-4 w-4 mr-2" />
-                    Edit
-                  </Button>
-                </Link>
-                <Button onClick={runSurvey}>
-                  <Play className="h-4 w-4 mr-2" />
-                  Run Survey
-                </Button>
-              </>
-            )}
-            {survey.status === 'completed' && (
-              <Link to={`/surveys/${survey.id}/results`}>
-                <Button>
-                  <BarChart2 className="h-4 w-4 mr-2" />
-                  View Results
+              <Link to={`/surveys/${survey.id}/edit`}>
+                <Button variant="outline">
+                  <Edit className="h-4 w-4 mr-2" />
+                  Edit
                 </Button>
               </Link>
             )}
+            {runs.length > 0 && (
+              <Button variant="outline" onClick={() => setShowHistory(!showHistory)}>
+                <History className="h-4 w-4 mr-2" />
+                History
+              </Button>
+            )}
+            <Button onClick={runSurvey} disabled={creatingRun || isRunning}>
+              <Play className="h-4 w-4 mr-2" />
+              {creatingRun ? 'Starting...' : isRunning ? 'Running...' : 'Run Survey'}
+            </Button>
           </div>
         </div>
 
-        {(survey.status === 'running' || survey.status === 'queued') && (
-          <Card>
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <RefreshCw className="h-4 w-4 animate-spin" />
-                Survey in Progress
-              </CardTitle>
-              <CardDescription>
-                Processing {survey.matched_count || 0} backstories
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="space-y-2">
-                <div className="flex items-center justify-between text-sm">
-                  <span>Progress</span>
-                  <span>{survey.completed_count || 0} / {survey.matched_count || 0} ({getProgress()}%)</span>
-                </div>
-                <Progress value={getProgress()} />
-              </div>
-            </CardContent>
-          </Card>
+        {/* Error message */}
+        {createError && (
+          <div className="p-4 rounded-lg border border-destructive bg-destructive/10 text-destructive">
+            {createError}
+          </div>
         )}
 
+        {/* Run Progress */}
+        {displayRun && (
+          <SurveyRunProgress
+            run={displayRun}
+            onViewResults={() => navigate(`/surveys/${survey.id}/results?run=${displayRun.id}`)}
+            onRunAgain={runSurvey}
+          />
+        )}
+
+        {/* Run History */}
+        {showHistory && runs.length > 0 && (
+          <SurveyRunHistory
+            runs={runs}
+            onSelectRun={(run) => {
+              setSelectedRun(run)
+              setShowHistory(false)
+            }}
+          />
+        )}
+
+        {/* Questions */}
         <Card>
           <CardHeader>
             <CardTitle>Questions</CardTitle>
@@ -200,6 +210,7 @@ export function SurveyView() {
           </CardContent>
         </Card>
 
+        {/* Demographic Filters */}
         <Card>
           <CardHeader>
             <CardTitle>Demographic Filters</CardTitle>
