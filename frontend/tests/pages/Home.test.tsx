@@ -61,7 +61,7 @@ describe('Home Page - Auth Redirect Guard', () => {
 
       renderHome()
 
-      expect(screen.getByText('Survey Arena')).toBeInTheDocument()
+      expect(screen.getByText('Anamnesis')).toBeInTheDocument()
       expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/understand how/i)
       // There are multiple "Sign In" links (navbar and hero), just check at least one exists
       const signInLinks = screen.getAllByRole('link', { name: /sign in/i })

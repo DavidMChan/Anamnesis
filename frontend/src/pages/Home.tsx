@@ -36,7 +36,7 @@ export function Home() {
                   className="h-6 w-6"
                 />
               </div>
-              <span className="font-semibold">Survey Arena</span>
+              <span className="font-semibold">Anamnesis</span>
             </Link>
             <div className="flex items-center gap-3">
               <Link to="/login">
@@ -175,7 +175,7 @@ export function Home() {
         {/* Footer */}
         <footer className="py-8 px-4 border-t border-border">
           <div className="container max-w-6xl mx-auto text-center text-sm text-muted-foreground">
-            <p>Survey Arena - <span className="font-medium">BAIR Lab</span>, UC Berkeley</p>
+            <p>Anamnesis - <span className="font-medium">BAIR Lab</span>, UC Berkeley</p>
             <p className="mt-2">
               Built by{' '}
               <a

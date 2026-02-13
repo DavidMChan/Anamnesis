@@ -22,7 +22,7 @@ test.describe('Auth Redirect Guard - Unauthenticated User', () => {
     // Should see the home page content
     await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
     // Use more specific locator to avoid matching footer text
-    await expect(page.locator('nav').getByText('Survey Arena')).toBeVisible()
+    await expect(page.locator('nav').getByText('Anamnesis')).toBeVisible()
   })
 
   test('can access login page normally', async ({ page }) => {
