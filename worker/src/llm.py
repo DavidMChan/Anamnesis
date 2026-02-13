@@ -228,8 +228,23 @@ class OpenRouterClient(BaseLLMClient):
             elif response.status_code != 200:
                 raise LLMError(f"Unexpected status {response.status_code}: {response.json()}")
 
-            # Parse structured JSON response
+            # Parse response
             data = response.json()
+
+            # Check for error response (OpenRouter returns error in body, not HTTP status)
+            if "error" in data:
+                error_msg = data["error"].get("message", str(data["error"])) if isinstance(data["error"], dict) else str(data["error"])
+                error_code = data["error"].get("code", "") if isinstance(data["error"], dict) else ""
+                # Rate limits and server errors are retryable
+                if error_code in ("rate_limit_exceeded", "server_error", 429, 500, 502, 503):
+                    raise RetryableError(f"OpenRouter error: {error_msg}")
+                else:
+                    raise NonRetryableError(f"OpenRouter error: {error_msg}")
+
+            # Validate response structure
+            if "choices" not in data or not data["choices"]:
+                raise NonRetryableError(f"Invalid response structure (no choices): {str(data)[:500]}")
+
             content = data["choices"][0]["message"]["content"]
             return LLMResponse.from_json(content)
 
@@ -356,8 +371,18 @@ class VLLMClient(BaseLLMClient):
             elif response.status_code != 200:
                 raise LLMError(f"Unexpected status {response.status_code}")
 
-            # Parse structured JSON response
+            # Parse response
             data = response.json()
+
+            # Check for error response
+            if "error" in data:
+                error_msg = data["error"].get("message", str(data["error"])) if isinstance(data["error"], dict) else str(data["error"])
+                raise NonRetryableError(f"vLLM error: {error_msg}")
+
+            # Validate response structure
+            if "choices" not in data or not data["choices"]:
+                raise NonRetryableError(f"Invalid response structure (no choices): {str(data)[:500]}")
+
             content = data["choices"][0]["message"]["content"]
             return LLMResponse.from_json(content)
 
