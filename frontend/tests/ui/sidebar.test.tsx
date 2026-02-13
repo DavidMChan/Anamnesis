@@ -48,7 +48,7 @@ describe('Sidebar Component', () => {
     it('should render logo and app name', () => {
       renderSidebar()
 
-      expect(screen.getByText(/survey arena/i)).toBeInTheDocument()
+      expect(screen.getByText(/anamnesis/i)).toBeInTheDocument()
     })
 
     it('should render all navigation items', () => {

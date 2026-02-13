@@ -93,7 +93,7 @@ export function Register() {
             <div className="space-y-1">
               <CardTitle className="text-2xl font-bold">Create an account</CardTitle>
               <CardDescription>
-                Get started with Survey Arena
+                Get started with Anamnesis
               </CardDescription>
             </div>
           </CardHeader>
