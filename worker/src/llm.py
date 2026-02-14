@@ -339,7 +339,7 @@ class VLLMClient(BaseLLMClient):
         model: str,
         api_key: Optional[str] = None,
         temperature: float = 1.0,  # Default 1.0 like anthology
-        max_tokens: Optional[int] = 128,  # Default 128 like anthology
+        max_tokens: int = 128,  # Default 128 like anthology (never None to avoid infinite generation)
         max_retries: int = 3,
         timeout: float = 120.0,
         top_p: float = 1.0,
@@ -490,7 +490,7 @@ class LLMClient:
                 model=model or "meta-llama/Llama-3-70b",
                 api_key=api_key,  # Optional: for authenticated vLLM servers
                 temperature=temperature,
-                max_tokens=max_tokens,
+                max_tokens=max_tokens if max_tokens is not None else 128,  # Never None for vLLM
                 max_retries=max_retries,
             )
         else:
