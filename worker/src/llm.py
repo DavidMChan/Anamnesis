@@ -405,6 +405,10 @@ class VLLMClient(BaseLLMClient):
 
             # Completions API returns 'text' field
             content = data["choices"][0].get("text", "").strip()
+
+            import logging
+            logging.getLogger(__name__).info(f"vLLM raw response: {repr(content[:200] if len(content) > 200 else content)}")
+
             return LLMResponse.from_text(content)
 
     def complete(self, prompt: str, response_schema: dict = None) -> LLMResponse:
