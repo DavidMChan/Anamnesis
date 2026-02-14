@@ -325,6 +325,11 @@ class OpenRouterClient(BaseLLMClient):
         raise RetryableError(f"Max retries exceeded: {last_error}")
 
 
+class ChatTemplateNotAvailable(LLMError):
+    """Model doesn't have a chat template (base model)."""
+    pass
+
+
 class VLLMClient(BaseLLMClient):
     """Client for vLLM server (local or remote with API key)."""
 
@@ -355,8 +360,66 @@ class VLLMClient(BaseLLMClient):
         self.max_retries = max_retries
         self.timeout = timeout
 
+    def _make_completion_request(self, prompt: str, max_tokens_override: Optional[int] = None) -> LLMResponse:
+        """Make a request using the completions API (for base models without chat template).
+
+        Args:
+            prompt: The input prompt (will be formatted with answer instruction)
+            max_tokens_override: Override max_tokens for this request
+        """
+        url = f"{self.endpoint}/completions"
+
+        headers = {"Content-Type": "application/json"}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+
+        effective_max_tokens = max_tokens_override if max_tokens_override is not None else self.max_tokens
+        # For completions, we need a reasonable max_tokens to avoid runaway generation
+        if effective_max_tokens is None:
+            effective_max_tokens = 32  # Short response expected (just a letter)
+
+        # Format prompt for base model - be very explicit about expected output
+        completion_prompt = f"""{prompt}
+
+Answer with ONLY the letter of your choice (A, B, C, D, etc.):"""
+
+        payload: Dict[str, Any] = {
+            "model": self.model,
+            "prompt": completion_prompt,
+            "temperature": self.temperature,
+            "max_tokens": effective_max_tokens,
+            "stop": ["\n", ".", ",", " "],  # Stop at first newline or punctuation
+        }
+
+        with httpx.Client(timeout=self.timeout) as client:
+            response = client.post(url, headers=headers, json=payload)
+
+            if response.status_code == 401:
+                raise NonRetryableError(f"Authentication failed: {response.json()}")
+            elif response.status_code == 400:
+                raise NonRetryableError(f"Bad request: {response.json()}")
+            elif response.status_code == 429:
+                raise RetryableError(f"Rate limited: {response.json()}")
+            elif response.status_code >= 500:
+                raise RetryableError(f"Server error ({response.status_code})")
+            elif response.status_code != 200:
+                raise LLMError(f"Unexpected status {response.status_code}")
+
+            data = response.json()
+
+            if "error" in data:
+                error_msg = data["error"].get("message", str(data["error"])) if isinstance(data["error"], dict) else str(data["error"])
+                raise NonRetryableError(f"vLLM error: {error_msg}")
+
+            if "choices" not in data or not data["choices"]:
+                raise NonRetryableError(f"Invalid response structure: {str(data)[:500]}")
+
+            # Completions API returns 'text' instead of 'message.content'
+            content = data["choices"][0].get("text", "").strip()
+            return LLMResponse.from_text(content)
+
     def _make_request(self, prompt: str, response_schema: dict, max_tokens_override: Optional[int] = None, use_structured: bool = True) -> LLMResponse:
-        """Make a single API request to vLLM.
+        """Make a single API request to vLLM using chat completions.
 
         Args:
             prompt: The input prompt
@@ -406,8 +469,11 @@ class VLLMClient(BaseLLMClient):
             elif response.status_code == 400:
                 error_data = response.json()
                 error_msg = str(error_data)
+                # Check if this is a chat template error (base model)
+                if "chat_template" in error_msg.lower():
+                    raise ChatTemplateNotAvailable(f"Model doesn't have chat template (base model): {error_msg}")
                 # Check if this is a structured output not supported error
-                if "chat_template" in error_msg.lower() or "guided" in error_msg.lower() or "json" in error_msg.lower():
+                if "guided" in error_msg.lower() or "json" in error_msg.lower():
                     raise StructuredOutputNotSupported(f"Model doesn't support structured output: {error_msg}")
                 raise NonRetryableError(f"Bad request: {error_data}")
             elif response.status_code == 429:
@@ -423,8 +489,11 @@ class VLLMClient(BaseLLMClient):
             # Check for error response
             if "error" in data:
                 error_msg = data["error"].get("message", str(data["error"])) if isinstance(data["error"], dict) else str(data["error"])
+                # Check if this is a chat template error
+                if "chat_template" in error_msg.lower():
+                    raise ChatTemplateNotAvailable(f"Model doesn't have chat template: {error_msg}")
                 # Check if this is a structured output not supported error
-                if "chat_template" in error_msg.lower() or "guided" in error_msg.lower():
+                if "guided" in error_msg.lower():
                     raise StructuredOutputNotSupported(f"Model doesn't support structured output: {error_msg}")
                 raise NonRetryableError(f"vLLM error: {error_msg}")
 
@@ -441,19 +510,32 @@ class VLLMClient(BaseLLMClient):
                 return LLMResponse.from_text(content)
 
     def complete(self, prompt: str, response_schema: dict) -> LLMResponse:
-        """Get completion with retry logic, truncation handling, and text fallback."""
+        """Get completion with retry logic, truncation handling, and base model fallback."""
         import logging
         logger = logging.getLogger(__name__)
 
         last_error = None
         truncation_retried = False
         text_fallback_used = False
+        use_completions_api = False  # For base models without chat template
 
         for attempt in range(self.max_retries):
             try:
+                # Use completions API for base models
+                if use_completions_api:
+                    return self._make_completion_request(prompt)
+
                 return self._make_request(prompt, response_schema, use_structured=not text_fallback_used)
+            except ChatTemplateNotAvailable as e:
+                # Base model - fall back to completions API
+                if not use_completions_api:
+                    use_completions_api = True
+                    logger.warning(f"Base model detected (no chat template), using completions API: {e}")
+                    continue  # Retry immediately with completions API
+                else:
+                    raise NonRetryableError(f"Completions API also failed: {e}")
             except StructuredOutputNotSupported as e:
-                # Fall back to text mode
+                # Fall back to text mode (still using chat API)
                 if not text_fallback_used:
                     text_fallback_used = True
                     logger.warning(f"Structured output not supported, falling back to text mode: {e}")
@@ -466,6 +548,8 @@ class VLLMClient(BaseLLMClient):
                     truncation_retried = True
                     logger.warning(f"Response truncated, retrying without max_tokens limit: {e}")
                     try:
+                        if use_completions_api:
+                            return self._make_completion_request(prompt, max_tokens_override=16384)
                         return self._make_request(prompt, response_schema, max_tokens_override=16384, use_structured=not text_fallback_used)
                     except TruncationError as retry_e:
                         raise NonRetryableError(f"Response still truncated after retry: {retry_e}")
