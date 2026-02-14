@@ -47,6 +47,8 @@ services:
       - VLLM_ENDPOINT=${VLLM_ENDPOINT:-}
       - VLLM_MODEL=${VLLM_MODEL:-}
       - VLLM_API_KEY=${VLLM_API_KEY:-}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-128}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.0}
     deploy:
       # Can scale workers: docker compose up -d --scale worker=2
       replicas: 1
