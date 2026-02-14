@@ -37,6 +37,11 @@ class TruncationError(LLMError):
     pass
 
 
+class StructuredOutputNotSupported(LLMError):
+    """Model doesn't support structured output (json_schema)."""
+    pass
+
+
 @dataclass
 class LLMResponse:
     """Parsed LLM response."""
@@ -172,13 +177,14 @@ class OpenRouterClient(BaseLLMClient):
         "additionalProperties": False
     }
 
-    def _make_request(self, prompt: str, response_schema: dict, max_tokens_override: Optional[int] = None) -> LLMResponse:
-        """Make a single API request with structured output.
+    def _make_request(self, prompt: str, response_schema: dict, max_tokens_override: Optional[int] = None, use_structured: bool = True) -> LLMResponse:
+        """Make a single API request.
 
         Args:
             prompt: The input prompt
             response_schema: JSON schema for expected response format
             max_tokens_override: Override max_tokens for this request (used for retry)
+            use_structured: Whether to use structured output (json_schema) or plain text
         """
         headers = {
             "Authorization": f"Bearer {self.api_key}",
@@ -192,14 +198,23 @@ class OpenRouterClient(BaseLLMClient):
         # Determine max_tokens: override > instance setting
         effective_max_tokens = max_tokens_override if max_tokens_override is not None else self.max_tokens
 
+        # Build prompt - add JSON instruction if using text mode
+        if use_structured:
+            messages = [{"role": "user", "content": prompt}]
+        else:
+            # For text mode, append instruction to respond with just the answer letter
+            text_prompt = prompt + "\n\nRespond with ONLY the letter of your answer (A, B, C, D, etc.) and nothing else."
+            messages = [{"role": "user", "content": text_prompt}]
+
         payload: Dict[str, Any] = {
             "model": self.model,
-            "messages": [
-                {"role": "user", "content": prompt},
-            ],
+            "messages": messages,
             "temperature": self.temperature,
-            # OpenRouter structured outputs - proper format for GPT models
-            "response_format": {
+        }
+
+        # Only add structured output format if requested
+        if use_structured:
+            payload["response_format"] = {
                 "type": "json_schema",
                 "json_schema": {
                     "name": "answer",
@@ -207,7 +222,6 @@ class OpenRouterClient(BaseLLMClient):
                     "schema": schema
                 }
             }
-        }
 
         # Only add max_tokens if specified (None means no limit)
         if effective_max_tokens is not None:
@@ -220,7 +234,12 @@ class OpenRouterClient(BaseLLMClient):
             if response.status_code == 401:
                 raise NonRetryableError(f"Authentication failed: {response.json()}")
             elif response.status_code == 400:
-                raise NonRetryableError(f"Bad request: {response.json()}")
+                error_data = response.json()
+                error_msg = str(error_data)
+                # Check if this is a structured output not supported error
+                if "chat_template" in error_msg.lower() or "json" in error_msg.lower() or "schema" in error_msg.lower():
+                    raise StructuredOutputNotSupported(f"Model doesn't support structured output: {error_msg}")
+                raise NonRetryableError(f"Bad request: {error_data}")
             elif response.status_code == 429:
                 raise RetryableError(f"Rate limited: {response.json()}")
             elif response.status_code >= 500:
@@ -235,6 +254,11 @@ class OpenRouterClient(BaseLLMClient):
             if "error" in data:
                 error_msg = data["error"].get("message", str(data["error"])) if isinstance(data["error"], dict) else str(data["error"])
                 error_code = data["error"].get("code", "") if isinstance(data["error"], dict) else ""
+
+                # Check if this is a structured output not supported error
+                if "chat_template" in error_msg.lower() or "json" in error_msg.lower() or "schema" in error_msg.lower() or "Hyperbolic" in error_msg:
+                    raise StructuredOutputNotSupported(f"Model doesn't support structured output: {error_msg}")
+
                 # Rate limits and server errors are retryable
                 if error_code in ("rate_limit_exceeded", "server_error", 429, 500, 502, 503):
                     raise RetryableError(f"OpenRouter error: {error_msg}")
@@ -246,28 +270,40 @@ class OpenRouterClient(BaseLLMClient):
                 raise NonRetryableError(f"Invalid response structure (no choices): {str(data)[:500]}")
 
             content = data["choices"][0]["message"]["content"]
-            return LLMResponse.from_json(content)
+
+            # Parse based on mode
+            if use_structured:
+                return LLMResponse.from_json(content)
+            else:
+                return LLMResponse.from_text(content)
 
     def complete(self, prompt: str, response_schema: dict) -> LLMResponse:
-        """Get completion with retry logic and truncation handling."""
+        """Get completion with retry logic, truncation handling, and text fallback."""
+        import logging
+        logger = logging.getLogger(__name__)
+
         last_error = None
         truncation_retried = False
+        text_fallback_used = False
 
         for attempt in range(self.max_retries):
             try:
-                return self._make_request(prompt, response_schema)
+                return self._make_request(prompt, response_schema, use_structured=not text_fallback_used)
+            except StructuredOutputNotSupported as e:
+                # Fall back to text mode
+                if not text_fallback_used:
+                    text_fallback_used = True
+                    logger.warning(f"Structured output not supported, falling back to text mode: {e}")
+                    continue  # Retry immediately with text mode
+                else:
+                    raise NonRetryableError(f"Text fallback also failed: {e}")
             except TruncationError as e:
                 # Retry once without max_tokens limit (only if we haven't tried already)
                 if not truncation_retried and self.max_tokens is not None:
                     truncation_retried = True
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        f"Response truncated, retrying without max_tokens limit: {e}"
-                    )
+                    logger.warning(f"Response truncated, retrying without max_tokens limit: {e}")
                     try:
-                        # Retry with no max_tokens (use a very large number instead of None
-                        # since OpenRouter might still need a value)
-                        return self._make_request(prompt, response_schema, max_tokens_override=16384)
+                        return self._make_request(prompt, response_schema, max_tokens_override=16384, use_structured=not text_fallback_used)
                     except TruncationError as retry_e:
                         raise NonRetryableError(f"Response still truncated after retry: {retry_e}")
                 else:
@@ -319,13 +355,14 @@ class VLLMClient(BaseLLMClient):
         self.max_retries = max_retries
         self.timeout = timeout
 
-    def _make_request(self, prompt: str, response_schema: dict, max_tokens_override: Optional[int] = None) -> LLMResponse:
-        """Make a single API request to vLLM with structured output.
+    def _make_request(self, prompt: str, response_schema: dict, max_tokens_override: Optional[int] = None, use_structured: bool = True) -> LLMResponse:
+        """Make a single API request to vLLM.
 
         Args:
             prompt: The input prompt
             response_schema: JSON schema for expected response format
             max_tokens_override: Override max_tokens for this request (used for retry)
+            use_structured: Whether to use structured output (guided_json) or plain text
         """
         url = f"{self.endpoint}/chat/completions"
 
@@ -340,18 +377,22 @@ class VLLMClient(BaseLLMClient):
         # Determine max_tokens: override > instance setting
         effective_max_tokens = max_tokens_override if max_tokens_override is not None else self.max_tokens
 
+        # Build prompt - add instruction if using text mode
+        if use_structured:
+            messages = [{"role": "user", "content": prompt}]
+        else:
+            text_prompt = prompt + "\n\nRespond with ONLY the letter of your answer (A, B, C, D, etc.) and nothing else."
+            messages = [{"role": "user", "content": text_prompt}]
+
         payload: Dict[str, Any] = {
             "model": self.model,
-            "messages": [
-                {"role": "user", "content": prompt},
-            ],
+            "messages": messages,
             "temperature": self.temperature,
-            # vLLM structured outputs - uses guided_json in extra_body
-            # See: https://docs.vllm.ai/en/latest/features/structured_outputs/
-            "extra_body": {
-                "guided_json": schema
-            }
         }
+
+        # Only add guided_json if using structured output
+        if use_structured:
+            payload["extra_body"] = {"guided_json": schema}
 
         # Only add max_tokens if specified (None means no limit)
         if effective_max_tokens is not None:
@@ -363,7 +404,12 @@ class VLLMClient(BaseLLMClient):
             if response.status_code == 401:
                 raise NonRetryableError(f"Authentication failed: {response.json()}")
             elif response.status_code == 400:
-                raise NonRetryableError(f"Bad request: {response.json()}")
+                error_data = response.json()
+                error_msg = str(error_data)
+                # Check if this is a structured output not supported error
+                if "chat_template" in error_msg.lower() or "guided" in error_msg.lower() or "json" in error_msg.lower():
+                    raise StructuredOutputNotSupported(f"Model doesn't support structured output: {error_msg}")
+                raise NonRetryableError(f"Bad request: {error_data}")
             elif response.status_code == 429:
                 raise RetryableError(f"Rate limited: {response.json()}")
             elif response.status_code >= 500:
@@ -377,6 +423,9 @@ class VLLMClient(BaseLLMClient):
             # Check for error response
             if "error" in data:
                 error_msg = data["error"].get("message", str(data["error"])) if isinstance(data["error"], dict) else str(data["error"])
+                # Check if this is a structured output not supported error
+                if "chat_template" in error_msg.lower() or "guided" in error_msg.lower():
+                    raise StructuredOutputNotSupported(f"Model doesn't support structured output: {error_msg}")
                 raise NonRetryableError(f"vLLM error: {error_msg}")
 
             # Validate response structure
@@ -384,27 +433,40 @@ class VLLMClient(BaseLLMClient):
                 raise NonRetryableError(f"Invalid response structure (no choices): {str(data)[:500]}")
 
             content = data["choices"][0]["message"]["content"]
-            return LLMResponse.from_json(content)
+
+            # Parse based on mode
+            if use_structured:
+                return LLMResponse.from_json(content)
+            else:
+                return LLMResponse.from_text(content)
 
     def complete(self, prompt: str, response_schema: dict) -> LLMResponse:
-        """Get completion with retry logic and truncation handling."""
+        """Get completion with retry logic, truncation handling, and text fallback."""
+        import logging
+        logger = logging.getLogger(__name__)
+
         last_error = None
         truncation_retried = False
+        text_fallback_used = False
 
         for attempt in range(self.max_retries):
             try:
-                return self._make_request(prompt, response_schema)
+                return self._make_request(prompt, response_schema, use_structured=not text_fallback_used)
+            except StructuredOutputNotSupported as e:
+                # Fall back to text mode
+                if not text_fallback_used:
+                    text_fallback_used = True
+                    logger.warning(f"Structured output not supported, falling back to text mode: {e}")
+                    continue  # Retry immediately with text mode
+                else:
+                    raise NonRetryableError(f"Text fallback also failed: {e}")
             except TruncationError as e:
                 # Retry once without max_tokens limit (only if we haven't tried already)
                 if not truncation_retried and self.max_tokens is not None:
                     truncation_retried = True
-                    import logging
-                    logging.getLogger(__name__).warning(
-                        f"Response truncated, retrying without max_tokens limit: {e}"
-                    )
+                    logger.warning(f"Response truncated, retrying without max_tokens limit: {e}")
                     try:
-                        # Retry with a much larger max_tokens
-                        return self._make_request(prompt, response_schema, max_tokens_override=16384)
+                        return self._make_request(prompt, response_schema, max_tokens_override=16384, use_structured=not text_fallback_used)
                     except TruncationError as retry_e:
                         raise NonRetryableError(f"Response still truncated after retry: {retry_e}")
                 else:

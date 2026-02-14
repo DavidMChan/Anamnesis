@@ -402,30 +402,45 @@ class DatabaseClient:
         )
         return result.data or []
 
-    def get_stale_pending_tasks(self, run_id: str, stale_minutes: int = 5) -> List[Dict[str, Any]]:
+    def get_stale_queued_tasks(self, run_id: str, stale_minutes: int = 5) -> List[Dict[str, Any]]:
         """
-        Get pending tasks that have been stuck for too long.
+        Get queued tasks that have been stuck for too long.
 
-        These are tasks that were likely dispatched but lost in RabbitMQ.
+        These are tasks that were dispatched to RabbitMQ but never processed
+        (likely lost due to worker crash or RabbitMQ issue).
 
         Args:
             run_id: UUID of the survey run
-            stale_minutes: Minutes after which a pending task is considered stale
+            stale_minutes: Minutes after which a queued task is considered stale
 
         Returns:
-            List of stale pending task records
+            List of stale queued task records
         """
         from datetime import datetime, timedelta, timezone
 
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)
         cutoff_str = cutoff.isoformat()
 
+        # Look for "queued" tasks that were dispatched but never picked up
+        # We use queued_at (set when dispatching) to check staleness
         result = (
             self.client.table("survey_tasks")
-            .select("id, backstory_id, created_at")
+            .select("id, backstory_id, queued_at")
             .eq("survey_run_id", run_id)
-            .eq("status", "pending")
-            .lt("created_at", cutoff_str)
+            .eq("status", "queued")
+            .lt("queued_at", cutoff_str)
             .execute()
         )
         return result.data or []
+
+    def mark_task_queued(self, task_id: str) -> None:
+        """
+        Mark a task as queued (dispatched to RabbitMQ).
+
+        Args:
+            task_id: UUID of the task
+        """
+        self.client.table("survey_tasks").update({
+            "status": "queued",
+            "queued_at": "now()"
+        }).eq("id", task_id).execute()

@@ -46,7 +46,7 @@ class TaskDispatcher:
         Dispatch tasks for a survey run to RabbitMQ.
 
         For 'pending' runs: dispatch all pending tasks.
-        For 'running' runs: only dispatch stale tasks (stuck for >5 min).
+        For 'running' runs: dispatch pending tasks (retries) + stale queued tasks.
 
         Args:
             run: Survey run record
@@ -57,11 +57,20 @@ class TaskDispatcher:
         run_id = run["id"]
         run_status = run.get("status", "pending")
 
-        # For running runs, only re-dispatch stale tasks
+        tasks = []
+
         if run_status == "running":
-            tasks = self.db.get_stale_pending_tasks(run_id, stale_minutes=5)
-            if tasks:
-                logger.info(f"Found {len(tasks)} stale tasks for run {run_id}, re-dispatching...")
+            # Get pending tasks (these are retries from failed attempts)
+            pending_tasks = self.db.get_pending_tasks_for_dispatch(run_id)
+            if pending_tasks:
+                logger.info(f"Found {len(pending_tasks)} pending tasks for run {run_id}")
+                tasks.extend(pending_tasks)
+
+            # Also get stale queued tasks (dispatched but never processed - lost messages)
+            stale_tasks = self.db.get_stale_queued_tasks(run_id, stale_minutes=5)
+            if stale_tasks:
+                logger.info(f"Found {len(stale_tasks)} stale queued tasks for run {run_id}, re-dispatching...")
+                tasks.extend(stale_tasks)
         else:
             # For pending runs, dispatch all tasks
             logger.info(f"Dispatching tasks for new run {run_id}")
@@ -74,9 +83,13 @@ class TaskDispatcher:
         dispatched = 0
         for task in tasks:
             try:
+                # Mark as queued BEFORE publishing to prevent re-dispatch
+                self.db.mark_task_queued(task["id"])
                 self.publisher.publish_task(run_id, task["id"])
                 dispatched += 1
             except Exception as e:
+                # If publishing fails, revert to pending so it can be retried
+                self.db.update_task_status(task["id"], "pending")
                 logger.error(f"Failed to publish task {task['id']}: {e}")
 
         logger.info(f"Dispatched {dispatched}/{len(tasks)} tasks for run {run_id}")
