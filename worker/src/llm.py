@@ -378,8 +378,8 @@ class VLLMClient(BaseLLMClient):
             "temperature": self.temperature,
             "max_tokens": effective_max_tokens,
             "top_p": self.top_p,
-            # Stop sequences to prevent model from continuing past the answer
-            "stop": ["\n\n", "\nQuestion:", "\nPlease", "Question:"],
+            # Stop at newline like anthology does
+            "stop": ["\n", "Question:"],
         }
 
         with httpx.Client(timeout=self.timeout) as client:
