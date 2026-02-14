@@ -378,6 +378,8 @@ class VLLMClient(BaseLLMClient):
             "temperature": self.temperature,
             "max_tokens": effective_max_tokens,
             "top_p": self.top_p,
+            # Stop sequences to prevent model from continuing past the answer
+            "stop": ["\n\n", "\nQuestion:", "\nPlease", "Question:"],
         }
 
         with httpx.Client(timeout=self.timeout) as client:
@@ -494,7 +496,7 @@ class LLMClient:
                 model=model or "meta-llama/Llama-3-70b",
                 api_key=api_key,  # Optional: for authenticated vLLM servers
                 temperature=temperature,
-                max_tokens=max_tokens if max_tokens is not None else 128,  # Never None for vLLM
+                max_tokens=max_tokens if max_tokens is not None else 32,  # Small default for MCQ answers
                 max_retries=max_retries,
             )
         else:
