@@ -387,8 +387,9 @@ class VLLMClient(BaseLLMClient):
             "temperature": self.temperature,
             "max_tokens": effective_max_tokens,
             "top_p": self.top_p,
-            # Stop at newline like anthology does
-            "stop": ["\n", "Question:"],
+            # Stop at newline, period, or new question
+            # Period helps truncate conversational responses early
+            "stop": ["\n", ".", "Question:"],
         }
 
         import logging
