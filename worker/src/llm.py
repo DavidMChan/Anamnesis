@@ -117,8 +117,11 @@ class LLMResponse:
         if text and text[0].upper() in 'ABCDEFGHIJ':
             return cls(answer=text[0].upper(), raw=text)
 
-        # If nothing works, return the raw text as answer
-        return cls(answer=text[:100] if text else "", raw=text)
+        # If nothing works, return empty string (not raw text) to keep context clean
+        # The raw text is still available in the raw field for debugging
+        import logging
+        logging.getLogger(__name__).warning(f"Failed to parse MCQ answer from: {repr(text[:100])}")
+        return cls(answer="", raw=text)
 
 
 class BaseLLMClient(ABC):
