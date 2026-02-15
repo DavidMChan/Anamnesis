@@ -500,7 +500,7 @@ class LLMClient:
                 model=model or "meta-llama/Llama-3-70b",
                 api_key=api_key,  # Optional: for authenticated vLLM servers
                 temperature=temperature,
-                max_tokens=max_tokens if max_tokens is not None else 8,  # Very small for MCQ - just need "(A) Option"
+                max_tokens=max_tokens if max_tokens is not None else 128,  # Default 128 like anthology
                 max_retries=max_retries,
             )
         else:
