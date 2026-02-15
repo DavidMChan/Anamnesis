@@ -98,11 +98,11 @@ class LLMResponse:
         text = text.strip()
 
         # Try to find answer letter at the start
-        # Patterns: "A", "(A)", "A.", "A:", "A)", "Answer: A", etc.
+        # Patterns: "(A)", "[A]", "A.", "A:", "A)" - letter in brackets or with punctuation
         patterns = [
-            r'^[\(\[]?([A-Za-z])[\)\]\.\:]',  # (A), [A], A., A:, A)
-            r'^([A-Za-z])\b',  # Just "A" at start
-            r'[Aa]nswer[:\s]+[\(\[]?([A-Za-z])',  # "Answer: A" or "answer: (A)"
+            r'^[\(\[]([A-Za-z])[\)\]]',  # (A) or [A] at start
+            r'^([A-Za-z])[\.\:\)]',  # A. A: A) at start
+            r'[Aa]nswer[:\s]+[\(\[]?([A-Za-z])[\)\]]?',  # "Answer: A" or "Answer: (A)"
             r'[\(\[]([A-Za-z])[\)\]]',  # (A) or [A] anywhere
         ]
 
@@ -113,9 +113,15 @@ class LLMResponse:
                 if answer in 'ABCDEFGHIJ':  # Valid MCQ options
                     return cls(answer=answer, raw=text)
 
-        # Fallback: just return the first character if it's a letter
-        if text and text[0].upper() in 'ABCDEFGHIJ':
-            return cls(answer=text[0].upper(), raw=text)
+        # Stricter fallback: only accept standalone letter followed by valid delimiter
+        # Use anthology-style pattern with negative lookahead to exclude common words
+        # "I think", "I am", "A lot", "A great", etc.
+        anthology_pattern = r'(?:^|[\[\(\"\' ])([A-Z])(?=$|[\]\)\"\'., ])(?! think)(?! am)(?! have)(?! would)(?! was)(?! great)(?! lot)(?! little)(?! good)(?! bad)'
+        match = re.search(anthology_pattern, text)
+        if match:
+            answer = match.group(1).upper()
+            if answer in 'ABCDEFGHIJ':
+                return cls(answer=answer, raw=text)
 
         # If nothing works, return empty string (not raw text) to keep context clean
         # The raw text is still available in the raw field for debugging
