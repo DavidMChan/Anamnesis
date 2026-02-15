@@ -18,6 +18,41 @@ from .prompt import (
 )
 from .llm import BaseLLMClient, LLMResponse, RetryableError, NonRetryableError, LLMError
 
+
+def match_option_text(response_text: str, options: List[str]) -> str:
+    """
+    Try to match option text in the response (anthology style).
+
+    For example, if options are ["Very excited", "Somewhat excited", ...]
+    and response is "I would be somewhat excited", this returns "B".
+
+    Args:
+        response_text: Raw LLM response
+        options: List of option texts
+
+    Returns:
+        Letter (A, B, C, ...) if matched, empty string otherwise
+    """
+    import re
+
+    if not options:
+        return ""
+
+    response_lower = response_text.lower()
+
+    # Count matches for each option
+    matches = []
+    for idx, option in enumerate(options):
+        option_lower = option.lower()
+        if option_lower in response_lower:
+            matches.append((idx, len(option)))  # (index, length for priority)
+
+    # Return only if exactly one option matches (like anthology)
+    if len(matches) == 1:
+        return chr(65 + matches[0][0])  # A, B, C, ...
+
+    return ""
+
 logger = logging.getLogger(__name__)
 
 
@@ -105,12 +140,22 @@ class TaskProcessor:
             logger.debug(f"Asking question {i+1}/{len(questions)}: {question.qkey}")
             response = self.llm.complete(prompt)
 
+            # Parse answer - try letter first, then option text matching
+            answer = response.answer
+            if not answer and question.options and response.raw:
+                # Letter parsing failed, try matching option text
+                answer = match_option_text(response.raw, question.options)
+                if answer:
+                    logger.info(f"Matched option text for {question.qkey}: {answer}")
+
             # Store result
-            results[question.qkey] = response.answer
-            logger.debug(f"Answer for {question.qkey}: {response.answer}")
+            results[question.qkey] = answer
+            logger.debug(f"Answer for {question.qkey}: {answer}")
 
             # Update context with this Q&A for next question
-            context = append_answer_to_context(prompt, response.answer)
+            # Use parsed answer for context to keep it clean
+            # (anthology uses raw, but their models output cleaner responses)
+            context = append_answer_to_context(prompt, answer if answer else "")
 
         return results
 
