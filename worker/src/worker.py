@@ -169,7 +169,7 @@ class TaskProcessor:
 
             # Store result
             results[question.qkey] = answer
-            logger.debug(f"Answer for {question.qkey}: {answer}")
+            logger.info(f"Parsed answer for {question.qkey}: {answer} (raw: {repr(raw_answer[:100]) if raw_answer else 'None'})")
 
             # Update context with this Q&A for next question
             # Use raw answer like anthology does (model expects to see its full response)
