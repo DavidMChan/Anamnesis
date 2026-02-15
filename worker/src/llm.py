@@ -115,12 +115,13 @@ class LLMResponse:
 
         # Stricter fallback: only accept standalone letter followed by valid delimiter
         # Use anthology-style pattern with negative lookahead to exclude common words
-        # "I think", "I am", "A lot", "A great", etc.
-        anthology_pattern = r'(?:^|[\[\(\"\' ])([A-Z])(?=$|[\]\)\"\'., ])(?! think)(?! am)(?! have)(?! would)(?! was)(?! great)(?! lot)(?! little)(?! good)(?! bad)'
+        # Including contractions like "I'm", "I'd", "I'll"
+        anthology_pattern = r"(?:^|[\[\(\"\' ])([A-Z])(?=$|[\]\)\"., ])(?!'m)(?!'d)(?!'ll)(?!'ve)(?!'re)(?! think)(?! am)(?! have)(?! would)(?! was)(?! great)(?! lot)(?! little)(?! good)(?! bad)(?! don)"
         match = re.search(anthology_pattern, text)
         if match:
             answer = match.group(1).upper()
-            if answer in 'ABCDEFGHIJ':
+            # Only accept A-E for typical MCQ (not I, which is often "I think...")
+            if answer in 'ABCDEFGH':
                 return cls(answer=answer, raw=text)
 
         # If nothing works, return empty string (not raw text) to keep context clean
