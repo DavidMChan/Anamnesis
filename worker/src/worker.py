@@ -136,26 +136,44 @@ class TaskProcessor:
             else:
                 prompt = build_followup_prompt(context, question)
 
-            # Call LLM
-            logger.debug(f"Asking question {i+1}/{len(questions)}: {question.qkey}")
-            response = self.llm.complete(prompt)
+            # Compliance forcing: retry until we get a parseable answer (like anthology)
+            max_compliance_retries = 10  # Anthology uses 100, we use 10 for now
+            answer = ""
+            raw_answer = ""
 
-            # Parse answer - try letter first, then option text matching
-            answer = response.answer
-            if not answer and question.options and response.raw:
-                # Letter parsing failed, try matching option text
-                answer = match_option_text(response.raw, question.options)
+            for retry in range(max_compliance_retries):
+                # Call LLM
+                if retry == 0:
+                    logger.debug(f"Asking question {i+1}/{len(questions)}: {question.qkey}")
+                else:
+                    logger.debug(f"Compliance retry {retry}/{max_compliance_retries} for {question.qkey}")
+
+                response = self.llm.complete(prompt)
+                raw_answer = response.raw if response.raw else ""
+
+                # Parse answer - try letter first, then option text matching
+                answer = response.answer
+                if not answer and question.options and response.raw:
+                    # Letter parsing failed, try matching option text
+                    answer = match_option_text(response.raw, question.options)
+                    if answer:
+                        logger.info(f"Matched option text for {question.qkey}: {answer}")
+
+                # If we got a valid answer, break out of retry loop
                 if answer:
-                    logger.info(f"Matched option text for {question.qkey}: {answer}")
+                    break
+
+            # Log if all retries failed
+            if not answer:
+                logger.warning(f"All {max_compliance_retries} retries failed for {question.qkey}, marking as non-compliant")
 
             # Store result
             results[question.qkey] = answer
             logger.debug(f"Answer for {question.qkey}: {answer}")
 
             # Update context with this Q&A for next question
-            # Use parsed answer for context to keep it clean
-            # (anthology uses raw, but their models output cleaner responses)
-            context = append_answer_to_context(prompt, answer if answer else "")
+            # Use raw answer like anthology does (model expects to see its full response)
+            context = append_answer_to_context(prompt, raw_answer)
 
         return results
 
