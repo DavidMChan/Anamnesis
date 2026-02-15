@@ -382,6 +382,10 @@ class VLLMClient(BaseLLMClient):
             "stop": ["\n", "Question:"],
         }
 
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"vLLM prompt (last 500 chars): {repr(prompt[-500:])}")
+
         with httpx.Client(timeout=self.timeout) as client:
             response = client.post(url, headers=headers, json=payload)
 
