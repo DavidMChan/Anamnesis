@@ -1,0 +1,57 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    hostname: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_USER:-arena}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASS:?RABBITMQ_PASS is required}
+    ports:
+      - "127.0.0.1:5672:5672"   # AMQP - localhost only
+      - "127.0.0.1:15672:15672" # Management UI - localhost only (access via SSH tunnel)
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: rabbitmq-diagnostics -q ping
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  dispatcher:
+    build: ./worker
+    command: python -m src.dispatcher
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL:?SUPABASE_URL is required}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY:?SUPABASE_SERVICE_KEY is required}
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-arena}:${RABBITMQ_PASS}@rabbitmq:5672
+
+  worker:
+    build: ./worker
+    command: python main.py
+    restart: unless-stopped
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      - SUPABASE_URL=${SUPABASE_URL}
+      - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
+      - RABBITMQ_URL=amqp://${RABBITMQ_USER:-arena}:${RABBITMQ_PASS}@rabbitmq:5672
+      # LLM config (will be moved to Supabase later)
+      - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
+      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
+      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-anthropic/claude-3-haiku}
+      - VLLM_ENDPOINT=${VLLM_ENDPOINT:-}
+      - VLLM_MODEL=${VLLM_MODEL:-}
+      - VLLM_API_KEY=${VLLM_API_KEY:-}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-128}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-1.0}
+    deploy:
+      # Can scale workers: docker compose up -d --scale worker=2
+      replicas: 1
+
+volumes:
+  rabbitmq_data:
