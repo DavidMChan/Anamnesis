@@ -1,11 +1,59 @@
 """
 Task processor module - the core worker logic.
+
+Follows anthology approach:
+- Questions are asked in series with context accumulation
+- LLM sees its previous answers when answering follow-up questions
+- Uses Completions API for base models
 """
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
+import logging
 
-from .prompt import Question, build_single_question_prompt, get_response_schema
+from .prompt import (
+    Question,
+    build_initial_prompt,
+    build_followup_prompt,
+    append_answer_to_context,
+)
 from .llm import BaseLLMClient, LLMResponse, RetryableError, NonRetryableError, LLMError
+
+
+def match_option_text(response_text: str, options: List[str]) -> str:
+    """
+    Try to match option text in the response (anthology style).
+
+    For example, if options are ["Very excited", "Somewhat excited", ...]
+    and response is "I would be somewhat excited", this returns "B".
+
+    Args:
+        response_text: Raw LLM response
+        options: List of option texts
+
+    Returns:
+        Letter (A, B, C, ...) if matched, empty string otherwise
+    """
+    import re
+
+    if not options:
+        return ""
+
+    response_lower = response_text.lower()
+
+    # Count matches for each option
+    matches = []
+    for idx, option in enumerate(options):
+        option_lower = option.lower()
+        if option_lower in response_lower:
+            matches.append((idx, len(option)))  # (index, length for priority)
+
+    # Return only if exactly one option matches (like anthology)
+    if len(matches) == 1:
+        return chr(65 + matches[0][0])  # A, B, C, ...
+
+    return ""
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -20,6 +68,11 @@ class TaskProcessorResult:
 class TaskProcessor:
     """
     Processes survey tasks by calling LLM with backstory + questions.
+
+    Uses context accumulation (in_series mode from anthology):
+    - Questions are asked one at a time
+    - Each question sees the previous Q&A pairs
+    - Promotes consistency in responses
     """
 
     def __init__(
@@ -41,52 +94,88 @@ class TaskProcessor:
         self.max_retries = max_retries
 
     def fetch_task(self, task_id: str) -> Optional[Dict[str, Any]]:
-        """
-        Fetch task details from database.
-
-        Args:
-            task_id: UUID of the task
-
-        Returns:
-            Task record or None if not found
-        """
+        """Fetch task details from database."""
         return self.db.get_task(task_id)
 
     def mark_processing(self, task_id: str) -> None:
-        """
-        Mark task as processing and increment attempts.
-
-        Args:
-            task_id: UUID of the task
-        """
+        """Mark task as processing and increment attempts."""
         self.db.update_task_status(task_id, "processing")
         self.db.increment_task_attempts(task_id)
 
-    def call_llm(
+    def process_questions_in_series(
         self,
         backstory: str,
         questions: List[Question],
-    ) -> LLMResponse:
+    ) -> Dict[str, str]:
         """
-        Call LLM with backstory and questions.
+        Process questions in series with context accumulation.
+
+        This follows anthology's in_series mode:
+        1. Start with backstory + first question
+        2. Get answer, append to context
+        3. Add consistency prompt + next question
+        4. Repeat until all questions answered
 
         Args:
             backstory: Backstory text
             questions: List of questions to answer
 
         Returns:
-            LLM response
+            Dict mapping qkey -> answer
 
         Raises:
-            LLMError: If LLM call fails
+            LLMError: If any LLM call fails
         """
-        # For now, process questions one at a time
-        # TODO: Support batch processing for efficiency
-        question = questions[0]
-        prompt = build_single_question_prompt(backstory, question)
-        schema = get_response_schema(question)
+        results: Dict[str, str] = {}
+        context = ""
 
-        return self.llm.complete(prompt, schema)
+        for i, question in enumerate(questions):
+            # Build prompt based on whether this is first question or follow-up
+            if i == 0:
+                prompt = build_initial_prompt(backstory, question)
+            else:
+                prompt = build_followup_prompt(context, question)
+
+            # Compliance forcing: retry until we get a parseable answer (like anthology)
+            max_compliance_retries = 10  # Anthology uses 100, we use 10 for now
+            answer = ""
+            raw_answer = ""
+
+            for retry in range(max_compliance_retries):
+                # Call LLM
+                if retry == 0:
+                    logger.debug(f"Asking question {i+1}/{len(questions)}: {question.qkey}")
+                else:
+                    logger.debug(f"Compliance retry {retry}/{max_compliance_retries} for {question.qkey}")
+
+                response = self.llm.complete(prompt)
+                raw_answer = response.raw if response.raw else ""
+
+                # Parse answer - try letter first, then option text matching
+                answer = response.answer
+                if not answer and question.options and response.raw:
+                    # Letter parsing failed, try matching option text
+                    answer = match_option_text(response.raw, question.options)
+                    if answer:
+                        logger.info(f"Matched option text for {question.qkey}: {answer}")
+
+                # If we got a valid answer, break out of retry loop
+                if answer:
+                    break
+
+            # Log if all retries failed
+            if not answer:
+                logger.warning(f"All {max_compliance_retries} retries failed for {question.qkey}, marking as non-compliant")
+
+            # Store result
+            results[question.qkey] = answer
+            logger.info(f"Parsed answer for {question.qkey}: {answer} (raw: {repr(raw_answer[:100]) if raw_answer else 'None'})")
+
+            # Update context with this Q&A for next question
+            # Use raw answer like anthology does (model expects to see its full response)
+            context = append_answer_to_context(prompt, raw_answer)
+
+        return results
 
     def store_result(self, task_id: str, result: Dict[str, Any]) -> None:
         """
@@ -172,11 +261,9 @@ class TaskProcessor:
 
             questions = [Question.from_dict(q) for q in questions_data]
 
-            # 4. Call LLM for each question
-            results: Dict[str, Any] = {}
-            for question in questions:
-                response = self.call_llm(backstory_text, [question])
-                results[question.qkey] = response.answer
+            # 4. Process questions in series (with context accumulation)
+            logger.info(f"Processing {len(questions)} questions for backstory {backstory_id}")
+            results = self.process_questions_in_series(backstory_text, questions)
 
             # 5. Store result
             self.store_result(task_id, results)
