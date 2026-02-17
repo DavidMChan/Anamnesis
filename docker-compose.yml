@@ -49,6 +49,9 @@ services:
       - VLLM_API_KEY=${VLLM_API_KEY:-}
       - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-128}
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-1.0}
+      - USE_GUIDED_DECODING=${USE_GUIDED_DECODING:-true}
+      - PARSER_LLM_API_KEY=${PARSER_LLM_API_KEY:-}
+      - PARSER_LLM_MODEL=${PARSER_LLM_MODEL:-google/gemini-2.0-flash-001}
     deploy:
       # Can scale workers: docker compose up -d --scale worker=2
       replicas: 1
