@@ -157,18 +157,27 @@ class TaskProcessor:
 
                 # Tier 1: guided decoding already parsed the answer
                 answer = response.answer
+                tier = ""
+
+                if answer:
+                    tier = "tier1_guided"
 
                 # Tier 2: parser LLM fallback (for MCQ only)
                 if not answer and question.type == "mcq" and self.parser_llm and response.raw:
                     answer = self.parser_llm.parse(response.raw, question)
                     if answer:
-                        logger.info(f"Parser LLM extracted answer for {question.qkey}: {answer}")
+                        tier = "tier2_parser"
 
                 # Tier 3: option text matching (existing fallback)
                 if not answer and question.options and response.raw:
                     answer = match_option_text(response.raw, question.options)
                     if answer:
-                        logger.info(f"Matched option text for {question.qkey}: {answer}")
+                        tier = "tier3_regex"
+
+                if answer:
+                    logger.info(f"[{tier}] {question.qkey}={answer} (raw={repr(raw_answer[:80])})")
+                else:
+                    logger.warning(f"[parse_fail] {question.qkey} raw={repr(raw_answer[:80])}")
 
                 # If we got a valid answer, break out of retry loop
                 if answer:
