@@ -6,7 +6,10 @@ import json
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .prompt import Question
 
 import httpx
 from tenacity import (
@@ -135,13 +138,14 @@ class BaseLLMClient(ABC):
     """Abstract base class for LLM clients."""
 
     @abstractmethod
-    def complete(self, prompt: str, response_schema: dict) -> LLMResponse:
+    def complete(self, prompt: str, response_schema: dict = None, *, question: "Optional[Question]" = None) -> LLMResponse:
         """
         Get completion from LLM with structured output.
 
         Args:
             prompt: The input prompt
             response_schema: JSON schema for expected response format
+            question: Optional question metadata (enables guided decoding for MCQ on vLLM)
 
         Returns:
             Parsed LLMResponse
@@ -287,7 +291,7 @@ class OpenRouterClient(BaseLLMClient):
             else:
                 return LLMResponse.from_text(content)
 
-    def complete(self, prompt: str, response_schema: dict) -> LLMResponse:
+    def complete(self, prompt: str, response_schema: dict = None, *, question: "Optional[Question]" = None) -> LLMResponse:
         """Get completion with retry logic, truncation handling, and text fallback."""
         import logging
         logger = logging.getLogger(__name__)
@@ -341,6 +345,9 @@ class VLLMClient(BaseLLMClient):
 
     Designed for base models (not instruction-tuned) following anthology approach.
     Uses /v1/completions endpoint which doesn't require chat templates.
+
+    Supports guided decoding via structured_outputs.choice for MCQ questions,
+    which constrains generation to valid option letters at the token level.
     """
 
     def __init__(
@@ -353,6 +360,7 @@ class VLLMClient(BaseLLMClient):
         max_retries: int = 3,
         timeout: float = 120.0,
         top_p: float = 1.0,
+        use_guided_decoding: bool = True,
     ):
         self.endpoint = endpoint.rstrip("/")
         self.model = model
@@ -362,17 +370,21 @@ class VLLMClient(BaseLLMClient):
         self.max_retries = max_retries
         self.timeout = timeout
         self.top_p = top_p
+        self.use_guided_decoding = use_guided_decoding
 
-    def _make_request(self, prompt: str, max_tokens_override: Optional[int] = None) -> LLMResponse:
+    def _make_request(
+        self,
+        prompt: str,
+        max_tokens_override: Optional[int] = None,
+        guided_choices: Optional[List[str]] = None,
+    ) -> LLMResponse:
         """
         Make a request using the Completions API.
-
-        This is the standard approach for base models - just text completion.
-        The prompt should already be formatted with "Answer:" at the end.
 
         Args:
             prompt: The full prompt (backstory + questions + "Answer:")
             max_tokens_override: Override max_tokens for this request
+            guided_choices: If set, constrain output to these choices via structured_outputs.choice
         """
         url = f"{self.endpoint}/completions"
 
@@ -393,9 +405,18 @@ class VLLMClient(BaseLLMClient):
             "stop": ["\n", ".", "Question:"],
         }
 
+        # Add guided decoding constraint for MCQ
+        if guided_choices:
+            payload["structured_outputs"] = {"choice": guided_choices}
+            payload["max_tokens"] = 1  # Only need single letter
+            # Remove stop sequences — guided decoding handles termination
+            payload.pop("stop", None)
+
         import logging
         logger = logging.getLogger(__name__)
         logger.info(f"vLLM prompt (last 500 chars): {repr(prompt[-500:])}")
+        if guided_choices:
+            logger.info(f"vLLM guided_choices: {guided_choices}")
 
         with httpx.Client(timeout=self.timeout) as client:
             response = client.post(url, headers=headers, json=payload)
@@ -423,30 +444,42 @@ class VLLMClient(BaseLLMClient):
             # Completions API returns 'text' field
             content = data["choices"][0].get("text", "").strip()
 
-            import logging
             logging.getLogger(__name__).info(f"vLLM raw response: {repr(content[:200] if len(content) > 200 else content)}")
+
+            # With guided decoding, the response is already a valid letter
+            if guided_choices and content and content.upper() in guided_choices:
+                return LLMResponse(answer=content.upper(), raw=content)
 
             return LLMResponse.from_text(content)
 
-    def complete(self, prompt: str, response_schema: dict = None) -> LLMResponse:
+    def complete(self, prompt: str, response_schema: dict = None, *, question: "Optional[Question]" = None) -> LLMResponse:
         """
         Get completion from vLLM using Completions API.
-
-        Note: response_schema is ignored for vLLM - we use text parsing instead.
-        This matches anthology's approach for base models.
 
         Args:
             prompt: The full prompt (should end with "Answer:")
             response_schema: Ignored for vLLM (kept for interface compatibility)
+            question: Optional question metadata. For MCQ questions with
+                      use_guided_decoding=True, enables structured_outputs.choice.
         """
         import logging
         logger = logging.getLogger(__name__)
+
+        # Determine if guided decoding should be used
+        guided_choices = None
+        if (
+            self.use_guided_decoding
+            and question is not None
+            and question.type == "mcq"
+            and question.options
+        ):
+            guided_choices = [chr(65 + i) for i in range(len(question.options))]
 
         last_error = None
 
         for attempt in range(self.max_retries):
             try:
-                return self._make_request(prompt)
+                return self._make_request(prompt, guided_choices=guided_choices)
             except NonRetryableError:
                 raise
             except RetryableError as e:

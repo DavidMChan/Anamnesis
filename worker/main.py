@@ -7,7 +7,8 @@ import sys
 
 from src.config import get_config
 from src.db import DatabaseClient
-from src.llm import LLMClient
+from src.llm import LLMClient, VLLMClient
+from src.parser import ParserLLM
 from src.queue import QueueConsumer
 from src.worker import TaskProcessor
 
@@ -40,22 +41,32 @@ def main():
             max_tokens=llm_config.max_tokens,
         )
     elif llm_config.provider == "vllm":
-        llm = LLMClient.create(
-            provider="vllm",
+        llm = VLLMClient(
             endpoint=llm_config.vllm_endpoint,
             model=llm_config.vllm_model,
             api_key=llm_config.vllm_api_key or None,
             temperature=llm_config.temperature,
-            max_tokens=llm_config.max_tokens,
+            max_tokens=llm_config.max_tokens if llm_config.max_tokens is not None else 128,
+            use_guided_decoding=llm_config.use_guided_decoding,
         )
     else:
         raise ValueError(f"Unknown LLM provider: {llm_config.provider}")
+
+    # Parser LLM (Tier 2 fallback for MCQ parsing) — reuses OpenRouter key
+    parser_llm = None
+    if llm_config.openrouter_api_key:
+        parser_llm = ParserLLM(
+            api_key=llm_config.openrouter_api_key,
+            model=llm_config.parser_llm_model,
+        )
+        logger.info(f"Parser LLM enabled: {llm_config.parser_llm_model}")
 
     # Task processor
     processor = TaskProcessor(
         db=db,
         llm=llm,
         max_retries=config.worker.max_retries,
+        parser_llm=parser_llm,
     )
 
     # Message handler
