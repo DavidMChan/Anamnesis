@@ -52,11 +52,11 @@ def main():
     else:
         raise ValueError(f"Unknown LLM provider: {llm_config.provider}")
 
-    # Parser LLM (Tier 2 fallback for MCQ parsing)
+    # Parser LLM (Tier 2 fallback for MCQ parsing) — reuses OpenRouter key
     parser_llm = None
-    if llm_config.parser_llm_api_key:
+    if llm_config.openrouter_api_key:
         parser_llm = ParserLLM(
-            api_key=llm_config.parser_llm_api_key,
+            api_key=llm_config.openrouter_api_key,
             model=llm_config.parser_llm_model,
         )
         logger.info(f"Parser LLM enabled: {llm_config.parser_llm_model}")
