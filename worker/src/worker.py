@@ -17,6 +17,7 @@ from .prompt import (
     append_answer_to_context,
 )
 from .llm import BaseLLMClient, LLMResponse, RetryableError, NonRetryableError, LLMError
+from .parser import ParserLLM
 
 
 def match_option_text(response_text: str, options: List[str]) -> str:
@@ -80,6 +81,7 @@ class TaskProcessor:
         db,  # DatabaseClient or mock
         llm: BaseLLMClient,
         max_retries: int = 3,
+        parser_llm: Optional["ParserLLM"] = None,
     ):
         """
         Initialize task processor.
@@ -88,10 +90,12 @@ class TaskProcessor:
             db: Database client for fetching/updating data
             llm: LLM client for completions
             max_retries: Maximum retry attempts per task
+            parser_llm: Optional parser LLM for Tier 2 MCQ fallback
         """
         self.db = db
         self.llm = llm
         self.max_retries = max_retries
+        self.parser_llm = parser_llm
 
     def fetch_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Fetch task details from database."""
@@ -142,22 +146,38 @@ class TaskProcessor:
             raw_answer = ""
 
             for retry in range(max_compliance_retries):
-                # Call LLM
+                # Call LLM — pass question for guided decoding (Tier 1)
                 if retry == 0:
                     logger.debug(f"Asking question {i+1}/{len(questions)}: {question.qkey}")
                 else:
                     logger.debug(f"Compliance retry {retry}/{max_compliance_retries} for {question.qkey}")
 
-                response = self.llm.complete(prompt)
+                response = self.llm.complete(prompt, question=question)
                 raw_answer = response.raw if response.raw else ""
 
-                # Parse answer - try letter first, then option text matching
+                # Tier 1: guided decoding already parsed the answer
                 answer = response.answer
+                tier = ""
+
+                if answer:
+                    tier = "tier1_guided"
+
+                # Tier 2: parser LLM fallback (for MCQ only)
+                if not answer and question.type == "mcq" and self.parser_llm and response.raw:
+                    answer = self.parser_llm.parse(response.raw, question)
+                    if answer:
+                        tier = "tier2_parser"
+
+                # Tier 3: option text matching (existing fallback)
                 if not answer and question.options and response.raw:
-                    # Letter parsing failed, try matching option text
                     answer = match_option_text(response.raw, question.options)
                     if answer:
-                        logger.info(f"Matched option text for {question.qkey}: {answer}")
+                        tier = "tier3_regex"
+
+                if answer:
+                    logger.info(f"[{tier}] {question.qkey}={answer} (raw={repr(raw_answer[:80])})")
+                else:
+                    logger.warning(f"[parse_fail] {question.qkey} raw={repr(raw_answer[:80])}")
 
                 # If we got a valid answer, break out of retry loop
                 if answer:

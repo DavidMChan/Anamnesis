@@ -16,6 +16,7 @@ from src.llm import (
     RetryableError,
     NonRetryableError,
 )
+from src.prompt import Question
 
 
 class TestOpenRouterClient:
@@ -156,8 +157,8 @@ class TestVLLMClient:
             assert payload["model"] == "meta-llama/Llama-3-70b"
             assert payload["temperature"] == 0.0
 
-    def test_vllm_uses_guided_json(self):
-        """vLLM client uses guided_json in extra_body for structured outputs."""
+    def test_vllm_uses_text_completion(self):
+        """vLLM client uses Completions API with text parsing."""
         with patch("httpx.Client") as mock_client_class:
             mock_client = MagicMock()
             mock_client_class.return_value.__enter__ = Mock(return_value=mock_client)
@@ -166,7 +167,7 @@ class TestVLLMClient:
             mock_response = Mock()
             mock_response.status_code = 200
             mock_response.json.return_value = {
-                "choices": [{"message": {"content": '{"answer": "B"}'}}]
+                "choices": [{"text": "(B) because it's the best", "finish_reason": "stop"}]
             }
             mock_client.post.return_value = mock_response
 
@@ -174,15 +175,14 @@ class TestVLLMClient:
                 endpoint="http://localhost:8000/v1",
                 model="test-model",
             )
-            result = client.complete("Test", {})
+            result = client.complete("Test")
 
             assert result.answer == "B"
 
-            # Verify guided_json is in extra_body
+            # Verify it uses the completions endpoint
             call_args = mock_client.post.call_args
-            payload = call_args.kwargs.get("json", {})
-            assert "extra_body" in payload
-            assert "guided_json" in payload["extra_body"]
+            url = call_args.args[0] if call_args.args else ""
+            assert "/completions" in url
 
 
 class TestRetryLogic:
@@ -417,9 +417,9 @@ class TestLLMResponseFromText:
         response = LLMResponse.from_text("Answer: (B)")
         assert response.answer == "B"
 
-    def test_parses_lowercase_letter(self):
-        """Parses lowercase letter and converts to uppercase."""
-        response = LLMResponse.from_text("c")
+    def test_parses_lowercase_letter_with_delimiter(self):
+        """Parses lowercase letter with delimiter and converts to uppercase."""
+        response = LLMResponse.from_text("c.")
         assert response.answer == "C"
 
     def test_parses_letter_in_text(self):
