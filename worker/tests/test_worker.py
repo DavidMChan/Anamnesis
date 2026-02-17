@@ -94,8 +94,8 @@ class TestUpdateTaskStatus:
         mock_db.increment_task_attempts.assert_called_with(task_id)
 
 
-class TestCallLLM:
-    """Tests for LLM interaction."""
+class TestProcessQuestionsInSeries:
+    """Tests for LLM interaction via process_questions_in_series."""
 
     def test_calls_llm_with_correct_prompt(self, processor, mock_db, mock_llm):
         """Processor builds correct prompt and calls LLM."""
@@ -104,7 +104,7 @@ class TestCallLLM:
             Question(qkey="q1", type="mcq", text="Do you like coding?", options=["Yes", "No"])
         ]
 
-        result = processor.call_llm(backstory, questions)
+        results = processor.process_questions_in_series(backstory, questions)
 
         mock_llm.complete.assert_called_once()
         call_args = mock_llm.complete.call_args
@@ -114,8 +114,8 @@ class TestCallLLM:
         assert "software engineer" in prompt
         assert "Do you like coding?" in prompt
 
-    def test_returns_llm_response(self, processor, mock_db, mock_llm):
-        """Returns parsed LLM response."""
+    def test_returns_answers_dict(self, processor, mock_db, mock_llm):
+        """Returns dict mapping qkey -> answer."""
         mock_llm.complete.return_value = LLMResponse(
             answer="B",
             reasoning="Because no.",
@@ -127,9 +127,9 @@ class TestCallLLM:
             Question(qkey="q1", type="mcq", text="Test?", options=["Yes", "No"])
         ]
 
-        result = processor.call_llm(backstory, questions)
+        results = processor.process_questions_in_series(backstory, questions)
 
-        assert result.answer == "B"
+        assert results["q1"] == "B"
 
 
 class TestStoreResult:

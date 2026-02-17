@@ -58,6 +58,11 @@ class LLMConfig:
     # Common settings
     temperature: float = field(default_factory=lambda: float(os.environ.get("LLM_TEMPERATURE", "0.0")))
     max_tokens: Optional[int] = field(default_factory=lambda: parse_max_tokens(os.environ.get("LLM_MAX_TOKENS", "512")))
+    use_guided_decoding: bool = field(default_factory=lambda: os.environ.get("USE_GUIDED_DECODING", "true").lower() == "true")
+
+    # Parser LLM (Tier 2 fallback for MCQ parsing)
+    parser_llm_api_key: str = field(default_factory=lambda: os.environ.get("PARSER_LLM_API_KEY", ""))
+    parser_llm_model: str = field(default_factory=lambda: os.environ.get("PARSER_LLM_MODEL", "google/gemini-2.0-flash-001"))
 
 
 @dataclass
