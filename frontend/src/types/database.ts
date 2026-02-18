@@ -7,10 +7,21 @@ export interface User {
 }
 
 export interface LLMConfig {
-  provider?: 'openai' | 'anthropic' | 'together' | 'vllm'
-  api_key?: string
-  vllm_endpoint?: string
-  model?: string
+  // Provider selection
+  provider?: 'openrouter' | 'vllm'
+
+  // OpenRouter settings
+  openrouter_model?: string  // e.g., "anthropic/claude-3-haiku"
+
+  // vLLM settings
+  vllm_endpoint?: string     // e.g., "http://localhost:8000/v1"
+  vllm_model?: string        // e.g., "meta-llama/Llama-3-70b"
+
+  // Generation settings
+  temperature?: number       // e.g., 0.0
+  max_tokens?: number        // e.g., 64
+
+  // Note: API keys are stored securely in Supabase Vault, not in this config
 }
 
 export interface Backstory {

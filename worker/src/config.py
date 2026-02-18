@@ -59,6 +59,40 @@ class LLMConfig:
     temperature: float = field(default_factory=lambda: float(os.environ.get("LLM_TEMPERATURE", "0.0")))
     max_tokens: Optional[int] = field(default_factory=lambda: parse_max_tokens(os.environ.get("LLM_MAX_TOKENS", "512")))
 
+    @classmethod
+    def from_user_config(
+        cls,
+        user_config: dict,
+        openrouter_api_key: Optional[str] = None,
+        vllm_api_key: Optional[str] = None,
+    ) -> "LLMConfig":
+        """
+        Create LLMConfig from user's database configuration.
+
+        Uses user settings with fallback to environment defaults.
+
+        Args:
+            user_config: User's llm_config from database
+            openrouter_api_key: Decrypted OpenRouter API key from Vault
+            vllm_api_key: Decrypted vLLM API key from Vault
+
+        Returns:
+            LLMConfig with user settings or env fallbacks
+        """
+        # Get defaults from environment
+        defaults = cls()
+
+        return cls(
+            provider=user_config.get("provider") or defaults.provider,
+            openrouter_api_key=openrouter_api_key or defaults.openrouter_api_key,
+            openrouter_model=user_config.get("openrouter_model") or defaults.openrouter_model,
+            vllm_endpoint=user_config.get("vllm_endpoint") or defaults.vllm_endpoint,
+            vllm_model=user_config.get("vllm_model") or defaults.vllm_model,
+            vllm_api_key=vllm_api_key or defaults.vllm_api_key,
+            temperature=user_config.get("temperature") if user_config.get("temperature") is not None else defaults.temperature,
+            max_tokens=user_config.get("max_tokens") if user_config.get("max_tokens") is not None else defaults.max_tokens,
+        )
+
 
 @dataclass
 class WorkerConfig:
