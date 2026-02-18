@@ -625,3 +625,49 @@ class TestFromCommaSeparated:
     def test_one_option_degenerate(self):
         result = LLMResponse.from_comma_separated("A", 1)
         assert result.answer == "A"
+
+    # --- Robust format handling ---
+
+    def test_parenthesized_letters(self):
+        """'(A), (B), (D)' → 'A,B,D'"""
+        result = LLMResponse.from_comma_separated("(A), (B), (D)", 5)
+        assert result.answer == "A,B,D"
+
+    def test_bracketed_letters(self):
+        """'[A], [C]' → 'A,C'"""
+        result = LLMResponse.from_comma_separated("[A], [C]", 4)
+        assert result.answer == "A,C"
+
+    def test_mixed_format(self):
+        """'A, (C), [D]' → 'A,C,D'"""
+        result = LLMResponse.from_comma_separated("A, (C), [D]", 4)
+        assert result.answer == "A,C,D"
+
+    def test_letters_with_trailing_period(self):
+        """'A, C, D.' → 'A,C,D'"""
+        result = LLMResponse.from_comma_separated("A, C, D.", 4)
+        assert result.answer == "A,C,D"
+
+    def test_option_text_fallback(self):
+        """'Software engineer/ML, Data scientist' matched to options."""
+        options = ["Software engineer/ML", "Data scientist", "Product manager", "Designer"]
+        result = LLMResponse.from_comma_separated(
+            "Software engineer/ML, Data scientist", 4, options=options
+        )
+        assert result.answer == "A,B"
+
+    def test_option_text_partial_match(self):
+        """Partial option text matches."""
+        options = ["Very excited", "Somewhat excited", "Not excited"]
+        result = LLMResponse.from_comma_separated(
+            "Very excited, Not excited", 3, options=options
+        )
+        assert result.answer == "A,C"
+
+    def test_option_text_no_match_returns_empty(self):
+        """Completely unrelated text returns empty."""
+        options = ["Red", "Blue", "Green"]
+        result = LLMResponse.from_comma_separated(
+            "I like chocolate", 3, options=options
+        )
+        assert result.answer == ""

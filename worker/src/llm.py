@@ -92,27 +92,65 @@ class LLMResponse:
         )
 
     @classmethod
-    def from_comma_separated(cls, text: str, num_options: int, require_all: bool = False) -> "LLMResponse":
+    def from_comma_separated(
+        cls,
+        text: str,
+        num_options: int,
+        require_all: bool = False,
+        options: "Optional[List[str]]" = None,
+    ) -> "LLMResponse":
         """
-        Parse comma-separated letters (e.g., "A, C, D").
+        Parse comma-separated letters from various formats.
+
+        Handles:
+        - Clean: "A, C, D"
+        - Parenthesized: "(A), (B), (D)"
+        - Bracketed: "[A], [B]"
+        - Mixed: "A, (C), D"
+        - Option text: "Software engineer/ML, Data scientist" (matched against options)
 
         Args:
             text: Raw response text
             num_options: Number of valid options (determines valid letter range)
             require_all: If True, all letters must be present (for ranking)
+            options: Optional list of option texts for text-matching fallback
 
         Returns:
             LLMResponse with comma-separated answer or empty if invalid
         """
-        letters = [l.strip().upper() for l in text.split(",")]
+        import re
         valid = {chr(65 + i) for i in range(num_options)}
+
+        # Extract letters from each comma-separated segment
+        # Strip parentheses, brackets, periods, spaces
+        segments = [s.strip() for s in text.split(",")]
+        letters = []
+        for seg in segments:
+            # Strip wrapping punctuation: (A) → A, [B] → B, "C" → C
+            cleaned = re.sub(r'^[\(\[\"\' ]+|[\)\]\"\' .]+$', '', seg).strip().upper()
+            if cleaned in valid:
+                letters.append(cleaned)
+
         # Deduplicate while preserving order
         seen = set()
         result = []
         for letter in letters:
-            if letter in valid and letter not in seen:
+            if letter not in seen:
                 seen.add(letter)
                 result.append(letter)
+
+        # If no letters found, try matching option text
+        if not result and options:
+            for seg in segments:
+                seg_lower = seg.strip().lower()
+                for idx, opt in enumerate(options):
+                    if opt.lower() in seg_lower or seg_lower in opt.lower():
+                        letter = chr(65 + idx)
+                        if letter not in seen:
+                            seen.add(letter)
+                            result.append(letter)
+                        break  # one match per segment
+
         if require_all and set(result) != valid:
             return cls(answer="", raw=text)  # Incomplete → retry
         if result:
@@ -496,10 +534,11 @@ class VLLMClient(BaseLLMClient):
                         return LLMResponse(answer=content.upper(), raw=content)
                 elif param_type == "regex":
                     num_options = len(question.options) if question and question.options else 0
+                    opts = question.options if question else None
                     if question and question.type == "multiple_select":
-                        return LLMResponse.from_comma_separated(content, num_options, require_all=False)
+                        return LLMResponse.from_comma_separated(content, num_options, require_all=False, options=opts)
                     elif question and question.type == "ranking":
-                        return LLMResponse.from_comma_separated(content, num_options, require_all=True)
+                        return LLMResponse.from_comma_separated(content, num_options, require_all=True, options=opts)
 
             # Open response: use raw text directly
             if question_type == "open_response":
@@ -508,7 +547,7 @@ class VLLMClient(BaseLLMClient):
 
             # Multiple select: parse comma-separated letters from natural response
             if question_type == "multiple_select" and question and question.options:
-                return LLMResponse.from_comma_separated(content, len(question.options), require_all=False)
+                return LLMResponse.from_comma_separated(content, len(question.options), require_all=False, options=question.options)
 
             return LLMResponse.from_text(content)
 
