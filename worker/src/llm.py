@@ -483,13 +483,15 @@ class VLLMClient(BaseLLMClient):
         if guided_params:
             param_type, param_value = guided_params
             payload["structured_outputs"] = {param_type: param_value}
-            # Remove stop sequences — guided decoding handles termination
-            payload.pop("stop", None)
             if param_type == "choice":
-                payload["max_tokens"] = 1  # Only need single letter for MCQ
+                # MCQ: single token, no stop sequences needed
+                payload.pop("stop", None)
+                payload["max_tokens"] = 1
             elif param_type == "regex":
+                # Regex: keep stop sequences so model can naturally terminate
+                # (critical for variable-length outputs like multiple_select)
                 num_options = len(question.options) if question and question.options else 4
-                payload["max_tokens"] = 3 * num_options  # Enough for all letters + separators
+                payload["max_tokens"] = 3 * num_options
 
         import logging
         logger = logging.getLogger(__name__)
@@ -571,11 +573,10 @@ class VLLMClient(BaseLLMClient):
             last = chr(64 + n)  # 'D' for 4 options
             if question.type == "mcq":
                 guided_params = ("choice", [chr(65 + i) for i in range(n)])
+            elif question.type == "multiple_select":
+                guided_params = ("regex", f"[A-{last}](, [A-{last}])*")
             elif question.type == "ranking":
                 guided_params = ("regex", f"[A-{last}](, [A-{last}]){{{n-1}}}")
-            # multiple_select: no guided decoding — regex forces model to
-            # fill all slots instead of choosing a subset. Let it respond
-            # naturally and parse the comma-separated letters.
             # open_response: no guided decoding
 
         last_error = None

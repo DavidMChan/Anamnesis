@@ -64,11 +64,11 @@ def get_payload(mock_client):
 # ===========================================================================
 
 
-class TestMultipleSelectNoGuidedDecoding:
-    """Tests for multiple_select: no guided decoding, parse from natural response."""
+class TestMultipleSelectGuidedDecoding:
+    """Tests for multiple_select: regex guided decoding WITH stop sequences."""
 
-    def test_vllm_multiple_select_no_structured_outputs(self):
-        """Multiple select does NOT use structured_outputs (regex forced all-select)."""
+    def test_vllm_multiple_select_uses_guided_regex(self):
+        """Multiple select uses structured_outputs.regex."""
         patcher, mock_client = mock_httpx_client(mock_vllm_response("A, C, D"))
         try:
             client = make_vllm_client()
@@ -78,12 +78,13 @@ class TestMultipleSelectNoGuidedDecoding:
             client.complete("Test prompt", question=question)
 
             payload = get_payload(mock_client)
-            assert "structured_outputs" not in payload
+            assert "structured_outputs" in payload
+            assert payload["structured_outputs"]["regex"] == "[A-D](, [A-D])*"
         finally:
             patcher.stop()
 
-    def test_vllm_multiple_select_uses_default_stop_sequences(self):
-        """Multiple select uses default stop sequences (not relaxed like open_response)."""
+    def test_vllm_multiple_select_keeps_stop_sequences(self):
+        """Multiple select keeps stop sequences so model can naturally terminate."""
         patcher, mock_client = mock_httpx_client(mock_vllm_response("A, C"))
         try:
             client = make_vllm_client()
@@ -93,24 +94,46 @@ class TestMultipleSelectNoGuidedDecoding:
             client.complete("Prompt", question=question)
 
             payload = get_payload(mock_client)
+            assert "stop" in payload
             assert payload["stop"] == ["\n", ".", "Question:"]
         finally:
             patcher.stop()
 
-    def test_vllm_multiple_select_default_max_tokens(self):
-        """Multiple select uses default max_tokens (not overridden)."""
+    def test_vllm_multiple_select_max_tokens(self):
+        """Multiple select max_tokens is 3 * num_options (upper bound)."""
         patcher, mock_client = mock_httpx_client(mock_vllm_response("A, B"))
         try:
-            client = make_vllm_client(max_tokens=128)
+            client = make_vllm_client()
             question = Question(qkey="q1", type="multiple_select", text="Select?",
                                 options=["A", "B", "C", "D", "E"])
 
             client.complete("Prompt", question=question)
 
             payload = get_payload(mock_client)
-            assert payload["max_tokens"] == 128  # default, not 3*N
+            assert payload["max_tokens"] == 15  # 3 * 5
         finally:
             patcher.stop()
+
+    def test_vllm_multiple_select_dynamic_options(self):
+        """Regex pattern adjusts to option count."""
+        test_cases = [
+            (2, "[A-B](, [A-B])*"),
+            (3, "[A-C](, [A-C])*"),
+            (5, "[A-E](, [A-E])*"),
+        ]
+        for num_options, expected_regex in test_cases:
+            options = [f"Opt{i}" for i in range(num_options)]
+            patcher, mock_client = mock_httpx_client(mock_vllm_response("A"))
+            try:
+                client = make_vllm_client()
+                question = Question(qkey="q1", type="multiple_select", text="Select?", options=options)
+
+                client.complete("Prompt", question=question)
+
+                payload = get_payload(mock_client)
+                assert payload["structured_outputs"]["regex"] == expected_regex
+            finally:
+                patcher.stop()
 
     def test_vllm_multiple_select_parses_comma_list(self):
         """Response 'A, C, D' is parsed as 'A,C,D'."""
