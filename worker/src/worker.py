@@ -162,14 +162,25 @@ class TaskProcessor:
                 if answer:
                     tier = "tier1_guided"
 
-                # Tier 2: parser LLM fallback (for MCQ only)
-                if not answer and question.type == "mcq" and self.parser_llm and response.raw:
+                # Open response: accept any non-empty text as valid, skip Tier 2/3
+                if question.type == "open_response":
+                    if answer:
+                        tier = "tier1_text"
+                        logger.info(f"[{tier}] {question.qkey}={repr(answer[:80])} (raw={repr(raw_answer[:80])})")
+                        break
+                    else:
+                        # Empty response — retry (model produced nothing)
+                        logger.warning(f"[parse_fail] {question.qkey} open_response empty, retrying")
+                        continue
+
+                # Tier 2: parser LLM fallback (MCQ, multiple_select, ranking)
+                if not answer and question.type in ("mcq", "multiple_select", "ranking") and self.parser_llm and response.raw:
                     answer = self.parser_llm.parse(response.raw, question)
                     if answer:
                         tier = "tier2_parser"
 
-                # Tier 3: option text matching (existing fallback)
-                if not answer and question.options and response.raw:
+                # Tier 3: option text matching (MCQ only — doesn't apply to multi-select/ranking)
+                if not answer and question.type == "mcq" and question.options and response.raw:
                     answer = match_option_text(response.raw, question.options)
                     if answer:
                         tier = "tier3_regex"
