@@ -39,6 +39,7 @@ class RabbitMQConfig:
     url: str = field(default_factory=lambda: os.environ.get("RABBITMQ_URL", "amqp://localhost"))
     queue_name: str = field(default_factory=lambda: os.environ.get("RABBITMQ_QUEUE", "survey_tasks"))
     prefetch_count: int = field(default_factory=lambda: int(os.environ.get("RABBITMQ_PREFETCH", "1")))
+    heartbeat: int = field(default_factory=lambda: int(os.environ.get("RABBITMQ_HEARTBEAT", "0")))
 
 
 @dataclass

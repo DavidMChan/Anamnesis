@@ -54,6 +54,11 @@ class QueueConsumer:
         for attempt in range(max_retries):
             try:
                 params = pika.URLParameters(self.config.url)
+                # Disable heartbeat (0) so long-running task callbacks
+                # don't cause RabbitMQ to kill the connection.
+                # Each survey task processes multiple questions in series
+                # which can take minutes — well beyond the default 60s heartbeat.
+                params.heartbeat = self.config.heartbeat
                 self.connection = pika.BlockingConnection(params)
                 self.channel = self.connection.channel()
 
@@ -66,7 +71,10 @@ class QueueConsumer:
                 # Set prefetch count for fair dispatch
                 self.channel.basic_qos(prefetch_count=self.config.prefetch_count)
 
-                logger.info(f"Connected to RabbitMQ, queue: {self.config.queue_name}")
+                logger.info(
+                    f"Connected to RabbitMQ, queue: {self.config.queue_name}, "
+                    f"heartbeat: {params.heartbeat}"
+                )
                 return
 
             except pika.exceptions.AMQPConnectionError as e:
