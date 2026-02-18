@@ -48,6 +48,7 @@ AS $$
 DECLARE
     v_secret_name TEXT;
     v_existing_id UUID;
+    v_description TEXT;
 BEGIN
     IF p_user_id IS NULL THEN
         RAISE EXCEPTION 'user_id cannot be null';
@@ -60,15 +61,14 @@ BEGIN
     END IF;
 
     v_secret_name := 'user_' || p_user_id::TEXT || '_' || p_key_type || '_key';
+    v_description := p_key_type || ' API key for user ' || p_user_id::TEXT;
 
     SELECT id INTO v_existing_id FROM vault.secrets WHERE name = v_secret_name;
 
     IF v_existing_id IS NOT NULL THEN
-        UPDATE vault.secrets SET secret = p_api_key, updated_at = NOW()
-        WHERE id = v_existing_id;
+        PERFORM vault.update_secret(v_existing_id, p_api_key, v_secret_name, v_description);
     ELSE
-        INSERT INTO vault.secrets (secret, name, description)
-        VALUES (p_api_key, v_secret_name, p_key_type || ' API key for user ' || p_user_id::TEXT);
+        PERFORM vault.create_secret(p_api_key, v_secret_name, v_description);
     END IF;
 
     RETURN TRUE;
