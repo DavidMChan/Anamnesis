@@ -488,8 +488,8 @@ class VLLMClient(BaseLLMClient):
                 payload.pop("stop", None)
                 payload["max_tokens"] = 1
             elif param_type == "regex":
-                # Regex: keep stop sequences so model can naturally terminate
-                # (critical for variable-length outputs like multiple_select)
+                # Regex patterns include \n? so the model can output \n to stop
+                # (stop sequence "\n" then fires and strips it from output)
                 num_options = len(question.options) if question and question.options else 4
                 payload["max_tokens"] = 3 * num_options
 
@@ -574,9 +574,9 @@ class VLLMClient(BaseLLMClient):
             if question.type == "mcq":
                 guided_params = ("choice", [chr(65 + i) for i in range(n)])
             elif question.type == "multiple_select":
-                guided_params = ("regex", f"[A-{last}](, [A-{last}])*")
+                guided_params = ("regex", f"[A-{last}](, [A-{last}])*\n?")
             elif question.type == "ranking":
-                guided_params = ("regex", f"[A-{last}](, [A-{last}]){{{n-1}}}")
+                guided_params = ("regex", f"[A-{last}](, [A-{last}]){{{n-1}}}\n?")
             # open_response: no guided decoding
 
         last_error = None
