@@ -6,7 +6,10 @@ import json
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from .prompt import Question
 
 import httpx
 from tenacity import (
@@ -89,6 +92,72 @@ class LLMResponse:
         )
 
     @classmethod
+    def from_comma_separated(
+        cls,
+        text: str,
+        num_options: int,
+        require_all: bool = False,
+        options: "Optional[List[str]]" = None,
+    ) -> "LLMResponse":
+        """
+        Parse comma-separated letters from various formats.
+
+        Handles:
+        - Clean: "A, C, D"
+        - Parenthesized: "(A), (B), (D)"
+        - Bracketed: "[A], [B]"
+        - Mixed: "A, (C), D"
+        - Option text: "Software engineer/ML, Data scientist" (matched against options)
+
+        Args:
+            text: Raw response text
+            num_options: Number of valid options (determines valid letter range)
+            require_all: If True, all letters must be present (for ranking)
+            options: Optional list of option texts for text-matching fallback
+
+        Returns:
+            LLMResponse with comma-separated answer or empty if invalid
+        """
+        import re
+        valid = {chr(65 + i) for i in range(num_options)}
+
+        # Extract letters from each comma-separated segment
+        # Strip parentheses, brackets, periods, spaces
+        segments = [s.strip() for s in text.split(",")]
+        letters = []
+        for seg in segments:
+            # Strip wrapping punctuation: (A) → A, [B] → B, "C" → C
+            cleaned = re.sub(r'^[\(\[\"\' ]+|[\)\]\"\' .]+$', '', seg).strip().upper()
+            if cleaned in valid:
+                letters.append(cleaned)
+
+        # Deduplicate while preserving order
+        seen = set()
+        result = []
+        for letter in letters:
+            if letter not in seen:
+                seen.add(letter)
+                result.append(letter)
+
+        # If no letters found, try matching option text
+        if not result and options:
+            for seg in segments:
+                seg_lower = seg.strip().lower()
+                for idx, opt in enumerate(options):
+                    if opt.lower() in seg_lower or seg_lower in opt.lower():
+                        letter = chr(65 + idx)
+                        if letter not in seen:
+                            seen.add(letter)
+                            result.append(letter)
+                        break  # one match per segment
+
+        if require_all and set(result) != valid:
+            return cls(answer="", raw=text)  # Incomplete → retry
+        if result:
+            return cls(answer=",".join(result), raw=text)
+        return cls(answer="", raw=text)
+
+    @classmethod
     def from_text(cls, text: str) -> "LLMResponse":
         """
         Parse LLM response from plain text (anthology style).
@@ -135,13 +204,14 @@ class BaseLLMClient(ABC):
     """Abstract base class for LLM clients."""
 
     @abstractmethod
-    def complete(self, prompt: str, response_schema: dict) -> LLMResponse:
+    def complete(self, prompt: str, response_schema: dict = None, *, question: "Optional[Question]" = None) -> LLMResponse:
         """
         Get completion from LLM with structured output.
 
         Args:
             prompt: The input prompt
             response_schema: JSON schema for expected response format
+            question: Optional question metadata (enables guided decoding for MCQ on vLLM)
 
         Returns:
             Parsed LLMResponse
@@ -287,7 +357,7 @@ class OpenRouterClient(BaseLLMClient):
             else:
                 return LLMResponse.from_text(content)
 
-    def complete(self, prompt: str, response_schema: dict) -> LLMResponse:
+    def complete(self, prompt: str, response_schema: dict = None, *, question: "Optional[Question]" = None) -> LLMResponse:
         """Get completion with retry logic, truncation handling, and text fallback."""
         import logging
         logger = logging.getLogger(__name__)
@@ -341,6 +411,9 @@ class VLLMClient(BaseLLMClient):
 
     Designed for base models (not instruction-tuned) following anthology approach.
     Uses /v1/completions endpoint which doesn't require chat templates.
+
+    Supports guided decoding via structured_outputs.choice for MCQ questions,
+    which constrains generation to valid option letters at the token level.
     """
 
     def __init__(
@@ -353,6 +426,7 @@ class VLLMClient(BaseLLMClient):
         max_retries: int = 3,
         timeout: float = 120.0,
         top_p: float = 1.0,
+        use_guided_decoding: bool = True,
     ):
         self.endpoint = endpoint.rstrip("/")
         self.model = model
@@ -362,17 +436,24 @@ class VLLMClient(BaseLLMClient):
         self.max_retries = max_retries
         self.timeout = timeout
         self.top_p = top_p
+        self.use_guided_decoding = use_guided_decoding
 
-    def _make_request(self, prompt: str, max_tokens_override: Optional[int] = None) -> LLMResponse:
+    def _make_request(
+        self,
+        prompt: str,
+        max_tokens_override: Optional[int] = None,
+        guided_params: Optional[tuple] = None,
+        question: "Optional[Question]" = None,
+    ) -> LLMResponse:
         """
         Make a request using the Completions API.
-
-        This is the standard approach for base models - just text completion.
-        The prompt should already be formatted with "Answer:" at the end.
 
         Args:
             prompt: The full prompt (backstory + questions + "Answer:")
             max_tokens_override: Override max_tokens for this request
+            guided_params: Tuple of (type, value) for structured_outputs.
+                           ("choice", ["A","B","C","D"]) or ("regex", "[A-D](, [A-D])*")
+            question: Question metadata for response dispatch
         """
         url = f"{self.endpoint}/completions"
 
@@ -382,20 +463,41 @@ class VLLMClient(BaseLLMClient):
 
         effective_max_tokens = max_tokens_override if max_tokens_override is not None else self.max_tokens
 
+        # Determine stop sequences based on question type
+        question_type = question.type if question else None
+        if question_type == "open_response":
+            stop_sequences = ["Question:"]
+        else:
+            stop_sequences = ["\n", ".", "Question:"]
+
         payload: Dict[str, Any] = {
             "model": self.model,
             "prompt": prompt,
             "temperature": self.temperature,
             "max_tokens": effective_max_tokens,
             "top_p": self.top_p,
-            # Stop at newline, period, or new question
-            # Period helps truncate conversational responses early
-            "stop": ["\n", ".", "Question:"],
+            "stop": stop_sequences,
         }
+
+        # Add guided decoding constraint
+        if guided_params:
+            param_type, param_value = guided_params
+            payload["structured_outputs"] = {param_type: param_value}
+            if param_type == "choice":
+                # MCQ: single token, no stop sequences needed
+                payload.pop("stop", None)
+                payload["max_tokens"] = 1
+            elif param_type == "regex":
+                # Regex patterns include \n? so the model can output \n to stop
+                # (stop sequence "\n" then fires and strips it from output)
+                num_options = len(question.options) if question and question.options else 4
+                payload["max_tokens"] = 3 * num_options
 
         import logging
         logger = logging.getLogger(__name__)
         logger.info(f"vLLM prompt (last 500 chars): {repr(prompt[-500:])}")
+        if guided_params:
+            logger.info(f"vLLM guided_params: {guided_params}")
 
         with httpx.Client(timeout=self.timeout) as client:
             response = client.post(url, headers=headers, json=payload)
@@ -423,30 +525,65 @@ class VLLMClient(BaseLLMClient):
             # Completions API returns 'text' field
             content = data["choices"][0].get("text", "").strip()
 
-            import logging
             logging.getLogger(__name__).info(f"vLLM raw response: {repr(content[:200] if len(content) > 200 else content)}")
+
+            # Dispatch response parsing based on guided decoding type
+            if guided_params:
+                param_type, param_value = guided_params
+                if param_type == "choice":
+                    # MCQ: existing logic
+                    if content and content.upper() in param_value:
+                        return LLMResponse(answer=content.upper(), raw=content)
+                elif param_type == "regex":
+                    num_options = len(question.options) if question and question.options else 0
+                    opts = question.options if question else None
+                    if question and question.type == "multiple_select":
+                        return LLMResponse.from_comma_separated(content, num_options, require_all=False, options=opts)
+                    elif question and question.type == "ranking":
+                        return LLMResponse.from_comma_separated(content, num_options, require_all=True, options=opts)
+
+            # Open response: use raw text directly
+            if question_type == "open_response":
+                text = content.strip()
+                return LLMResponse(answer=text if text else "", raw=content)
+
+            # Multiple select: parse comma-separated letters from natural response
+            if question_type == "multiple_select" and question and question.options:
+                return LLMResponse.from_comma_separated(content, len(question.options), require_all=False, options=question.options)
 
             return LLMResponse.from_text(content)
 
-    def complete(self, prompt: str, response_schema: dict = None) -> LLMResponse:
+    def complete(self, prompt: str, response_schema: dict = None, *, question: "Optional[Question]" = None) -> LLMResponse:
         """
         Get completion from vLLM using Completions API.
-
-        Note: response_schema is ignored for vLLM - we use text parsing instead.
-        This matches anthology's approach for base models.
 
         Args:
             prompt: The full prompt (should end with "Answer:")
             response_schema: Ignored for vLLM (kept for interface compatibility)
+            question: Optional question metadata. Enables type-appropriate
+                      guided decoding (choice for MCQ, regex for multiple_select/ranking).
         """
         import logging
         logger = logging.getLogger(__name__)
+
+        # Determine guided decoding params based on question type
+        guided_params = None
+        if self.use_guided_decoding and question is not None and question.options:
+            n = len(question.options)
+            last = chr(64 + n)  # 'D' for 4 options
+            if question.type == "mcq":
+                guided_params = ("choice", [chr(65 + i) for i in range(n)])
+            elif question.type == "multiple_select":
+                guided_params = ("regex", f"[A-{last}](, [A-{last}])*\n?")
+            elif question.type == "ranking":
+                guided_params = ("regex", f"[A-{last}](, [A-{last}]){{{n-1}}}\n?")
+            # open_response: no guided decoding
 
         last_error = None
 
         for attempt in range(self.max_retries):
             try:
-                return self._make_request(prompt)
+                return self._make_request(prompt, guided_params=guided_params, question=question)
             except NonRetryableError:
                 raise
             except RetryableError as e:

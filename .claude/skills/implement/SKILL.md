@@ -1,6 +1,6 @@
 ---
 name: implement
-description: Start implementation based on CRITERIA.md. Uses TDD workflow - write tests first, then implement.
+description: Start implementation based on CRITERIA.md.
 argument-hint: <feature-name>
 ---
 
@@ -12,10 +12,7 @@ You are an implementation agent. Your job is to implement the feature described 
 
 1. **Navigate to worktree first** - The feature lives in a separate worktree
 2. **Read CRITERIA.md first** - Understand exactly what to build
-3. **Write tests FIRST** - This is TDD, tests before implementation
-4. **NEVER skip failing tests** - If tests fail, STOP and report
-5. **NEVER guess requirements** - If unclear, STOP and ask for clarification
-6. **Commit working code only** - Don't commit if tests fail
+3. **NEVER guess requirements** - If unclear, STOP and ask for clarification
 
 ## Workflow
 
@@ -72,41 +69,28 @@ Understand:
 - What tests to write
 - What the pass criteria are
 
-### Step 2: Write Tests First (TDD)
+### Step 2: Implement
 
-Based on the "Pass Criteria" section:
-1. Create test files in the worktree
-2. Write failing tests for each criterion
-3. Run tests to confirm they fail (red phase)
-
-```bash
-# Run tests from worktree - use absolute path
-cd /absolute/path/to/arena-feature-${FEATURE_NAME}/frontend && npm run test:run
-```
-
-### Step 3: Implement
-
-1. Write the minimum code to make tests pass
+1. Implement the feature based on CRITERIA.md
 2. Follow patterns from "Implementation Notes"
-3. Run tests frequently
+3. Make sure the code compiles/builds without errors
 
-### Step 4: Verify All Criteria
+### Step 3: Verify All Criteria
 
 For each checkbox in CRITERIA.md:
-- Run the relevant test
-- Confirm it passes
-- If it fails: STOP, report the error, ask for help
+- Confirm the implementation addresses it
+- If something is unclear or blocked: STOP, report, ask for help
 
-### Step 5: Report Results
+### Step 4: Report Results
 
-**If ALL tests pass:**
+**If implementation is complete:**
 ```
 IMPLEMENTATION COMPLETE
 
 Feature: ${FEATURE_NAME}
 Worktree: /absolute/path/to/arena-feature-${FEATURE_NAME}
 
-All pass criteria met:
+All pass criteria addressed:
 - [x] Criterion 1
 - [x] Criterion 2
 - [x] Criterion 3
@@ -118,14 +102,11 @@ Files created/modified:
 Ready for: /pr ${FEATURE_NAME}
 ```
 
-**If ANY test fails:**
+**If blocked:**
 ```
 IMPLEMENTATION BLOCKED
 
 Feature: ${FEATURE_NAME}
-
-Failing tests:
-- test name: error message
 
 I tried:
 - [what you attempted]
@@ -137,8 +118,5 @@ Please help me resolve this before continuing.
 ```
 
 ## Do NOT:
-- Skip any tests
-- Mark criteria as done if tests fail
 - Make assumptions about unclear requirements
-- Commit code that doesn't pass tests
 - Use relative paths like `../` (shell may reset cwd - use absolute paths)

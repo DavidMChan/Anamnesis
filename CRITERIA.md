@@ -65,6 +65,25 @@ Each key maps to `{ "value": "<top choice text>", "distribution": { "<option tex
    - Delete old seed data
    - Insert new keys matching the 11 JSONL dimensions with correct enum_values
 
+### Files to Modify
+
+- **`worker/src/llm.py`** — Core changes:
+  - `VLLMClient.complete()`: Expand guided decoding logic from MCQ-only to all types with options
+  - `VLLMClient._make_request()`: Accept `guided_regex` parameter alongside existing `guided_choices`; handle different stop sequence and max_tokens strategies per type
+  - Add `LLMResponse.from_comma_separated()` class method for parsing comma-separated letter lists (used by both multiple_select and ranking)
+  - Add open_response handling: use raw text directly as the answer
+
+- **`worker/src/worker.py`** — Changes:
+  - `process_questions_in_series()`: Extend Tier 2 (parser LLM) to handle multiple_select and ranking, not just MCQ
+  - Modify compliance forcing loop: skip retries for open_response (any text is valid)
+  - Add validation logic for multiple_select (valid letters, no duplicates) and ranking (complete permutation)
+
+- **`worker/src/parser.py`** — Changes:
+  - Extend `ParserLLM.parse()` to support multiple_select and ranking with type-specific prompt templates
+  - Add `PARSER_PROMPT_MULTIPLE_SELECT` and `PARSER_PROMPT_RANKING` templates
+
+- **`worker/src/prompt.py`** — No changes needed (existing prompts are already correct)
+
 ### Files to Create
 - `worker/scripts/import_jsonl_backstories.py` — Streaming JSONL importer with demographics extraction
 - `supabase/migrations/007_add_vuid_column.sql` — Add vuid column + update demographic_keys

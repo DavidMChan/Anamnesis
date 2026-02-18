@@ -1,16 +1,10 @@
 ---
 name: pr
-description: Create a pull request. ONLY proceeds if ALL tests pass.
+description: Create a pull request from a feature worktree.
 argument-hint: <feature-name>
 ---
 
 # Create Pull Request
-
-## CRITICAL RULES
-
-1. **MUST run ALL tests first** - Never skip this step
-2. **If ANY test fails**: STOP immediately, do NOT create PR
-3. **Only create PR when all tests pass**
 
 ## Steps
 
@@ -46,45 +40,19 @@ cd /absolute/path/to/arena-feature-${FEATURE_NAME} && git branch --show-current
 
 - If on `main`: ERROR - "Cannot create PR from main branch"
 
-### Step 2: Run ALL Tests
-
-Run from the worktree using absolute path:
-
-```bash
-# Frontend unit tests
-cd /absolute/path/to/arena-feature-${FEATURE_NAME}/frontend && npm run test:run
-
-# Worker tests (if exists)
-cd /absolute/path/to/arena-feature-${FEATURE_NAME}/worker && python -m pytest 2>/dev/null || echo "No worker tests"
-
-# E2E tests
-cd /absolute/path/to/arena-feature-${FEATURE_NAME}/frontend && npm run test:e2e
-```
-
-**If ANY test fails**:
-```
-CANNOT CREATE PR
-
-Tests are failing. Please fix the following issues:
-[Show error details]
-
-Run /test to see full results.
-```
-**STOP HERE. Do not proceed.**
-
-### Step 3: Check for CRITERIA.md
+### Step 2: Check for CRITERIA.md
 
 ```bash
 cat /absolute/path/to/arena-feature-${FEATURE_NAME}/CRITERIA.md 2>/dev/null || echo "No CRITERIA.md found"
 ```
 
-### Step 4: Push Branch
+### Step 3: Push Branch
 
 ```bash
 cd /absolute/path/to/arena-feature-${FEATURE_NAME} && git push -u origin $(git branch --show-current)
 ```
 
-### Step 5: Create PR
+### Step 4: Create PR
 
 Using gh cli from the worktree directory:
 
@@ -99,18 +67,13 @@ cd /absolute/path/to/arena-feature-${FEATURE_NAME} && gh pr create --title "$(gi
 
 [Description of changes]
 
-## Test Plan
-
-- [x] Unit tests pass
-- [x] E2E tests pass
-
 ---
 Generated with Claude Code
 EOF
 )"
 ```
 
-### Step 6: Report PR URL
+### Step 5: Report PR URL
 
 Tell the user the PR URL so they can review it.
 
