@@ -19,7 +19,13 @@ export interface LLMConfig {
 
   // Generation settings
   temperature?: number       // e.g., 0.0
-  max_tokens?: number        // e.g., 64
+  max_tokens?: number        // e.g., 512
+
+  // vLLM-specific inference settings
+  use_guided_decoding?: boolean  // Enable vLLM guided decoding for MCQ parsing
+
+  // Parser LLM (Tier 2 fallback for MCQ parsing via OpenRouter)
+  parser_llm_model?: string  // e.g., "google/gemini-2.0-flash-001"
 
   // Note: API keys are stored securely in Supabase Vault, not in this config
 }

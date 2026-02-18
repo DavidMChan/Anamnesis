@@ -345,6 +345,27 @@ export function Settings() {
                   setSaved={setSaved}
                   optional
                 />
+
+                <div className="space-y-2">
+                  <Label htmlFor="use_guided_decoding">Guided Decoding</Label>
+                  <Select
+                    value={llmConfig.use_guided_decoding === false ? 'false' : 'true'}
+                    onValueChange={(value) =>
+                      setLlmConfig({ ...llmConfig, use_guided_decoding: value === 'true' })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="true">Enabled</SelectItem>
+                      <SelectItem value="false">Disabled</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">
+                    Use vLLM guided decoding to constrain MCQ responses to valid options.
+                  </p>
+                </div>
               </div>
             )}
 
@@ -393,12 +414,25 @@ export function Settings() {
                         max_tokens: e.target.value ? parseInt(e.target.value, 10) : undefined,
                       })
                     }
-                    placeholder="64"
+                    placeholder="512"
                   />
                   <p className="text-xs text-muted-foreground">
                     Maximum tokens in response.
                   </p>
                 </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="parser_llm_model">Parser LLM Model</Label>
+                <Input
+                  id="parser_llm_model"
+                  value={llmConfig.parser_llm_model || ''}
+                  onChange={(e) => setLlmConfig({ ...llmConfig, parser_llm_model: e.target.value })}
+                  placeholder="google/gemini-2.0-flash-001"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Tier 2 fallback model for MCQ answer parsing (via OpenRouter). Leave empty for default.
+                </p>
               </div>
             </div>
           </CardContent>
