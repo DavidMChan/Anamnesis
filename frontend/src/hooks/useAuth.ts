@@ -15,7 +15,6 @@ interface AuthState {
   profile: User | null
   session: Session | null
   loading: boolean
-  maskedApiKey: string | null  // Legacy: defaults to openrouter
   maskedApiKeys: MaskedApiKeys
 }
 
@@ -25,7 +24,6 @@ export function useAuth() {
     profile: null,
     session: null,
     loading: true,
-    maskedApiKey: null,
     maskedApiKeys: { openrouter: null, vllm: null },
   })
 
@@ -43,14 +41,11 @@ export function useAuth() {
     return data as User
   }, [])
 
-  const fetchMaskedApiKey = useCallback(async (keyType?: ApiKeyType) => {
-    // If no keyType specified, use legacy no-arg version (defaults to openrouter)
-    const { data, error } = keyType
-      ? await supabase.rpc('get_my_masked_api_key', { p_key_type: keyType })
-      : await supabase.rpc('get_my_masked_api_key')
+  const fetchMaskedApiKey = useCallback(async (keyType: ApiKeyType) => {
+    const { data, error } = await supabase.rpc('get_my_masked_api_key', { p_key_type: keyType })
 
     if (error) {
-      console.error(`Error fetching masked API key (${keyType || 'default'}):`, error)
+      console.error(`Error fetching masked API key (${keyType}):`, error)
       return null
     }
     return data as string | null
@@ -83,7 +78,6 @@ export function useAuth() {
         fetchAllMaskedApiKeys().then((maskedApiKeys) => {
           setState((prev) => ({
             ...prev,
-            maskedApiKey: maskedApiKeys.openrouter,
             maskedApiKeys,
           }))
         })
@@ -110,7 +104,6 @@ export function useAuth() {
         fetchAllMaskedApiKeys().then((maskedApiKeys) => {
           setState((prev) => ({
             ...prev,
-            maskedApiKey: maskedApiKeys.openrouter,
             maskedApiKeys,
           }))
         })
@@ -187,7 +180,6 @@ export function useAuth() {
     const maskedApiKeys = await fetchAllMaskedApiKeys()
     setState((prev) => ({
       ...prev,
-      maskedApiKey: maskedApiKeys.openrouter,
       maskedApiKeys,
     }))
 
@@ -210,7 +202,6 @@ export function useAuth() {
     const maskedApiKeys = await fetchAllMaskedApiKeys()
     setState((prev) => ({
       ...prev,
-      maskedApiKey: maskedApiKeys.openrouter,
       maskedApiKeys,
     }))
 
@@ -221,7 +212,6 @@ export function useAuth() {
     const maskedApiKeys = await fetchAllMaskedApiKeys()
     setState((prev) => ({
       ...prev,
-      maskedApiKey: maskedApiKeys.openrouter,
       maskedApiKeys,
     }))
     return maskedApiKeys
@@ -232,7 +222,6 @@ export function useAuth() {
     profile: state.profile,
     session: state.session,
     loading: state.loading,
-    maskedApiKey: state.maskedApiKey,
     maskedApiKeys: state.maskedApiKeys,
     signIn,
     signUp,

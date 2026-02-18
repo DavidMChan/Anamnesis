@@ -257,24 +257,47 @@ export function Settings() {
               </p>
             </div>
 
-            {/* OpenRouter Settings */}
+            {/* API Keys — always visible so both can be managed independently */}
+            <div className="space-y-4 rounded-lg border p-4">
+              <div className="flex items-center gap-2 text-sm font-medium">
+                <Key className="h-4 w-4" />
+                API Keys
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Both keys are stored independently. The OpenRouter key is also used for the parser LLM fallback.
+              </p>
+
+              <ApiKeyField
+                label="OpenRouter API Key"
+                keyType="openrouter"
+                maskedKey={maskedApiKeys.openrouter}
+                onStore={storeApiKey}
+                onClear={clearApiKey}
+                saving={saving}
+                setSaving={setSaving}
+                setSaved={setSaved}
+              />
+
+              <ApiKeyField
+                label="vLLM API Key"
+                keyType="vllm"
+                maskedKey={maskedApiKeys.vllm}
+                onStore={storeApiKey}
+                onClear={clearApiKey}
+                saving={saving}
+                setSaving={setSaving}
+                setSaved={setSaved}
+                optional
+              />
+            </div>
+
+            {/* OpenRouter Model Settings */}
             {provider === 'openrouter' && (
               <div className="space-y-4 rounded-lg border p-4">
                 <div className="flex items-center gap-2 text-sm font-medium">
                   <div className="h-2 w-2 rounded-full bg-green-500" />
-                  OpenRouter Settings
+                  OpenRouter Model
                 </div>
-
-                <ApiKeyField
-                  label="API Key"
-                  keyType="openrouter"
-                  maskedKey={maskedApiKeys.openrouter}
-                  onStore={storeApiKey}
-                  onClear={clearApiKey}
-                  saving={saving}
-                  setSaving={setSaving}
-                  setSaved={setSaved}
-                />
 
                 <div className="space-y-2">
                   <Label htmlFor="openrouter_model">Model</Label>
@@ -300,12 +323,12 @@ export function Settings() {
               </div>
             )}
 
-            {/* vLLM Settings */}
+            {/* vLLM Model Settings */}
             {provider === 'vllm' && (
               <div className="space-y-4 rounded-lg border p-4">
                 <div className="flex items-center gap-2 text-sm font-medium">
                   <div className="h-2 w-2 rounded-full bg-purple-500" />
-                  vLLM Settings
+                  vLLM Server
                 </div>
 
                 <div className="space-y-2">
@@ -333,18 +356,6 @@ export function Settings() {
                     The model name as configured on your vLLM server.
                   </p>
                 </div>
-
-                <ApiKeyField
-                  label="API Key"
-                  keyType="vllm"
-                  maskedKey={maskedApiKeys.vllm}
-                  onStore={storeApiKey}
-                  onClear={clearApiKey}
-                  saving={saving}
-                  setSaving={setSaving}
-                  setSaved={setSaved}
-                  optional
-                />
 
                 <div className="space-y-2">
                   <Label htmlFor="use_guided_decoding">Guided Decoding</Label>
