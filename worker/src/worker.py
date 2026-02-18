@@ -133,12 +133,17 @@ class TaskProcessor:
         results: Dict[str, str] = {}
         context = ""
 
+        # Calculate suggested word count for open response (approx 2/3 of max_tokens)
+        llm_max_tokens = getattr(self.llm, "max_tokens", None)
+        open_response_max_words = int(llm_max_tokens * 2 / 3) if isinstance(llm_max_tokens, (int, float)) else None
+
         for i, question in enumerate(questions):
             # Build prompt based on whether this is first question or follow-up
+            max_words = open_response_max_words if question.type == "open_response" else None
             if i == 0:
-                prompt = build_initial_prompt(backstory, question)
+                prompt = build_initial_prompt(backstory, question, max_words=max_words)
             else:
-                prompt = build_followup_prompt(context, question)
+                prompt = build_followup_prompt(context, question, max_words=max_words)
 
             # Compliance forcing: retry until we get a parseable answer (like anthology)
             max_compliance_retries = 10  # Anthology uses 100, we use 10 for now
