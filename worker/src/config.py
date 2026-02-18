@@ -58,6 +58,10 @@ class LLMConfig:
     # Common settings
     temperature: float = field(default_factory=lambda: float(os.environ.get("LLM_TEMPERATURE", "0.0")))
     max_tokens: Optional[int] = field(default_factory=lambda: parse_max_tokens(os.environ.get("LLM_MAX_TOKENS", "512")))
+    use_guided_decoding: bool = field(default_factory=lambda: os.environ.get("USE_GUIDED_DECODING", "true").lower() == "true")
+
+    # Parser LLM (Tier 2 fallback for MCQ parsing) — reuses OpenRouter API key
+    parser_llm_model: str = field(default_factory=lambda: os.environ.get("PARSER_LLM_MODEL", "google/gemini-2.0-flash-001"))
 
     @classmethod
     def from_user_config(
@@ -91,6 +95,8 @@ class LLMConfig:
             vllm_api_key=vllm_api_key or defaults.vllm_api_key,
             temperature=user_config.get("temperature") if user_config.get("temperature") is not None else defaults.temperature,
             max_tokens=user_config.get("max_tokens") if user_config.get("max_tokens") is not None else defaults.max_tokens,
+            use_guided_decoding=user_config.get("use_guided_decoding") if user_config.get("use_guided_decoding") is not None else defaults.use_guided_decoding,
+            parser_llm_model=user_config.get("parser_llm_model") or defaults.parser_llm_model,
         )
 
 

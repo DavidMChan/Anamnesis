@@ -8,7 +8,8 @@ from typing import Optional, Dict, Any
 
 from src.config import get_config, LLMConfig
 from src.db import DatabaseClient
-from src.llm import LLMClient, BaseLLMClient
+from src.llm import LLMClient, VLLMClient, BaseLLMClient
+from src.parser import ParserLLM
 from src.queue import QueueConsumer
 from src.worker import TaskProcessor
 
@@ -31,16 +32,26 @@ def create_llm_client(llm_config: LLMConfig) -> BaseLLMClient:
             max_tokens=llm_config.max_tokens,
         )
     elif llm_config.provider == "vllm":
-        return LLMClient.create(
-            provider="vllm",
+        return VLLMClient(
             endpoint=llm_config.vllm_endpoint,
             model=llm_config.vllm_model,
             api_key=llm_config.vllm_api_key or None,
             temperature=llm_config.temperature,
-            max_tokens=llm_config.max_tokens,
+            max_tokens=llm_config.max_tokens if llm_config.max_tokens is not None else 128,
+            use_guided_decoding=llm_config.use_guided_decoding,
         )
     else:
         raise ValueError(f"Unknown LLM provider: {llm_config.provider}")
+
+
+def create_parser_llm(llm_config: LLMConfig) -> Optional[ParserLLM]:
+    """Create a parser LLM from config (Tier 2 fallback for MCQ parsing)."""
+    if llm_config.openrouter_api_key:
+        return ParserLLM(
+            api_key=llm_config.openrouter_api_key,
+            model=llm_config.parser_llm_model,
+        )
+    return None
 
 
 def get_llm_config_for_user(db: DatabaseClient, user_id: str, default_config: LLMConfig) -> LLMConfig:
@@ -97,49 +108,54 @@ def main():
     # Default LLM config (from environment)
     default_llm_config = config.llm
 
-    # Cache for LLM clients per user
+    # Cache for LLM clients and parser LLMs per user
     llm_cache: Dict[str, BaseLLMClient] = {}
+    parser_cache: Dict[str, Optional[ParserLLM]] = {}
 
-    def get_llm_for_task(task_id: str) -> BaseLLMClient:
+    def get_llm_for_task(task_id: str) -> tuple[BaseLLMClient, Optional[ParserLLM]]:
         """
-        Get or create LLM client for a task based on the survey run's user.
+        Get or create LLM client + parser for a task based on the survey run's user.
 
         Args:
             task_id: UUID of the task
 
         Returns:
-            LLM client configured for the user
+            Tuple of (LLM client, parser LLM) configured for the user
         """
         # Get task to find run_id
         task = db.get_task(task_id)
         if not task:
             logger.warning(f"Task {task_id} not found, using default LLM config")
-            return create_llm_client(default_llm_config)
+            return create_llm_client(default_llm_config), create_parser_llm(default_llm_config)
 
         run_id = task.get("survey_run_id")
         if not run_id:
             logger.warning(f"Task {task_id} has no run_id, using default LLM config")
-            return create_llm_client(default_llm_config)
+            return create_llm_client(default_llm_config), create_parser_llm(default_llm_config)
 
         # Get user_id from survey run
         user_id = db.get_survey_run_user_id(run_id)
         if not user_id:
             logger.warning(f"Run {run_id} has no user_id, using default LLM config")
-            return create_llm_client(default_llm_config)
+            return create_llm_client(default_llm_config), create_parser_llm(default_llm_config)
 
         # Check cache
         if user_id in llm_cache:
-            return llm_cache[user_id]
+            return llm_cache[user_id], parser_cache.get(user_id)
 
         # Get user's LLM config and create client
         user_llm_config = get_llm_config_for_user(db, user_id, default_llm_config)
         llm = create_llm_client(user_llm_config)
+        parser_llm = create_parser_llm(user_llm_config)
 
-        # Cache the client
+        # Cache
         llm_cache[user_id] = llm
+        parser_cache[user_id] = parser_llm
         logger.info(f"Created LLM client for user {user_id}: {user_llm_config.provider}")
+        if parser_llm:
+            logger.info(f"Parser LLM enabled for user {user_id}: {user_llm_config.parser_llm_model}")
 
-        return llm
+        return llm, parser_llm
 
     # Message handler
     def on_message(message: dict):
@@ -152,13 +168,14 @@ def main():
         logger.info(f"Processing task: {task_id}")
 
         # Get LLM client for this task's user
-        llm = get_llm_for_task(task_id)
+        llm, parser_llm = get_llm_for_task(task_id)
 
         # Create processor with the appropriate LLM client
         processor = TaskProcessor(
             db=db,
             llm=llm,
             max_retries=config.worker.max_retries,
+            parser_llm=parser_llm,
         )
 
         result = processor.process_task(task_id)

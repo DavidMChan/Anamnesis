@@ -141,7 +141,7 @@ export function Surveys() {
                   </CardDescription>
                 </CardHeader>
                 <CardContent className="flex-1 flex flex-col">
-                  <div className="mt-auto pt-4 flex items-center gap-2 border-t border-border">
+                  <div className="mt-auto pt-4 flex items-center gap-2 flex-wrap border-t border-border">
                     <Link to={`/surveys/${survey.id}`} className="flex-1">
                       <Button variant="outline" size="sm" className="w-full gap-1">
                         <Eye className="h-3.5 w-3.5" />

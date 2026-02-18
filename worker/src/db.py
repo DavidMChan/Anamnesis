@@ -341,6 +341,12 @@ class DatabaseClient:
         """
         Get backstory IDs matching survey criteria.
 
+        Demographics are stored as:
+          {"c_age": {"value": "45-54", "distribution": {...}}, ...}
+
+        Filters match on the "value" field within each dimension.
+        Filter format: {"c_age": ["45-54", "55-64"], "c_gender": ["Male"]}
+
         Args:
             survey_id: UUID of the survey (to get demographic filter)
             demographic_filter: Optional demographic filter to apply
@@ -348,15 +354,51 @@ class DatabaseClient:
         Returns:
             List of backstory UUIDs
         """
-        # For now, return all public backstories
-        # TODO: Implement demographic filtering when backstories have demographics
-        result = (
-            self.client.table("backstories")
-            .select("id")
-            .eq("is_public", True)
-            .execute()
-        )
+        query = self.client.table("backstories").select("id").eq("is_public", True)
 
+        if demographic_filter:
+            for key, allowed_values in demographic_filter.items():
+                if not allowed_values or not isinstance(allowed_values, list):
+                    continue
+                # Filter: demographics->{key}->>'value' must be in allowed_values
+                # Supabase PostgREST supports filtering into JSONB with ->
+                # We use .in_ on the extracted text value
+                for value in allowed_values:
+                    # Use contains filter: demographics must contain {key: {value: val}}
+                    # PostgREST @> operator via .contains()
+                    pass
+                # For multiple allowed values, we need an OR across them.
+                # Supabase .contains() does AND, so for OR we fetch all and filter.
+                # Alternative: use RPC or fetch all and filter in Python.
+                # For now, fetch all and filter client-side for correctness.
+                pass
+
+        # Fetch all public backstories and filter client-side if needed
+        if demographic_filter and any(
+            v for v in demographic_filter.values() if v and isinstance(v, list)
+        ):
+            result = (
+                self.client.table("backstories")
+                .select("id, demographics")
+                .eq("is_public", True)
+                .execute()
+            )
+            filtered = []
+            for row in result.data or []:
+                demos = row.get("demographics") or {}
+                match = True
+                for key, allowed_values in demographic_filter.items():
+                    if not allowed_values or not isinstance(allowed_values, list):
+                        continue
+                    dim = demos.get(key)
+                    if not dim or dim.get("value") not in allowed_values:
+                        match = False
+                        break
+                if match:
+                    filtered.append(row["id"])
+            return filtered
+
+        result = query.execute()
         return [row["id"] for row in (result.data or [])]
 
     # ==================== Dispatcher Operations ====================
@@ -402,33 +444,48 @@ class DatabaseClient:
         )
         return result.data or []
 
-    def get_stale_pending_tasks(self, run_id: str, stale_minutes: int = 5) -> List[Dict[str, Any]]:
+    def get_stale_queued_tasks(self, run_id: str, stale_minutes: int = 5) -> List[Dict[str, Any]]:
         """
-        Get pending tasks that have been stuck for too long.
+        Get queued tasks that have been stuck for too long.
 
-        These are tasks that were likely dispatched but lost in RabbitMQ.
+        These are tasks that were dispatched to RabbitMQ but never processed
+        (likely lost due to worker crash or RabbitMQ issue).
 
         Args:
             run_id: UUID of the survey run
-            stale_minutes: Minutes after which a pending task is considered stale
+            stale_minutes: Minutes after which a queued task is considered stale
 
         Returns:
-            List of stale pending task records
+            List of stale queued task records
         """
         from datetime import datetime, timedelta, timezone
 
         cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)
         cutoff_str = cutoff.isoformat()
 
+        # Look for "queued" tasks that were dispatched but never picked up
+        # We use queued_at (set when dispatching) to check staleness
         result = (
             self.client.table("survey_tasks")
-            .select("id, backstory_id, created_at")
+            .select("id, backstory_id, queued_at")
             .eq("survey_run_id", run_id)
-            .eq("status", "pending")
-            .lt("created_at", cutoff_str)
+            .eq("status", "queued")
+            .lt("queued_at", cutoff_str)
             .execute()
         )
         return result.data or []
+
+    def mark_task_queued(self, task_id: str) -> None:
+        """
+        Mark a task as queued (dispatched to RabbitMQ).
+
+        Args:
+            task_id: UUID of the task
+        """
+        self.client.table("survey_tasks").update({
+            "status": "queued",
+            "queued_at": "now()"
+        }).eq("id", task_id).execute()
 
     # ==================== User Config Operations ====================
 

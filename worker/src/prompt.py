@@ -1,9 +1,18 @@
 """
 Prompt construction module following Anthology format.
-No system prompt - backstory + formatted question concatenated.
+
+Key design principles (from anthology):
+1. No system prompt - backstory + questions concatenated
+2. Questions asked in series with context accumulation
+3. LLM sees its previous answers when answering follow-up questions
+4. Consistency prompt added for follow-up questions
 """
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Tuple
+
+
+# Consistency prompt for follow-up questions (from anthology)
+CONSISTENCY_PROMPT = "Please answer the following question keeping in mind your previous answers."
 
 
 @dataclass
@@ -34,9 +43,7 @@ def format_mcq_question(question: Question) -> str:
         (A) Option 1
         (B) Option 2
         ...
-
-        Select one answer.
-
+        Answer with (A), (B), (C), or (D).
         Answer:
     """
     if not question.options:
@@ -44,27 +51,30 @@ def format_mcq_question(question: Question) -> str:
 
     # Build choice string with (A), (B), etc.
     choice_lines = []
+    letters = []
     for idx, option in enumerate(question.options):
         letter = chr(65 + idx)  # 65 = 'A'
+        letters.append(f"({letter})")
         choice_lines.append(f"({letter}) {option}")
 
     choices_str = "\n".join(choice_lines)
+    answer_forcing = f"Answer with {', '.join(letters[:-1])}, or {letters[-1]}." if len(letters) > 1 else f"Answer with {letters[0]}."
 
-    return f"Question: {question.text}\n{choices_str}\n\nSelect one answer.\n\nAnswer:"
+    return f"Question: {question.text}\n{choices_str}\n{answer_forcing}\nAnswer:"
 
 
-def format_open_response_question(question: Question) -> str:
+def format_open_response_question(question: Question, max_words: Optional[int] = None) -> str:
     """
     Format an open response question.
 
     Format:
         Question: {question_text}
-
-        Provide a free-form text response.
-
+        Answer in approximately N words.
         Answer:
     """
-    return f"Question: {question.text}\n\nProvide a free-form text response.\n\nAnswer:"
+    if max_words:
+        return f"Question: {question.text}\nAnswer in approximately {max_words} words.\nAnswer:"
+    return f"Question: {question.text}\nAnswer:"
 
 
 def format_multiple_select_question(question: Question) -> str:
@@ -76,23 +86,20 @@ def format_multiple_select_question(question: Question) -> str:
         (A) Option 1
         (B) Option 2
         ...
-
-        Select all that apply.
-
+        Select all that apply. Answer with comma-separated letters (e.g., A, C, D).
         Answer:
     """
     if not question.options:
         raise ValueError(f"Multiple select question {question.qkey} has no options")
 
-    # Build choice string with (A), (B), etc.
     choice_lines = []
     for idx, option in enumerate(question.options):
-        letter = chr(65 + idx)  # 65 = 'A'
+        letter = chr(65 + idx)
         choice_lines.append(f"({letter}) {option}")
 
     choices_str = "\n".join(choice_lines)
 
-    return f"Question: {question.text}\n{choices_str}\n\nSelect all that apply.\n\nAnswer:"
+    return f"Question: {question.text}\n{choices_str}\nSelect all that apply. Answer with comma-separated letters (e.g., A, C, D).\nAnswer:"
 
 
 def format_ranking_question(question: Question) -> str:
@@ -104,72 +111,107 @@ def format_ranking_question(question: Question) -> str:
         (A) Option 1
         (B) Option 2
         ...
-
         Rank all options from most to least preferred (e.g., A, C, B, D).
-
         Answer:
     """
     if not question.options:
         raise ValueError(f"Ranking question {question.qkey} has no options")
 
-    # Build choice string with (A), (B), etc.
     choice_lines = []
     for idx, option in enumerate(question.options):
-        letter = chr(65 + idx)  # 65 = 'A'
+        letter = chr(65 + idx)
         choice_lines.append(f"({letter}) {option}")
 
     choices_str = "\n".join(choice_lines)
 
-    return f"Question: {question.text}\n{choices_str}\n\nRank all options from most to least preferred (e.g., A, C, B, D).\n\nAnswer:"
+    return f"Question: {question.text}\n{choices_str}\nRank all options from most to least preferred (e.g., A, C, B, D).\nAnswer:"
 
 
-def format_question(question: Question) -> str:
+def format_question(question: Question, max_words: Optional[int] = None) -> str:
     """Format a question based on its type."""
     if question.type == "mcq":
         return format_mcq_question(question)
     elif question.type == "multiple_select":
         return format_multiple_select_question(question)
     elif question.type == "open_response":
-        return format_open_response_question(question)
+        return format_open_response_question(question, max_words=max_words)
     elif question.type == "ranking":
         return format_ranking_question(question)
     else:
         # Default to open response
-        return format_open_response_question(question)
+        return format_open_response_question(question, max_words=max_words)
 
 
-def build_survey_prompt(
-    backstory: Optional[str],
-    questions: List[Question],
-) -> str:
+def build_initial_prompt(backstory: Optional[str], question: Question, max_words: Optional[int] = None) -> str:
     """
-    Build the full survey prompt with backstory and questions.
+    Build the initial prompt for the first question.
 
-    Following anthology format:
-    - No system prompt
-    - Backstory text first (if present)
-    - Then formatted questions in series
+    Format:
+        [backstory]
+
+        Question: ...
+        Answer:
 
     Args:
-        backstory: The backstory text (can be None or empty)
-        questions: List of Question objects
+        backstory: The backstory text
+        question: First question to ask
+        max_words: Suggested word count for open response questions
 
     Returns:
-        Complete prompt string
+        Initial prompt string
     """
     parts = []
 
-    # Add backstory if present
     if backstory and backstory.strip():
         parts.append(backstory.strip())
 
-    # Add each question
-    for question in questions:
-        formatted_q = format_question(question)
-        parts.append(formatted_q)
+    parts.append(format_question(question, max_words=max_words))
 
-    # Join with double newline
     return "\n\n".join(parts)
+
+
+def append_answer_to_context(context: str, answer: str) -> str:
+    """
+    Append the LLM's answer to the accumulated context.
+
+    The context should end with "Answer:" and we append the response.
+
+    Args:
+        context: Current accumulated context (ends with "Answer:")
+        answer: The LLM's answer to append
+
+    Returns:
+        Updated context with answer appended
+    """
+    # Clean up the answer - just the letter/response
+    answer = answer.strip()
+    return f"{context} {answer}"
+
+
+def build_followup_prompt(context: str, question: Question, max_words: Optional[int] = None) -> str:
+    """
+    Build a follow-up question prompt with consistency message.
+
+    This appends the next question to the accumulated context,
+    so the LLM can see its previous answers.
+
+    Format:
+        [previous context with Q&A]
+
+        Please answer the following question keeping in mind your previous answers.
+        Question: ...
+        Answer:
+
+    Args:
+        context: Accumulated context (backstory + previous Q&As)
+        question: Next question to ask
+        max_words: Suggested word count for open response questions
+
+    Returns:
+        Updated prompt with new question
+    """
+    formatted_q = format_question(question, max_words=max_words)
+    return f"{context}\n\n{CONSISTENCY_PROMPT}\n{formatted_q}"
 
 
 def build_single_question_prompt(
@@ -177,7 +219,9 @@ def build_single_question_prompt(
     question: Question,
 ) -> str:
     """
-    Build a prompt for a single question.
+    Build a prompt for a single question (no context accumulation).
+
+    For backwards compatibility or single-question surveys.
 
     Args:
         backstory: The backstory text
@@ -186,7 +230,7 @@ def build_single_question_prompt(
     Returns:
         Prompt string for one question
     """
-    return build_survey_prompt(backstory, [question])
+    return build_initial_prompt(backstory, question)
 
 
 # Response schema for structured outputs (strict mode compatible)

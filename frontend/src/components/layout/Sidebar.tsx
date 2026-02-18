@@ -79,7 +79,7 @@ export function Sidebar() {
           />
         </div>
         <div className="flex flex-col">
-          <span className="text-sm font-semibold">Survey Arena</span>
+          <span className="text-sm font-semibold">Anamnesis</span>
           <span className="text-xs text-muted-foreground">
             <a
               href="https://bair.berkeley.edu"
