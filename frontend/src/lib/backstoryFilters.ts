@@ -18,7 +18,18 @@ export function applyDemographicFilters(query: any, filters: DemographicFilter) 
     if (key === '_sample_size') continue // internal metadata, not a filter
 
     const demographicKey = key.startsWith('custom_') ? key.replace('custom_', '') : key
-    query = query.in(`demographics->${demographicKey}->>value`, filterValue)
+
+    if (Array.isArray(filterValue)) {
+      query = query.in(`demographics->${demographicKey}->>value`, filterValue)
+    } else if (typeof filterValue === 'object') {
+      const { min, max } = filterValue
+      if (min !== undefined) {
+        query = query.gte(`demographics->${demographicKey}->>value`, min)
+      }
+      if (max !== undefined) {
+        query = query.lte(`demographics->${demographicKey}->>value`, max)
+      }
+    }
   }
   return query
 }

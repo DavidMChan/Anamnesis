@@ -43,7 +43,7 @@ export interface Demographics {
 
 // Survey filter: match backstories by their demographic value field
 export interface DemographicFilter {
-  [key: string]: string[] | undefined
+  [key: string]: string[] | { min?: number; max?: number } | undefined
 }
 
 // Metadata about demographic keys
