@@ -15,6 +15,7 @@ export interface LLMConfig {
 
 export interface Backstory {
   id: string
+  vuid: string | null
   contributor_id: string | null
   source_type: 'llm_generated' | 'human_interview' | 'uploaded' | 'anthology' | 'alterity'
   backstory_text: string
@@ -29,22 +30,20 @@ export interface TranscriptMessage {
   content: string
 }
 
-// Backstory stores specific values
-export interface Demographics {
-  age?: number
-  gender?: string
-  party?: string
-  education?: string
-  income?: number
-  race?: string
-  religion?: string
-  region?: string
-  [key: string]: string | number | undefined
+// Each demographic dimension stores a top choice and probability distribution
+export interface DemographicDimension {
+  value: string | null
+  distribution: Record<string, number>
 }
 
-// Survey filter stores conditions (ranges for numeric, arrays for enum)
+// Backstory demographics: keyed by dimension (e.g., "c_age", "c_gender")
+export interface Demographics {
+  [key: string]: DemographicDimension
+}
+
+// Survey filter: match backstories by their demographic value field
 export interface DemographicFilter {
-  [key: string]: { min?: number; max?: number } | string[] | undefined
+  [key: string]: string[] | undefined
 }
 
 // Metadata about demographic keys
