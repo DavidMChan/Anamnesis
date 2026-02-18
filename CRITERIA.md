@@ -1,171 +1,281 @@
-# Feature: vLLM Guided Decoding for MCQ Parsing
+# Feature: Expand vLLM Guided Decoding to All Question Types
 
 ## Status
-- [x] Planning complete
+- [ ] Planning complete
 - [ ] Ready for implementation
 
 ## Description
 
-Replace the fragile regex-based MCQ response parsing for vLLM (base models) with **guided decoding** using vLLM's `structured_outputs.choice` parameter. This constrains token generation at the model level, guaranteeing only valid option letters (A, B, C, D, etc.) can be produced — eliminating the "I think" bug and all other parsing failures for MCQ questions.
+Expand vLLM guided decoding beyond MCQ to support **multiple select**, **ranking**, and **open response** question types. Currently only MCQ uses `structured_outputs.choice` to constrain output to a single letter. The other three types fall back to raw text parsing which fails badly with base models.
 
-**Three-tier parsing strategy (priority order):**
-1. **Guided decoding** (`structured_outputs.choice`) — constrains generation to valid letters only
-2. **Parser LLM fallback** — if guided decoding is unavailable or fails, use a cheap instruction-tuned model to extract the answer (like Alterity's approach)
-3. **Existing regex** — keep current `from_text()` as last resort
+**Approach:** Use `structured_outputs.regex` for multiple_select and ranking (dynamically generated regex based on option count), skip guided decoding for open_response but fix the parsing/stop-sequence issues so raw text is used as the answer.
 
-**Scope:** vLLM only. OpenRouter already uses JSON schema with enum constraint.
+**Key constraint:** Option count is user-defined and variable (2–10+), so the regex character class must be dynamically generated (e.g., 3 options → `[A-C]`, 6 options → `[A-F]`).
 
 ## Problem Statement
 
-Base models often don't follow instructions and produce free-form text instead of a clean option letter. Current regex parsing has ~12 hardcoded negative lookaheads (`I'm`, `I think`, `I am`, etc.) and still fails on some responses out of 1000 runs. The postdoc's recommendation: use vLLM guided decoding with literal types.
+For vLLM (base models), non-MCQ question types are essentially broken:
+- **Multiple select**: `from_text()` only extracts a single letter, losing the multi-selection semantics
+- **Ranking**: `from_text()` extracts only the first letter, losing the ordering
+- **Open response**: `from_text()` tries to extract a letter and fails; stop sequences (`\n`, `.`) cut off responses after one sentence
+- **Parser LLM (Tier 2)** is MCQ-only — non-MCQ types get no fallback
+- **Compliance forcing** retries 10 times but always fails since parsing can't handle the format
 
 ## Technical Approach
 
 ### Files to Modify
 
-- **`worker/src/llm.py`** — Main changes:
-  - `VLLMClient._make_request()`: Add `structured_outputs.choice` to payload for MCQ questions
-  - `VLLMClient.complete()`: Accept question metadata to determine if guided decoding should be used
-  - `VLLMClient`: Add `_make_guided_request()` method for guided decoding path
-  - Keep `from_text()` as-is (used as tier 3 fallback and by non-MCQ questions)
+- **`worker/src/llm.py`** — Core changes:
+  - `VLLMClient.complete()`: Expand guided decoding logic from MCQ-only to all types with options
+  - `VLLMClient._make_request()`: Accept `guided_regex` parameter alongside existing `guided_choices`; handle different stop sequence and max_tokens strategies per type
+  - Add `LLMResponse.from_comma_separated()` class method for parsing comma-separated letter lists (used by both multiple_select and ranking)
+  - Add open_response handling: use raw text directly as the answer
 
 - **`worker/src/worker.py`** — Changes:
-  - `TaskProcessor.process_questions_in_series()`: Pass question type/options info to LLM client so it can enable guided decoding for MCQ
-  - Integrate parser LLM fallback (tier 2) when guided decoding fails or is unavailable
-  - Add `ParserLLM` integration for tier 2 fallback
+  - `process_questions_in_series()`: Extend Tier 2 (parser LLM) to handle multiple_select and ranking, not just MCQ
+  - Modify compliance forcing loop: skip retries for open_response (any text is valid)
+  - Add validation logic for multiple_select (valid letters, no duplicates) and ranking (complete permutation)
 
-- **`worker/src/config.py`** — Changes:
-  - Add `parser_llm_endpoint` and `parser_llm_model` config for the fallback parser LLM
-  - Add `use_guided_decoding: bool` config flag (default: True)
+- **`worker/src/parser.py`** — Changes:
+  - Extend `ParserLLM.parse()` to support multiple_select and ranking with type-specific prompt templates
+  - Add `PARSER_PROMPT_MULTIPLE_SELECT` and `PARSER_PROMPT_RANKING` templates
+
+- **`worker/src/prompt.py`** — No changes needed (existing prompts are already correct)
 
 ### Files to Create
-
-- **`worker/src/parser.py`** — New module for tier 2 parser LLM:
-  - `ParserLLM` class that calls a cheap instruction-tuned model to extract answer letters
-  - Prompt template following Alterity's approach: "Answer ONLY as a single upper-case character. DO NOT infer..."
-  - Falls back gracefully if parser LLM is not configured
-
-- **`worker/tests/test_guided_decoding.py`** — Tests for the new guided decoding flow
+- **`worker/tests/test_guided_decoding_expand.py`** — Tests for the new guided decoding support
 
 ### Key Decisions
 
-1. **`structured_outputs.choice` over `guided_regex`**: The `choice` parameter is simpler and exactly matches our use case (select one of N literals). No regex escaping needed.
+1. **`structured_outputs.regex` for multiple_select and ranking**: vLLM supports regex-based guided decoding alongside choice-based. This constrains output to comma-separated letters without exponential enumeration. Dynamic regex based on option count handles variable-length option lists.
 
-2. **`max_tokens=1` for MCQ guided decoding**: Since we're constraining to single letters, we only need 1 token. This is faster and cheaper. For other question types (ranking, multiple_select, open_response), keep existing max_tokens.
+2. **Dynamic regex generation**: For N options, the regex character class is `[A-{chr(64+N)}]`. Examples:
+   - 3 options: `[A-C]`
+   - 4 options: `[A-D]`
+   - 8 options: `[A-H]`
+   - Multiple select pattern: `[A-D](, [A-D])*` (1+ letters, comma-space separated)
+   - Ranking pattern: `[A-D](, [A-D]){3}` (exactly N letters, comma-space separated)
 
-3. **Pass question metadata through `complete()`**: The `complete()` method needs to know the question type and valid options to enable guided decoding. We'll extend the interface with an optional `question` parameter rather than changing `response_schema` semantics.
+3. **Post-validation with compliance retry**: Regex can't enforce no-duplicates or completeness. Post-validation catches these, and the existing compliance retry loop (10 attempts) handles re-prompting. This is simpler than grammar-based approaches.
 
-4. **Parser LLM is optional**: If `parser_llm_api_key` is not configured, tier 2 is skipped and we fall directly to regex (tier 3). This keeps the system working without extra infrastructure.
+4. **Open response: no guided decoding, different stop sequences**: Base models generate natural text for open response. Remove `"\n"` and `"."` from stop sequences (keep `"Question:"` to prevent self-prompting). Use raw text as the answer.
 
-5. **vLLM API version compatibility**: Use the new `structured_outputs` field (not the deprecated `guided_choice`). The existing test `test_vllm_uses_guided_json` references the old API — update it.
+5. **Parser LLM extended for all types**: Currently Tier 2 only handles MCQ. Extend it with type-specific prompts for multiple_select ("extract comma-separated letters") and ranking ("extract ordered letters"). Skip parser for open_response.
 
 ## API Details
 
-### vLLM Completions API with guided decoding
+### vLLM Completions API — Regex Guided Decoding
 
 ```json
 POST /v1/completions
 {
   "model": "meta-llama/Llama-3-70b",
-  "prompt": "...",
+  "prompt": "...Select all that apply. Answer with comma-separated letters (e.g., A, C, D).\nAnswer:",
   "temperature": 1.0,
-  "max_tokens": 1,
-  "stop": ["\n"],
+  "max_tokens": 12,
   "structured_outputs": {
-    "choice": ["A", "B", "C", "D"]
+    "regex": "[A-D](, [A-D])*"
   }
 }
 ```
 
-Response: `{"choices": [{"text": "B", ...}]}`
+Response: `{"choices": [{"text": "A, C, D", ...}]}`
 
-### Parser LLM prompt (tier 2)
+### Per-Type Configuration Summary
 
-```
-You are given a question and a response to that question.
-Please select the option specified in the question that strictly matches the response.
+| Type | Guided Decoding | Regex Pattern | max_tokens | Stop Sequences |
+|------|-----------------|---------------|------------|----------------|
+| `mcq` | `choice` (existing) | N/A | `1` | removed |
+| `multiple_select` | `regex` | `[A-{X}](, [A-{X}])*` | `3*N` | removed |
+| `ranking` | `regex` | `[A-{X}](, [A-{X}]){N-1}` | `3*N` | removed |
+| `open_response` | **none** | N/A | `max_tokens` (default 512) | `["Question:"]` only |
 
-Requirements:
-Answer ONLY as a single upper-case character.
-DO NOT infer what option matches the response: if there is no strict match, answer 'X'.
+Where `X = chr(64 + N)` and `N = len(options)`.
 
-Question: {question_text}
-{options}
+### Post-Validation Rules
 
-Response: {raw_llm_response}
-
-Answer:
-```
+| Type | Validation | On Failure |
+|------|-----------|------------|
+| `mcq` | Letter in valid range | Retry (existing) |
+| `multiple_select` | All letters valid, deduplicate | Return deduplicated result (always valid after regex) |
+| `ranking` | All N letters present, no duplicates | Return empty → compliance retry |
+| `open_response` | Always valid (non-empty text) | Accept as-is |
 
 ## Pass Criteria
 
-### Unit Tests
+### Unit Tests — Guided Decoding Expansion
 
-#### Guided Decoding (Tier 1)
-- [ ] `test_vllm_mcq_uses_guided_choice`: VLLMClient sends `structured_outputs.choice` with correct letters (A, B, C, ...) for MCQ questions
-- [ ] `test_vllm_mcq_guided_max_tokens_1`: MCQ requests use `max_tokens=1`
-- [ ] `test_vllm_non_mcq_no_guided_choice`: Non-MCQ questions (open_response, ranking, multiple_select) do NOT use guided_choice
-- [ ] `test_vllm_guided_decoding_returns_valid_letter`: Response from guided decoding is correctly parsed as single letter
-- [ ] `test_vllm_guided_decoding_disabled_flag`: When `use_guided_decoding=False`, falls back to text-only mode
-- [ ] `test_vllm_guided_choice_dynamic_options`: Choice list matches actual number of options (e.g., 2 options → ["A", "B"], 5 options → ["A", "B", "C", "D", "E"])
+#### Multiple Select Guided Decoding
+- [ ] `test_vllm_multiple_select_uses_guided_regex`: VLLMClient sends `structured_outputs.regex` with correct pattern for multiple_select questions
+- [ ] `test_vllm_multiple_select_dynamic_options`: Regex pattern adjusts to option count (2 options → `[A-B]`, 5 options → `[A-E]`)
+- [ ] `test_vllm_multiple_select_max_tokens`: max_tokens is set to `3 * len(options)` (enough for all letters + separators)
+- [ ] `test_vllm_multiple_select_parses_comma_list`: Response "A, C, D" is parsed as "A,C,D"
+- [ ] `test_vllm_multiple_select_deduplicates`: Response "A, A, C" is deduplicated to "A,C"
+- [ ] `test_vllm_multiple_select_single_letter`: Response "B" is parsed as "B" (single selection is valid)
 
-#### Parser LLM Fallback (Tier 2)
-- [ ] `test_parser_llm_extracts_letter`: ParserLLM correctly extracts letter from verbose response
-- [ ] `test_parser_llm_returns_empty_on_X`: ParserLLM returns empty string when parser responds with "X"
-- [ ] `test_parser_llm_not_configured_skips`: When parser LLM not configured, tier 2 is skipped gracefully
-- [ ] `test_parser_llm_prompt_format`: Parser prompt includes question text, options, and raw response
+#### Ranking Guided Decoding
+- [ ] `test_vllm_ranking_uses_guided_regex`: VLLMClient sends `structured_outputs.regex` with correct pattern for ranking questions
+- [ ] `test_vllm_ranking_enforces_exact_count`: Regex pattern requires exactly N letters (e.g., `{3}` for 4 options)
+- [ ] `test_vllm_ranking_parses_complete_permutation`: Response "B, A, C, D" is parsed as "B,A,C,D"
+- [ ] `test_vllm_ranking_rejects_duplicates`: Response "A, A, C, D" returns empty answer (triggers compliance retry)
+- [ ] `test_vllm_ranking_rejects_incomplete`: Response "A, B" (missing letters) returns empty answer
 
-#### Existing Regex (Tier 3) — No Changes
-- [ ] Existing `TestFromText` tests still pass (regression)
+#### Open Response Handling
+- [ ] `test_vllm_open_response_no_guided_decoding`: Open response questions do NOT use `structured_outputs`
+- [ ] `test_vllm_open_response_uses_raw_text`: Raw response text is used directly as the answer
+- [ ] `test_vllm_open_response_stop_sequences`: Only `"Question:"` is used as stop sequence (not `"\n"` or `"."`)
+- [ ] `test_vllm_open_response_no_compliance_retry`: Open response skips compliance forcing (any non-empty text is valid)
+- [ ] `test_vllm_open_response_empty_retries`: Empty response still triggers retry (model produced nothing)
+
+#### Existing MCQ (Regression)
+- [ ] `test_vllm_mcq_still_uses_choice`: MCQ guided decoding unchanged (still uses `structured_outputs.choice`)
+- [ ] All existing tests in `test_guided_decoding.py` still pass
+
+#### Parser LLM Extension (Tier 2)
+- [ ] `test_parser_llm_multiple_select`: Parser LLM extracts comma-separated letters for multiple_select
+- [ ] `test_parser_llm_ranking`: Parser LLM extracts ordered comma-separated letters for ranking
+- [ ] `test_parser_llm_prompt_format_multiple_select`: Parser prompt instructs "Answer as comma-separated letters" for multiple_select
+- [ ] `test_parser_llm_prompt_format_ranking`: Parser prompt instructs "Answer as ordered comma-separated letters" for ranking
 
 #### Integration Flow
-- [ ] `test_compliance_forcing_with_guided_decoding`: Compliance forcing loop uses guided decoding on each retry
-- [ ] `test_fallback_chain_guided_then_parser_then_regex`: When guided decoding returns empty, tries parser LLM, then regex
-- [ ] `test_context_accumulation_with_guided_answer`: Context accumulation works correctly when answer comes from guided decoding (raw response is just the letter)
+- [ ] `test_compliance_retry_ranking_invalid_permutation`: When ranking response has duplicates, compliance loop retries and eventually gets valid permutation
+- [ ] `test_context_accumulation_multiple_select`: Context includes full "A, C, D" answer for subsequent questions
+- [ ] `test_context_accumulation_open_response`: Context includes full text response for subsequent questions
+- [ ] `test_mixed_question_types_in_series`: Survey with MCQ + multiple_select + open_response + ranking processes all types correctly in sequence
 
 ### Acceptance Criteria
-- [ ] MCQ questions sent to vLLM include `structured_outputs.choice` in the request payload
-- [ ] `max_tokens=1` is used for MCQ guided decoding requests
-- [ ] Non-MCQ question types are unaffected (no guided decoding applied)
-- [ ] Parser LLM fallback works when guided decoding is unavailable
-- [ ] Parser LLM is optional (system works without it configured)
-- [ ] Existing regex parsing (`from_text()`) is preserved as tier 3 fallback
-- [ ] All existing tests pass without modification (except updating deprecated `guided_json` test)
-- [ ] Context accumulation still works (raw answer appended to context)
+- [ ] Multiple select questions sent to vLLM include `structured_outputs.regex` with dynamic pattern
+- [ ] Ranking questions sent to vLLM include `structured_outputs.regex` with exact-count pattern
+- [ ] Open response questions use raw text as answer without letter extraction
+- [ ] Open response uses relaxed stop sequences (`"Question:"` only, not `"\n"` or `"."`)
+- [ ] Regex patterns are dynamically generated based on actual option count (not hardcoded to 4)
+- [ ] Post-validation deduplicates multiple_select and validates ranking completeness
+- [ ] Compliance retry is skipped for open_response (except empty response)
+- [ ] Parser LLM (Tier 2) supports multiple_select and ranking, not just MCQ
+- [ ] All existing MCQ guided decoding tests pass unchanged
+- [ ] Context accumulation works for all four question types
 
 ## Implementation Notes
 
 ### For the Implementing Agent
 
-1. **Start with tests** — write `test_guided_decoding.py` first
-2. **Extend `VLLMClient.complete()` signature** — add optional `question: Question` parameter (keep `response_schema` for backward compat). When `question` is provided and `question.type == "mcq"`, enable guided decoding.
-3. **VLLMClient._make_request()** — modify to accept `guided_choices: Optional[List[str]]` and `max_tokens_override`. When guided_choices is set, add `structured_outputs.choice` to payload and set `max_tokens=1`.
-4. **Worker integration** — in `process_questions_in_series()`, pass `question` to `self.llm.complete(prompt, question=question)` so VLLMClient knows when to use guided decoding.
-5. **Parser LLM** — create a simple `ParserLLM` class that uses OpenRouter or another instruction-tuned model. Follow Alterity's prompt exactly. Integrate into the compliance forcing loop in worker.py.
-6. **Context accumulation edge case** — when guided decoding produces just "A" as raw, the context becomes `"...Answer: A"` which is fine. But if parser LLM is used, store the original raw response (not the parser's response) in context.
-7. **Reference patterns**:
-   - vLLM guided decoding: `structured_outputs.choice` in request body (not `extra_body`)
-   - Alterity parser: `alterity/survey/opinion_poll_survey_executor.py:parse_response()`
-   - Anthology regex: `anthology/survey/atp_survey.py:regex_letter_classifier()`
+1. **Start with tests** — write `test_guided_decoding_expand.py` first, covering all new test cases above.
 
-### Config defaults
-```python
-use_guided_decoding: bool = True
-parser_llm_provider: str = "openrouter"  # or "vllm"
-parser_llm_model: str = "google/gemini-2.0-flash-001"  # cheap, fast
-parser_llm_api_key: str = ""  # empty = skip tier 2
-parser_llm_max_tokens: int = 4  # just need a single letter
-parser_llm_temperature: float = 0.0  # deterministic parsing
-```
+2. **Modify `VLLMClient.complete()`** — Replace the MCQ-only condition with a type-aware dispatch:
+   ```python
+   # Current (MCQ only):
+   if self.use_guided_decoding and question.type == "mcq" and question.options:
+       guided_choices = [chr(65 + i) for i in range(len(question.options))]
+
+   # New (all types):
+   guided_params = None
+   if self.use_guided_decoding and question is not None and question.options:
+       n = len(question.options)
+       last = chr(64 + n)  # 'D' for 4 options
+       if question.type == "mcq":
+           guided_params = ("choice", [chr(65 + i) for i in range(n)])
+       elif question.type == "multiple_select":
+           guided_params = ("regex", f"[A-{last}](, [A-{last}])*")
+       elif question.type == "ranking":
+           guided_params = ("regex", f"[A-{last}](, [A-{last}]){{{n-1}}}")
+       # open_response: None (no guided decoding)
+   ```
+
+3. **Modify `VLLMClient._make_request()`** — Accept a `guided_params` tuple instead of just `guided_choices`. Handle both `choice` and `regex` types:
+   ```python
+   if guided_params:
+       param_type, param_value = guided_params
+       payload["structured_outputs"] = {param_type: param_value}
+       payload.pop("stop", None)
+       if param_type == "choice":
+           payload["max_tokens"] = 1
+       elif param_type == "regex":
+           payload["max_tokens"] = 3 * num_options
+   ```
+
+4. **Handle open_response stop sequences** — When `question.type == "open_response"`, only use `["Question:"]` as stop sequences instead of the default `["\n", ".", "Question:"]`.
+
+5. **Add `LLMResponse.from_comma_separated()`** — New class method:
+   ```python
+   @classmethod
+   def from_comma_separated(cls, text: str, num_options: int, require_all: bool = False):
+       """Parse comma-separated letters. require_all=True for ranking."""
+       letters = [l.strip().upper() for l in text.split(",")]
+       valid = {chr(65 + i) for i in range(num_options)}
+       # Deduplicate while preserving order
+       seen = set()
+       result = []
+       for letter in letters:
+           if letter in valid and letter not in seen:
+               seen.add(letter)
+               result.append(letter)
+       if require_all and set(result) != valid:
+           return cls(answer="", raw=text)  # Incomplete → retry
+       if result:
+           return cls(answer=",".join(result), raw=text)
+       return cls(answer="", raw=text)
+   ```
+
+6. **Response dispatch in `_make_request()`** — After getting the response text:
+   ```python
+   if guided_params:
+       param_type, param_value = guided_params
+       if param_type == "choice":
+           # MCQ: existing logic
+           if content.upper() in param_value:
+               return LLMResponse(answer=content.upper(), raw=content)
+       elif param_type == "regex":
+           if question.type == "multiple_select":
+               return LLMResponse.from_comma_separated(content, len(question.options), require_all=False)
+           elif question.type == "ranking":
+               return LLMResponse.from_comma_separated(content, len(question.options), require_all=True)
+   # Open response or fallback
+   if question and question.type == "open_response":
+       text = content.strip()
+       return LLMResponse(answer=text if text else "", raw=content)
+   return LLMResponse.from_text(content)
+   ```
+
+7. **Worker compliance loop changes** — In `process_questions_in_series()`:
+   - For `open_response`: accept any non-empty response as valid, skip Tier 2/3 parsing
+   - Extend Tier 2 condition: `if not answer and question.type in ("mcq", "multiple_select", "ranking") and self.parser_llm`
+   - For Tier 3 (`match_option_text`): keep for MCQ only (doesn't make sense for multi-select/ranking)
+
+8. **Extend `ParserLLM`** — Add type-specific prompts:
+   ```
+   # Multiple select prompt:
+   "Answer as comma-separated uppercase letters (e.g., A, C, D). If no match, answer 'X'."
+
+   # Ranking prompt:
+   "Answer as ordered comma-separated uppercase letters from most to least preferred
+   including ALL options (e.g., B, A, C, D). If no match, answer 'X'."
+   ```
+
+9. **Important: `_make_request` needs the question object** — Currently `_make_request` only receives `guided_choices`. To dispatch correctly for regex responses, it also needs `question.type` and `len(question.options)`. Either pass the question object or pass enough metadata alongside `guided_params`.
+
+10. **Reference existing patterns**:
+    - Current MCQ guided decoding: `worker/src/llm.py:469-476`
+    - Current prompt formatting: `worker/src/prompt.py:77-124`
+    - vLLM `structured_outputs.regex` API: confirmed in vLLM docs
+    - Compliance forcing loop: `worker/src/worker.py:148-184`
 
 ### Test Data
 - Use mock HTTP responses (existing pattern with `patch("httpx.Client")`)
-- Test MCQ with 2, 4, and 5+ options
-- Test verbose base model responses: `"I think I'm going with option B because..."`, `"Well, honestly I feel like..."`, `"B."`, `" B"`, `"(B)"`
+- Test with variable option counts: 2, 3, 4, 5, 8 options
+- Test comma-separated responses: `"A, C, D"`, `"B"`, `"A, A, C"` (duplicate), `"B, A, C, D"` (complete ranking)
+- Test open response: `"I think climate change is a serious issue that requires immediate action"`, empty string
+
+### Edge Cases
+- **1 option multiple_select**: Regex `[A-A]` = just "A" — degenerate but valid
+- **2 option ranking**: Regex `[A-B](, [A-B]){1}` — either "A, B" or "B, A"
+- **Very long open response**: Respect `max_tokens` setting, context accumulation includes full text
+- **Empty guided regex response**: Should trigger compliance retry
+- **Mixed survey**: MCQ → multiple_select → open_response → ranking in one survey
 
 ## Out of Scope
-- OpenRouter parsing changes (already uses JSON schema)
-- Multiple select / ranking / open response guided decoding (future work)
-- Changing the prompt format itself (Answer: forcing prompt stays the same)
-- Adding option randomization (Anthology has it, but not in current scope)
-- Parser LLM cost tracking/billing
+- OpenRouter changes (already handles all types via JSON schema)
+- Prompt format changes (existing prompts are already correct for each type)
+- Grammar-based guided decoding (regex is sufficient)
+- Duplicate enforcement at token level (handled by post-validation + retry)
+- Option randomization
+- Parser LLM cost tracking
