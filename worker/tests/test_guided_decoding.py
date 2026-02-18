@@ -90,37 +90,36 @@ class TestVLLMGuidedDecoding:
     def test_vllm_non_mcq_no_guided_choice(self):
         """Non-MCQ questions do NOT use guided_choice (choice type).
 
-        Note: multiple_select and ranking now use guided_regex instead.
-        Only open_response uses no structured_outputs at all.
+        Note: ranking uses guided_regex. multiple_select and open_response
+        use no structured_outputs at all.
         """
-        # open_response: no structured_outputs
-        patcher, mock_client = mock_httpx_client(mock_vllm_response("Some text"))
-        try:
-            client = make_vllm_client()
-            question = Question(qkey="q1", type="open_response", text="Q?", options=None)
-
-            client.complete("Prompt", question=question)
-
-            payload = mock_client.post.call_args.kwargs["json"]
-            assert "structured_outputs" not in payload, "structured_outputs should not be in payload for open_response"
-        finally:
-            patcher.stop()
-
-        # multiple_select and ranking use regex, not choice
-        for qtype in ["ranking", "multiple_select"]:
+        # open_response and multiple_select: no structured_outputs
+        for qtype, options in [("open_response", None), ("multiple_select", ["A", "B"])]:
             patcher, mock_client = mock_httpx_client(mock_vllm_response("A, B"))
             try:
                 client = make_vllm_client()
-                question = Question(qkey="q1", type=qtype, text="Q?", options=["A", "B"])
+                question = Question(qkey="q1", type=qtype, text="Q?", options=options)
 
                 client.complete("Prompt", question=question)
 
                 payload = mock_client.post.call_args.kwargs["json"]
-                assert "structured_outputs" in payload, f"structured_outputs should be in payload for {qtype}"
-                assert "regex" in payload["structured_outputs"], f"should use regex (not choice) for {qtype}"
-                assert "choice" not in payload["structured_outputs"], f"should not use choice for {qtype}"
+                assert "structured_outputs" not in payload, f"structured_outputs should not be in payload for {qtype}"
             finally:
                 patcher.stop()
+
+        # ranking uses regex, not choice
+        patcher, mock_client = mock_httpx_client(mock_vllm_response("A, B"))
+        try:
+            client = make_vllm_client()
+            question = Question(qkey="q1", type="ranking", text="Q?", options=["A", "B"])
+
+            client.complete("Prompt", question=question)
+
+            payload = mock_client.post.call_args.kwargs["json"]
+            assert "structured_outputs" in payload, "structured_outputs should be in payload for ranking"
+            assert "regex" in payload["structured_outputs"], "should use regex (not choice) for ranking"
+        finally:
+            patcher.stop()
 
     def test_vllm_guided_decoding_returns_valid_letter(self):
         """Response from guided decoding is correctly parsed as single letter."""

@@ -506,6 +506,10 @@ class VLLMClient(BaseLLMClient):
                 text = content.strip()
                 return LLMResponse(answer=text if text else "", raw=content)
 
+            # Multiple select: parse comma-separated letters from natural response
+            if question_type == "multiple_select" and question and question.options:
+                return LLMResponse.from_comma_separated(content, len(question.options), require_all=False)
+
             return LLMResponse.from_text(content)
 
     def complete(self, prompt: str, response_schema: dict = None, *, question: "Optional[Question]" = None) -> LLMResponse:
@@ -528,11 +532,12 @@ class VLLMClient(BaseLLMClient):
             last = chr(64 + n)  # 'D' for 4 options
             if question.type == "mcq":
                 guided_params = ("choice", [chr(65 + i) for i in range(n)])
-            elif question.type == "multiple_select":
-                guided_params = ("regex", f"[A-{last}](, [A-{last}])*")
             elif question.type == "ranking":
                 guided_params = ("regex", f"[A-{last}](, [A-{last}]){{{n-1}}}")
-            # open_response: None (no guided decoding)
+            # multiple_select: no guided decoding — regex forces model to
+            # fill all slots instead of choosing a subset. Let it respond
+            # naturally and parse the comma-separated letters.
+            # open_response: no guided decoding
 
         last_error = None
 
