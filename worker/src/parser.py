@@ -30,6 +30,35 @@ Response: {raw_response}
 
 Answer:"""
 
+PARSER_PROMPT_MULTIPLE_SELECT = """You are given a question and a response to that question.
+Extract which options the response selects.
+
+Requirements:
+Answer as comma-separated uppercase letters (e.g., A, C, D).
+Only include options that are clearly selected in the response.
+If no match, answer 'X'.
+
+Question: {question_text}
+{options}
+
+Response: {raw_response}
+
+Answer:"""
+
+PARSER_PROMPT_RANKING = """You are given a question and a response to that question.
+Extract the ranking order from the response.
+
+Requirements:
+Answer as ordered comma-separated uppercase letters from most to least preferred, including ALL options (e.g., B, A, C, D).
+If the response does not contain a clear ranking of all options, answer 'X'.
+
+Question: {question_text}
+{options}
+
+Response: {raw_response}
+
+Answer:"""
+
 
 class ParserLLM:
     """
@@ -61,7 +90,13 @@ class ParserLLM:
         options_str = "\n".join(
             f"({chr(65 + i)}) {opt}" for i, opt in enumerate(question.options or [])
         )
-        return PARSER_PROMPT_TEMPLATE.format(
+        if question.type == "multiple_select":
+            template = PARSER_PROMPT_MULTIPLE_SELECT
+        elif question.type == "ranking":
+            template = PARSER_PROMPT_RANKING
+        else:
+            template = PARSER_PROMPT_TEMPLATE
+        return template.format(
             question_text=question.text,
             options=options_str,
             raw_response=raw_response,
@@ -69,19 +104,28 @@ class ParserLLM:
 
     def parse(self, raw_response: str, question: Question) -> str:
         """
-        Parse a verbose LLM response into a single answer letter.
+        Parse a verbose LLM response into an answer.
+
+        For MCQ: returns single letter (A, B, C, ...)
+        For multiple_select: returns comma-separated letters (A,C,D)
+        For ranking: returns comma-separated letters in order (B,A,C,D)
 
         Args:
             raw_response: The raw text output from the base model
             question: The question being answered
 
         Returns:
-            Single letter (A, B, C, ...) if extracted, empty string otherwise
+            Parsed answer string, or empty string on failure
         """
         if not self.is_configured:
             return ""
 
         prompt = self._build_prompt(raw_response, question)
+
+        # Adjust max_tokens for multi-letter responses
+        effective_max_tokens = self.max_tokens
+        if question.type in ("multiple_select", "ranking") and question.options:
+            effective_max_tokens = 3 * len(question.options)
 
         try:
             headers = {
@@ -92,7 +136,7 @@ class ParserLLM:
                 "model": self.model,
                 "messages": [{"role": "user", "content": prompt}],
                 "temperature": self.temperature,
-                "max_tokens": self.max_tokens,
+                "max_tokens": effective_max_tokens,
             }
 
             with httpx.Client(timeout=self.timeout) as client:
@@ -108,22 +152,36 @@ class ParserLLM:
 
             content = data["choices"][0]["message"]["content"].strip()
 
-            # Extract the letter from "Answer: B" or just "B"
+            # Extract content after "Answer:" if present
             if "Answer:" in content:
-                letter = content.split("Answer:")[1].strip().upper()
+                content = content.split("Answer:")[1].strip().upper()
             else:
-                letter = content.strip().upper()
+                content = content.strip().upper()
 
             # "X" means no match — return empty
-            if letter == "X":
+            if content == "X":
                 return ""
 
-            # Validate it's a single valid letter
-            if len(letter) == 1 and letter.isalpha() and ord(letter) - ord("A") < len(question.options or []):
-                return letter
-
-            return ""
+            # Dispatch parsing based on question type
+            if question.type in ("multiple_select", "ranking"):
+                return self._parse_comma_separated(content, question)
+            else:
+                return self._parse_single_letter(content, question)
 
         except Exception as e:
             logger.warning(f"Parser LLM error: {e}")
             return ""
+
+    def _parse_single_letter(self, content: str, question: Question) -> str:
+        """Parse a single letter answer for MCQ."""
+        if len(content) == 1 and content.isalpha() and ord(content) - ord("A") < len(question.options or []):
+            return content
+        return ""
+
+    def _parse_comma_separated(self, content: str, question: Question) -> str:
+        """Parse comma-separated letters for multiple_select/ranking."""
+        from .llm import LLMResponse
+        num_options = len(question.options or [])
+        require_all = question.type == "ranking"
+        result = LLMResponse.from_comma_separated(content, num_options, require_all=require_all)
+        return result.answer

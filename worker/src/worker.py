@@ -133,12 +133,17 @@ class TaskProcessor:
         results: Dict[str, str] = {}
         context = ""
 
+        # Calculate suggested word count for open response (approx 2/3 of max_tokens)
+        llm_max_tokens = getattr(self.llm, "max_tokens", None)
+        open_response_max_words = int(llm_max_tokens * 2 / 3) if isinstance(llm_max_tokens, (int, float)) else None
+
         for i, question in enumerate(questions):
             # Build prompt based on whether this is first question or follow-up
+            max_words = open_response_max_words if question.type == "open_response" else None
             if i == 0:
-                prompt = build_initial_prompt(backstory, question)
+                prompt = build_initial_prompt(backstory, question, max_words=max_words)
             else:
-                prompt = build_followup_prompt(context, question)
+                prompt = build_followup_prompt(context, question, max_words=max_words)
 
             # Compliance forcing: retry until we get a parseable answer (like anthology)
             max_compliance_retries = 10  # Anthology uses 100, we use 10 for now
@@ -162,14 +167,25 @@ class TaskProcessor:
                 if answer:
                     tier = "tier1_guided"
 
-                # Tier 2: parser LLM fallback (for MCQ only)
-                if not answer and question.type == "mcq" and self.parser_llm and response.raw:
+                # Open response: accept any non-empty text as valid, skip Tier 2/3
+                if question.type == "open_response":
+                    if answer:
+                        tier = "tier1_text"
+                        logger.info(f"[{tier}] {question.qkey}={repr(answer[:80])} (raw={repr(raw_answer[:80])})")
+                        break
+                    else:
+                        # Empty response — retry (model produced nothing)
+                        logger.warning(f"[parse_fail] {question.qkey} open_response empty, retrying")
+                        continue
+
+                # Tier 2: parser LLM fallback (MCQ, multiple_select, ranking)
+                if not answer and question.type in ("mcq", "multiple_select", "ranking") and self.parser_llm and response.raw:
                     answer = self.parser_llm.parse(response.raw, question)
                     if answer:
                         tier = "tier2_parser"
 
-                # Tier 3: option text matching (existing fallback)
-                if not answer and question.options and response.raw:
+                # Tier 3: option text matching (MCQ only — doesn't apply to multi-select/ranking)
+                if not answer and question.type == "mcq" and question.options and response.raw:
                     answer = match_option_text(response.raw, question.options)
                     if answer:
                         tier = "tier3_regex"

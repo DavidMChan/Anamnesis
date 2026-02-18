@@ -63,14 +63,17 @@ def format_mcq_question(question: Question) -> str:
     return f"Question: {question.text}\n{choices_str}\n{answer_forcing}\nAnswer:"
 
 
-def format_open_response_question(question: Question) -> str:
+def format_open_response_question(question: Question, max_words: Optional[int] = None) -> str:
     """
     Format an open response question.
 
     Format:
         Question: {question_text}
+        Answer in approximately N words.
         Answer:
     """
+    if max_words:
+        return f"Question: {question.text}\nAnswer in approximately {max_words} words.\nAnswer:"
     return f"Question: {question.text}\nAnswer:"
 
 
@@ -124,22 +127,22 @@ def format_ranking_question(question: Question) -> str:
     return f"Question: {question.text}\n{choices_str}\nRank all options from most to least preferred (e.g., A, C, B, D).\nAnswer:"
 
 
-def format_question(question: Question) -> str:
+def format_question(question: Question, max_words: Optional[int] = None) -> str:
     """Format a question based on its type."""
     if question.type == "mcq":
         return format_mcq_question(question)
     elif question.type == "multiple_select":
         return format_multiple_select_question(question)
     elif question.type == "open_response":
-        return format_open_response_question(question)
+        return format_open_response_question(question, max_words=max_words)
     elif question.type == "ranking":
         return format_ranking_question(question)
     else:
         # Default to open response
-        return format_open_response_question(question)
+        return format_open_response_question(question, max_words=max_words)
 
 
-def build_initial_prompt(backstory: Optional[str], question: Question) -> str:
+def build_initial_prompt(backstory: Optional[str], question: Question, max_words: Optional[int] = None) -> str:
     """
     Build the initial prompt for the first question.
 
@@ -152,6 +155,7 @@ def build_initial_prompt(backstory: Optional[str], question: Question) -> str:
     Args:
         backstory: The backstory text
         question: First question to ask
+        max_words: Suggested word count for open response questions
 
     Returns:
         Initial prompt string
@@ -161,7 +165,7 @@ def build_initial_prompt(backstory: Optional[str], question: Question) -> str:
     if backstory and backstory.strip():
         parts.append(backstory.strip())
 
-    parts.append(format_question(question))
+    parts.append(format_question(question, max_words=max_words))
 
     return "\n\n".join(parts)
 
@@ -184,7 +188,7 @@ def append_answer_to_context(context: str, answer: str) -> str:
     return f"{context} {answer}"
 
 
-def build_followup_prompt(context: str, question: Question) -> str:
+def build_followup_prompt(context: str, question: Question, max_words: Optional[int] = None) -> str:
     """
     Build a follow-up question prompt with consistency message.
 
@@ -201,11 +205,12 @@ def build_followup_prompt(context: str, question: Question) -> str:
     Args:
         context: Accumulated context (backstory + previous Q&As)
         question: Next question to ask
+        max_words: Suggested word count for open response questions
 
     Returns:
         Updated prompt with new question
     """
-    formatted_q = format_question(question)
+    formatted_q = format_question(question, max_words=max_words)
     return f"{context}\n\n{CONSISTENCY_PROMPT}\n{formatted_q}"
 
 
