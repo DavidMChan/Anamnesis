@@ -51,7 +51,8 @@ export async function createSurveyRun(
     console.log('[createSurveyRun] sampleSize:', sampleSize)
 
     // 2. Get matching backstories with demographic filters
-    let query = supabase.from('backstories').select('id').eq('is_public', true)
+    // TODO: Remove .neq('anthology') once anthology backstories have demographics
+    let query = supabase.from('backstories').select('id').eq('is_public', true).neq('source_type', 'anthology')
 
     // Apply demographic filters
     if (demographics) {
