@@ -91,6 +91,8 @@ export function DemographicFilter({ value, onChange, sampleSize, onSampleSizeCha
       .from('backstories')
       .select('id', { count: 'exact', head: true })
       .eq('is_public', true)
+      // TODO: Remove .neq('anthology') once anthology backstories have demographics
+      .neq('source_type', 'anthology')
 
     query = applyDemographicFilters(query, value)
 

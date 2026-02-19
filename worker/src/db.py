@@ -412,7 +412,8 @@ class DatabaseClient:
         Returns:
             List of backstory UUIDs
         """
-        query = self.client.table("backstories").select("id").eq("is_public", True)
+        # TODO: Remove .neq("anthology") once anthology backstories have demographics
+        query = self.client.table("backstories").select("id").eq("is_public", True).neq("source_type", "anthology")
 
         if demographic_filter:
             for key, allowed_values in demographic_filter.items():
@@ -439,6 +440,8 @@ class DatabaseClient:
                 self.client.table("backstories")
                 .select("id, demographics")
                 .eq("is_public", True)
+                # TODO: Remove .neq("anthology") once anthology backstories have demographics
+                .neq("source_type", "anthology")
                 .execute()
             )
             filtered = []
