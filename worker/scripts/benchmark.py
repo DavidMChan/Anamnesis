@@ -9,9 +9,11 @@ Usage:
     python scripts/benchmark.py \
         --provider vllm \
         --endpoint http://gpu-server:8000/v1 \
+        --api-key $VLLM_API_KEY \
         --model meta-llama/Llama-3-70b \
         --concurrency 1,5,10,20,50 \
-        --requests-per-level 30
+        --requests-per-level 50 \
+        --rounds 3
 
     python scripts/benchmark.py \
         --provider openrouter \
@@ -23,6 +25,7 @@ Usage:
 import argparse
 import asyncio
 import logging
+import statistics
 import sys
 import time
 from dataclasses import dataclass
@@ -69,12 +72,23 @@ BENCHMARK_CHAT_MESSAGES = [{"role": "user", "content": BENCHMARK_PROMPT}]
 class LevelResult:
     """Results from benchmarking one concurrency level."""
     concurrency: int
+    throughput: float  # median across rounds
+    p50: float  # median across rounds
+    p95: float  # median across rounds
+    p99: float  # median across rounds
+    errors: int  # total across rounds
+    status: str
+    rounds: int = 1
+
+
+@dataclass
+class RoundResult:
+    """Results from a single round."""
     throughput: float
     p50: float
     p95: float
     p99: float
     errors: int
-    status: str
 
 
 async def benchmark_openrouter(
@@ -172,19 +186,15 @@ async def benchmark_vllm(
             logger.warning(f"Request error: {e}")
 
 
-async def run_level(
+async def run_one_round(
     provider: str,
     concurrency: int,
     num_requests: int,
     api_key: Optional[str] = None,
     endpoint: Optional[str] = None,
     model: str = "",
-) -> tuple[LatencyTracker, int]:
-    """
-    Run benchmark at a single concurrency level.
-
-    Returns (tracker, error_count).
-    """
+) -> RoundResult:
+    """Run a single round of benchmark at one concurrency level."""
     tracker = LatencyTracker(window_seconds=600)  # Large window to capture all
     error_count = [0]
     semaphore = asyncio.Semaphore(concurrency)
@@ -208,19 +218,58 @@ async def run_level(
         await asyncio.gather(*tasks)
         elapsed = time.monotonic() - start
 
-    # Override throughput calculation using wall-clock time
     successful = num_requests - error_count[0]
     actual_throughput = successful / elapsed if elapsed > 0 else 0
 
-    return tracker, error_count[0], actual_throughput
+    return RoundResult(
+        throughput=actual_throughput,
+        p50=tracker.p50,
+        p95=tracker.p95,
+        p99=tracker.p99,
+        errors=error_count[0],
+    )
+
+
+async def run_warmup(
+    provider: str,
+    num_requests: int,
+    api_key: Optional[str] = None,
+    endpoint: Optional[str] = None,
+    model: str = "",
+) -> None:
+    """Send warmup requests to prime caches and connections."""
+    logger.info(f"Warming up with {num_requests} requests...")
+    tracker = LatencyTracker(window_seconds=600)
+    error_count = [0]
+    semaphore = asyncio.Semaphore(num_requests)
+
+    timeout = httpx.Timeout(120.0, connect=30.0)
+    async with httpx.AsyncClient(timeout=timeout) as client:
+        if provider == "openrouter":
+            tasks = [
+                benchmark_openrouter(client, api_key, model, semaphore, tracker, error_count)
+                for _ in range(num_requests)
+            ]
+        else:
+            tasks = [
+                benchmark_vllm(client, endpoint, model, api_key, semaphore, tracker, error_count)
+                for _ in range(num_requests)
+            ]
+        await asyncio.gather(*tasks)
+
+    logger.info(f"Warmup done ({num_requests - error_count[0]} OK, {error_count[0]} errors)")
 
 
 def print_results(results: list[LevelResult], recommended: Optional[int]) -> None:
     """Print results table."""
+    has_rounds = any(r.rounds > 1 for r in results)
+    rounds_note = f" (median of {results[0].rounds} rounds)" if has_rounds else ""
+
     header = f"{'Concurrency':>11} | {'Throughput':>10} | {'p50':>7} | {'p95':>7} | {'p99':>7} | {'Errors':>6} | Status"
     separator = "-" * len(header)
 
     print()
+    print(f"Results{rounds_note}:")
     print(header)
     print(separator)
 
@@ -259,8 +308,20 @@ async def main() -> None:
     parser.add_argument(
         "--requests-per-level",
         type=int,
-        default=30,
-        help="Number of requests per concurrency level (default: 30)",
+        default=50,
+        help="Number of requests per round per concurrency level (default: 50)",
+    )
+    parser.add_argument(
+        "--rounds",
+        type=int,
+        default=3,
+        help="Number of rounds per concurrency level; results use median (default: 3)",
+    )
+    parser.add_argument(
+        "--warmup",
+        type=int,
+        default=10,
+        help="Number of warmup requests before benchmarking (default: 10, 0 to skip)",
     )
 
     args = parser.parse_args()
@@ -275,26 +336,48 @@ async def main() -> None:
 
     logger.info(f"Benchmarking {args.provider} model={args.model}")
     logger.info(f"Concurrency levels: {levels}")
-    logger.info(f"Requests per level: {args.requests_per_level}")
+    logger.info(f"Requests per round: {args.requests_per_level}, rounds: {args.rounds}")
+
+    # Warmup
+    if args.warmup > 0:
+        await run_warmup(
+            provider=args.provider,
+            num_requests=args.warmup,
+            api_key=args.api_key,
+            endpoint=args.endpoint,
+            model=args.model,
+        )
 
     results: list[LevelResult] = []
     baseline_p99: Optional[float] = None
     prev_throughput: float = 0
 
     for level in levels:
-        logger.info(f"--- Testing concurrency={level} ---")
-        tracker, errors, throughput = await run_level(
-            provider=args.provider,
-            concurrency=level,
-            num_requests=args.requests_per_level,
-            api_key=args.api_key,
-            endpoint=args.endpoint,
-            model=args.model,
-        )
+        logger.info(f"--- Testing concurrency={level} ({args.rounds} rounds x {args.requests_per_level} requests) ---")
 
-        p50 = tracker.p50
-        p95 = tracker.p95
-        p99 = tracker.p99
+        round_results: list[RoundResult] = []
+        for rd in range(args.rounds):
+            rr = await run_one_round(
+                provider=args.provider,
+                concurrency=level,
+                num_requests=args.requests_per_level,
+                api_key=args.api_key,
+                endpoint=args.endpoint,
+                model=args.model,
+            )
+            round_results.append(rr)
+            logger.info(
+                f"  round {rd+1}/{args.rounds}: "
+                f"throughput={rr.throughput:.1f}/s p50={format_duration(rr.p50)} "
+                f"p95={format_duration(rr.p95)} p99={format_duration(rr.p99)} errors={rr.errors}"
+            )
+
+        # Aggregate: median of each metric
+        throughput = statistics.median(rr.throughput for rr in round_results)
+        p50 = statistics.median(rr.p50 for rr in round_results)
+        p95 = statistics.median(rr.p95 for rr in round_results)
+        p99 = statistics.median(rr.p99 for rr in round_results)
+        total_errors = sum(rr.errors for rr in round_results)
 
         # Set baseline from first level
         if baseline_p99 is None:
@@ -311,25 +394,25 @@ async def main() -> None:
             p50=p50,
             p95=p95,
             p99=p99,
-            errors=errors,
+            errors=total_errors,
             status=status,
+            rounds=args.rounds,
         ))
 
         prev_throughput = throughput
         logger.info(
-            f"concurrency={level}: throughput={throughput:.1f}/s p50={format_duration(p50)} "
-            f"p95={format_duration(p95)} p99={format_duration(p99)} errors={errors} status={status}"
+            f"concurrency={level} median: throughput={throughput:.1f}/s p50={format_duration(p50)} "
+            f"p95={format_duration(p95)} p99={format_duration(p99)} errors={total_errors} status={status}"
         )
 
-    # Find recommendation: last OK before first degradation (WARN/OVERLOAD)
+    # Find recommendation: last OK before first degradation
     recommended = None
     for r in results:
         if r.status == "OK":
             recommended = r.concurrency
         else:
-            break  # Stop at first degradation — don't trust recovery after
+            break
 
-    # If no OK level found, recommend the first level
     if recommended is None and results:
         recommended = results[0].concurrency
 
