@@ -7,7 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { supabase } from '@/lib/supabase'
 import { useSurveyRun, useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
-import { useAuth } from '@/hooks/useAuth'
+import { useAuthContext } from '@/contexts/AuthContext'
 import type { Survey, SurveyRun } from '@/types/database'
 import { ArrowLeft, Edit, Play, History } from 'lucide-react'
 
@@ -26,11 +26,12 @@ const questionTypeLabels: Record<string, string> = {
 export function SurveyView() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { user } = useAuth()
+  const { user, profile, maskedApiKeys } = useAuthContext()
   const [survey, setSurvey] = useState<Survey | null>(null)
   const [loading, setLoading] = useState(true)
   const [showHistory, setShowHistory] = useState(false)
   const [selectedRun, setSelectedRun] = useState<SurveyRun | null>(null)
+  const [configError, setConfigError] = useState<string | null>(null)
 
   // Fetch survey run data
   const { run: latestRun, runs, isRunning, refresh: refreshRuns } = useSurveyRun({
@@ -64,20 +65,37 @@ export function SurveyView() {
 
   const runSurvey = async () => {
     if (!survey || !user) return
+    setConfigError(null)
 
-    // Get user's LLM config
-    const { data: userData } = await supabase
-      .from('users')
-      .select('llm_config')
-      .eq('id', user.id)
-      .single()
-
-    const llmConfig = userData?.llm_config || {}
+    // Validate LLM config before creating tasks
+    const llmConfig = profile?.llm_config
+    if (!llmConfig?.provider) {
+      setConfigError('No LLM provider configured. Please set up your LLM settings in the Settings page before running a survey.')
+      return
+    }
+    if (llmConfig.provider === 'openrouter') {
+      if (!maskedApiKeys.openrouter) {
+        setConfigError('OpenRouter API key is missing. Please add your API key in the Settings page.')
+        return
+      }
+      if (!llmConfig.openrouter_model) {
+        setConfigError('OpenRouter model is not set. Please configure it in the Settings page.')
+        return
+      }
+    } else if (llmConfig.provider === 'vllm') {
+      if (!llmConfig.vllm_endpoint) {
+        setConfigError('vLLM endpoint is not set. Please configure it in the Settings page.')
+        return
+      }
+      if (!llmConfig.vllm_model) {
+        setConfigError('vLLM model is not set. Please configure it in the Settings page.')
+        return
+      }
+    }
 
     const runId = await createRun(survey.id, llmConfig)
     if (runId) {
       refreshRuns()
-      // Refresh survey to update status
       fetchSurvey()
     }
   }
@@ -146,10 +164,15 @@ export function SurveyView() {
           </div>
         </div>
 
-        {/* Error message */}
-        {createError && (
+        {/* Error messages */}
+        {(configError || createError) && (
           <div className="p-4 rounded-lg border border-destructive bg-destructive/10 text-destructive">
-            {createError}
+            {configError || createError}
+            {configError?.includes('Settings page') && (
+              <Link to="/settings" className="ml-1 underline font-medium hover:opacity-80">
+                Go to Settings
+              </Link>
+            )}
           </div>
         )}
 

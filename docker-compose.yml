@@ -40,17 +40,6 @@ services:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - RABBITMQ_URL=amqp://${RABBITMQ_USER:-arena}:${RABBITMQ_PASS}@rabbitmq:5672
-      # LLM config (will be moved to Supabase later)
-      - LLM_PROVIDER=${LLM_PROVIDER:-openrouter}
-      - OPENROUTER_API_KEY=${OPENROUTER_API_KEY:-}
-      - OPENROUTER_MODEL=${OPENROUTER_MODEL:-anthropic/claude-3-haiku}
-      - VLLM_ENDPOINT=${VLLM_ENDPOINT:-}
-      - VLLM_MODEL=${VLLM_MODEL:-}
-      - VLLM_API_KEY=${VLLM_API_KEY:-}
-      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-128}
-      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-1.0}
-      - USE_GUIDED_DECODING=${USE_GUIDED_DECODING:-true}
-      - PARSER_LLM_MODEL=${PARSER_LLM_MODEL:-google/gemini-2.0-flash-001}
     deploy:
       # Can scale workers: docker compose up -d --scale worker=2
       replicas: 1
