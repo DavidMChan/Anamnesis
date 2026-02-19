@@ -10,22 +10,6 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def parse_max_tokens(value: str) -> Optional[int]:
-    """
-    Parse max_tokens from environment variable.
-
-    Supports:
-    - Numeric values: "512", "1024" → int
-    - Unlimited: "INF", "unlimited", "-1" → None (no limit)
-
-    Returns:
-        int for numeric values, None for unlimited
-    """
-    if value.upper() in ("INF", "UNLIMITED", "-1"):
-        return None
-    return int(value)
-
-
 @dataclass
 class SupabaseConfig:
     """Supabase connection configuration."""
@@ -43,25 +27,25 @@ class RabbitMQConfig:
 
 @dataclass
 class LLMConfig:
-    """LLM provider configuration."""
-    provider: str = field(default_factory=lambda: os.environ.get("LLM_PROVIDER", "openrouter"))
+    """LLM provider configuration — built entirely from per-user database config."""
+    provider: str = ""
 
     # OpenRouter
-    openrouter_api_key: str = field(default_factory=lambda: os.environ.get("OPENROUTER_API_KEY", ""))
-    openrouter_model: str = field(default_factory=lambda: os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3-haiku"))
+    openrouter_api_key: str = ""
+    openrouter_model: str = ""
 
     # vLLM
-    vllm_endpoint: str = field(default_factory=lambda: os.environ.get("VLLM_ENDPOINT", "http://localhost:8000/v1"))
-    vllm_model: str = field(default_factory=lambda: os.environ.get("VLLM_MODEL", "meta-llama/Llama-3-70b"))
-    vllm_api_key: str = field(default_factory=lambda: os.environ.get("VLLM_API_KEY", ""))
+    vllm_endpoint: str = ""
+    vllm_model: str = ""
+    vllm_api_key: str = ""
 
     # Common settings
-    temperature: float = field(default_factory=lambda: float(os.environ.get("LLM_TEMPERATURE", "0.0")))
-    max_tokens: Optional[int] = field(default_factory=lambda: parse_max_tokens(os.environ.get("LLM_MAX_TOKENS", "512")))
-    use_guided_decoding: bool = field(default_factory=lambda: os.environ.get("USE_GUIDED_DECODING", "true").lower() == "true")
+    temperature: float = 0.0
+    max_tokens: Optional[int] = 512
+    use_guided_decoding: bool = True
 
     # Parser LLM (Tier 2 fallback for MCQ parsing) — reuses OpenRouter API key
-    parser_llm_model: str = field(default_factory=lambda: os.environ.get("PARSER_LLM_MODEL", "google/gemini-2.0-flash-001"))
+    parser_llm_model: str = "google/gemini-2.0-flash-001"
 
     @classmethod
     def from_user_config(
@@ -73,31 +57,40 @@ class LLMConfig:
         """
         Create LLMConfig from user's database configuration.
 
-        Uses user settings with fallback to environment defaults.
-
-        Args:
-            user_config: User's llm_config from database
-            openrouter_api_key: Decrypted OpenRouter API key from Vault
-            vllm_api_key: Decrypted vLLM API key from Vault
-
-        Returns:
-            LLMConfig with user settings or env fallbacks
+        Raises ValueError if the config is invalid or incomplete.
         """
-        # Get defaults from environment
-        defaults = cls()
+        provider = user_config.get("provider", "")
+        if not provider:
+            raise ValueError("No LLM provider set in user configuration")
 
-        return cls(
-            provider=user_config.get("provider") or defaults.provider,
-            openrouter_api_key=openrouter_api_key or defaults.openrouter_api_key,
-            openrouter_model=user_config.get("openrouter_model") or defaults.openrouter_model,
-            vllm_endpoint=user_config.get("vllm_endpoint") or defaults.vllm_endpoint,
-            vllm_model=user_config.get("vllm_model") or defaults.vllm_model,
-            vllm_api_key=vllm_api_key or defaults.vllm_api_key,
-            temperature=user_config.get("temperature") if user_config.get("temperature") is not None else defaults.temperature,
-            max_tokens=user_config.get("max_tokens") if user_config.get("max_tokens") is not None else defaults.max_tokens,
-            use_guided_decoding=user_config.get("use_guided_decoding") if user_config.get("use_guided_decoding") is not None else defaults.use_guided_decoding,
-            parser_llm_model=user_config.get("parser_llm_model") or defaults.parser_llm_model,
+        config = cls(
+            provider=provider,
+            openrouter_api_key=openrouter_api_key or "",
+            openrouter_model=user_config.get("openrouter_model", ""),
+            vllm_endpoint=user_config.get("vllm_endpoint", ""),
+            vllm_model=user_config.get("vllm_model", ""),
+            vllm_api_key=vllm_api_key or "",
+            temperature=user_config.get("temperature") if user_config.get("temperature") is not None else 0.0,
+            max_tokens=user_config.get("max_tokens") if user_config.get("max_tokens") is not None else 512,
+            use_guided_decoding=user_config.get("use_guided_decoding") if user_config.get("use_guided_decoding") is not None else True,
+            parser_llm_model=user_config.get("parser_llm_model") or "google/gemini-2.0-flash-001",
         )
+
+        # Validate provider-specific requirements
+        if provider == "openrouter":
+            if not config.openrouter_api_key:
+                raise ValueError("OpenRouter API key is required")
+            if not config.openrouter_model:
+                raise ValueError("OpenRouter model is required")
+        elif provider == "vllm":
+            if not config.vllm_endpoint:
+                raise ValueError("vLLM endpoint is required")
+            if not config.vllm_model:
+                raise ValueError("vLLM model is required")
+        else:
+            raise ValueError(f"Unknown LLM provider: {provider!r}")
+
+        return config
 
 
 @dataclass
@@ -115,7 +108,6 @@ class Config:
     """Main configuration container."""
     supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
     rabbitmq: RabbitMQConfig = field(default_factory=RabbitMQConfig)
-    llm: LLMConfig = field(default_factory=LLMConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
 
 
