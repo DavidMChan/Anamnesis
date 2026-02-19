@@ -106,6 +106,8 @@ class WorkerConfig:
     max_retries: int = field(default_factory=lambda: int(os.environ.get("MAX_RETRIES", "3")))
     retry_delay_base: float = field(default_factory=lambda: float(os.environ.get("RETRY_DELAY_BASE", "1.0")))
     retry_delay_max: float = field(default_factory=lambda: float(os.environ.get("RETRY_DELAY_MAX", "30.0")))
+    max_concurrent_tasks: int = field(default_factory=lambda: int(os.environ.get("MAX_CONCURRENT_TASKS", "10")))
+    metrics_log_interval: float = field(default_factory=lambda: float(os.environ.get("METRICS_LOG_INTERVAL", "30.0")))
 
 
 @dataclass

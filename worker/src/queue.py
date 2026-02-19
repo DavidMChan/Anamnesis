@@ -1,9 +1,15 @@
 """
-RabbitMQ queue consumer module.
+RabbitMQ queue module.
+
+Provides:
+- QueueConsumer: Sync consumer using pika (legacy, still works)
+- AsyncQueueConsumer: Async consumer using aio-pika (for async worker)
+- QueuePublisher: Sync publisher using pika (used by dispatcher)
 """
+import asyncio
 import json
 import logging
-from typing import Callable, Optional
+from typing import Callable, Optional, AsyncIterator
 
 import pika
 from pika.adapters.blocking_connection import BlockingChannel
@@ -11,6 +17,11 @@ from pika.adapters.blocking_connection import BlockingChannel
 from .config import RabbitMQConfig
 
 logger = logging.getLogger(__name__)
+
+try:
+    import aio_pika
+except ImportError:
+    aio_pika = None  # type: ignore[assignment]
 
 
 class QueueConsumer:
@@ -145,6 +156,115 @@ class QueueConsumer:
         """Stop consuming messages."""
         if self.channel:
             self.channel.stop_consuming()
+
+
+class AsyncQueueConsumer:
+    """
+    Async RabbitMQ consumer using aio-pika.
+
+    Usage:
+        consumer = AsyncQueueConsumer(config)
+        await consumer.connect()
+        async for message in consumer:
+            # message is a dict (parsed JSON body)
+            # Call message.ack() / message.nack() on the raw message
+            pass
+        await consumer.close()
+    """
+
+    def __init__(
+        self,
+        config: Optional[RabbitMQConfig] = None,
+        prefetch_count: Optional[int] = None,
+    ):
+        if config is None:
+            config = RabbitMQConfig()
+        self.config = config
+        self.prefetch_count = prefetch_count or config.prefetch_count
+        self._connection: Optional["aio_pika.abc.AbstractRobustConnection"] = None
+        self._channel: Optional["aio_pika.abc.AbstractChannel"] = None
+        self._queue: Optional["aio_pika.abc.AbstractQueue"] = None
+        self._iterator: Optional[AsyncIterator] = None
+        self._closed = False
+
+    async def connect(self, max_retries: int = 5, retry_delay: float = 2.0) -> None:
+        """Connect to RabbitMQ with retry logic."""
+        if aio_pika is None:
+            raise ImportError("aio-pika is required for AsyncQueueConsumer. Install with: pip install aio-pika")
+
+        current_delay = retry_delay
+        last_error = None
+
+        for attempt in range(max_retries):
+            try:
+                self._connection = await aio_pika.connect_robust(self.config.url)
+                self._channel = await self._connection.channel()
+                await self._channel.set_qos(prefetch_count=self.prefetch_count)
+
+                self._queue = await self._channel.declare_queue(
+                    self.config.queue_name,
+                    durable=True,
+                )
+
+                logger.info(
+                    f"Async consumer connected to RabbitMQ, "
+                    f"queue: {self.config.queue_name}, "
+                    f"prefetch: {self.prefetch_count}"
+                )
+                return
+
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries - 1:
+                    logger.warning(
+                        f"RabbitMQ connection failed (attempt {attempt + 1}/{max_retries}), "
+                        f"retrying in {current_delay:.1f}s..."
+                    )
+                    await asyncio.sleep(current_delay)
+                    current_delay = min(current_delay * 2, 30.0)
+
+        raise RuntimeError(
+            f"Failed to connect to RabbitMQ after {max_retries} attempts: {last_error}"
+        )
+
+    async def close(self) -> None:
+        """Close the connection."""
+        self._closed = True
+        if self._connection and not self._connection.is_closed:
+            await self._connection.close()
+            logger.info("Async consumer disconnected from RabbitMQ")
+
+    def __aiter__(self):
+        """Start iterating over messages."""
+        if self._queue is None:
+            raise RuntimeError("Not connected. Call connect() first.")
+        self._iterator = self._queue.iterator()
+        return self
+
+    async def __anext__(self) -> "aio_pika.IncomingMessage":
+        """
+        Get next message from the queue.
+
+        Returns the raw aio_pika.IncomingMessage so the caller
+        can ack/nack after processing.
+        """
+        if self._closed:
+            raise StopAsyncIteration
+        if self._iterator is None:
+            raise RuntimeError("Not connected. Call connect() first.")
+        try:
+            return await self._iterator.__anext__()
+        except StopAsyncIteration:
+            raise
+        except Exception as e:
+            if self._closed:
+                raise StopAsyncIteration
+            raise
+
+    @staticmethod
+    def parse_message(message: "aio_pika.IncomingMessage") -> dict:
+        """Parse a message body as JSON."""
+        return json.loads(message.body.decode("utf-8"))
 
 
 class QueuePublisher:
