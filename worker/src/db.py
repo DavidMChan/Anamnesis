@@ -119,6 +119,64 @@ class DatabaseClient:
 
         return result.data if result.data else 0
 
+    def claim_task(self, task_id: str) -> bool:
+        """
+        Atomically claim a task for processing.
+
+        Only succeeds if task is in 'pending' or 'queued' state.
+        This prevents duplicate processing when multiple workers
+        receive the same message from RabbitMQ.
+
+        Args:
+            task_id: UUID of the task
+
+        Returns:
+            True if claimed, False if already claimed by another worker.
+        """
+        result = self.client.rpc(
+            "claim_task",
+            {"p_task_id": task_id}
+        ).execute()
+        return bool(result.data)
+
+    def complete_task(self, task_id: str, result: dict) -> bool:
+        """
+        Atomically mark task as completed with result.
+
+        Only succeeds if task is in 'processing' state.
+
+        Args:
+            task_id: UUID of the task
+            result: Result data (qkey -> answer mapping)
+
+        Returns:
+            True if completed, False if task was not in 'processing' state.
+        """
+        rpc_result = self.client.rpc(
+            "complete_task",
+            {"p_task_id": task_id, "p_result": result}
+        ).execute()
+        return bool(rpc_result.data)
+
+    def fail_task(self, task_id: str, error: str) -> bool:
+        """
+        Atomically mark task as failed with error message.
+
+        Only succeeds if task is in 'processing' state.
+
+        Args:
+            task_id: UUID of the task
+            error: Error message
+
+        Returns:
+            True if marked failed, False if task was not in 'processing' state.
+        """
+        rpc_result = self.client.rpc(
+            "fail_task",
+            {"p_task_id": task_id, "p_error": error}
+        ).execute()
+        return bool(rpc_result.data)
+
     # ==================== Backstory Operations ====================
 
     def get_backstory(self, backstory_id: str) -> Optional[Dict[str, Any]]:
