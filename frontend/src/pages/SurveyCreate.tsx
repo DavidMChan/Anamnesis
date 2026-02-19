@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useNavigate, useParams, Link } from 'react-router-dom'
 import {
   DndContext,
   closestCenter,
@@ -33,7 +33,7 @@ import { Plus, Save, Play, ArrowLeft } from 'lucide-react'
 export function SurveyCreate() {
   const { id } = useParams()
   const navigate = useNavigate()
-  const { user } = useAuthContext()
+  const { user, profile, maskedApiKeys } = useAuthContext()
   const isEditing = !!id
 
   const [name, setName] = useState('')
@@ -231,19 +231,35 @@ export function SurveyCreate() {
   const handleRunSurvey = async () => {
     if (!user) return
 
+    // Validate LLM config before creating tasks
+    const llmConfig = profile?.llm_config
+    if (!llmConfig?.provider) {
+      setError('No LLM provider configured. Please set up your LLM settings in the Settings page before running a survey.')
+      return
+    }
+    if (llmConfig.provider === 'openrouter') {
+      if (!maskedApiKeys.openrouter) {
+        setError('OpenRouter API key is missing. Please add your API key in the Settings page.')
+        return
+      }
+      if (!llmConfig.openrouter_model) {
+        setError('OpenRouter model is not set. Please configure it in the Settings page.')
+        return
+      }
+    } else if (llmConfig.provider === 'vllm') {
+      if (!llmConfig.vllm_endpoint) {
+        setError('vLLM endpoint is not set. Please configure it in the Settings page.')
+        return
+      }
+      if (!llmConfig.vllm_model) {
+        setError('vLLM model is not set. Please configure it in the Settings page.')
+        return
+      }
+    }
+
     // Save as draft first, createSurveyRun will set it to 'active'
     const result = await saveSurvey('draft')
     if (result) {
-      // Get user's LLM config
-      const { data: userData } = await supabase
-        .from('users')
-        .select('llm_config')
-        .eq('id', user.id)
-        .single()
-
-      const llmConfig = userData?.llm_config || {}
-
-      // Actually create the run
       const runId = await createRun(result.id, llmConfig)
       if (runId) {
         navigate(`/surveys/${result.id}`)
@@ -273,6 +289,11 @@ export function SurveyCreate() {
         {error && (
           <div className="p-3 text-sm text-red-500 bg-red-50 border border-red-200 rounded-md">
             {error}
+            {error.includes('Settings page') && (
+              <Link to="/settings" className="ml-1 underline font-medium hover:text-red-700">
+                Go to Settings
+              </Link>
+            )}
           </div>
         )}
 
