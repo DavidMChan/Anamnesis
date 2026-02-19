@@ -544,3 +544,88 @@ class DatabaseClient:
             "status": "queued",
             "queued_at": "now()"
         }).eq("id", task_id).execute()
+
+    # ==================== User Config Operations ====================
+
+    def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a user by ID.
+
+        Args:
+            user_id: UUID of the user
+
+        Returns:
+            User record or None if not found
+        """
+        result = (
+            self.client.table("users")
+            .select("*")
+            .eq("id", user_id)
+            .single()
+            .execute()
+        )
+        return result.data if result.data else None
+
+    def get_user_llm_config(self, user_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Fetch a user's LLM configuration.
+
+        Args:
+            user_id: UUID of the user
+
+        Returns:
+            LLM config dict or None if not found
+        """
+        user = self.get_user(user_id)
+        if not user:
+            return None
+        return user.get("llm_config")
+
+    def get_user_api_key(self, user_id: str, key_type: str) -> Optional[str]:
+        """
+        Fetch a user's decrypted API key from Vault.
+
+        This uses the get_user_api_key RPC function which requires
+        service role access.
+
+        Args:
+            user_id: UUID of the user
+            key_type: Type of key ('openrouter' or 'vllm')
+
+        Returns:
+            Decrypted API key or None if not found
+        """
+        result = self.client.rpc(
+            "get_user_api_key",
+            {"p_user_id": user_id, "p_key_type": key_type}
+        ).execute()
+
+        return result.data if result.data else None
+
+    def get_survey_run_user_id(self, run_id: str) -> Optional[str]:
+        """
+        Get the user_id for a survey run.
+
+        Args:
+            run_id: UUID of the survey run
+
+        Returns:
+            User ID or None if not found
+        """
+        # Get the survey run, then get the survey, then get the user_id
+        result = (
+            self.client.table("survey_runs")
+            .select("surveys(user_id)")
+            .eq("id", run_id)
+            .single()
+            .execute()
+        )
+
+        if not result.data:
+            return None
+
+        surveys_data = result.data.get("surveys")
+        if not surveys_data:
+            return None
+
+        return surveys_data.get("user_id")

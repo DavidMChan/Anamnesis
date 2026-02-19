@@ -269,7 +269,7 @@ class OpenRouterClient(BaseLLMClient):
         headers = {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://virtual-personas-arena.vercel.app",
+            "HTTP-Referer": "https://anamnesis-rho.vercel.app",
         }
 
         # Use provided schema or default

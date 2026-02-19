@@ -6,9 +6,16 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { supabase } from '@/lib/supabase'
 import type { Survey, SurveyRun, Question, SurveyResults as SurveyResultsType } from '@/types/database'
-import { ArrowLeft, Download, BarChart2, Table, ImageDown } from 'lucide-react'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
+import { BarChart2, Table, ImageDown } from 'lucide-react'
 import { useRef, useCallback } from 'react'
+import { ResultsHero } from '@/components/results/ResultsHero'
+import { OpenResponseList } from '@/components/results/OpenResponseList'
+import { DistributionChart } from '@/components/results/DistributionChart'
+import { RankingResults } from '@/components/results/RankingResults'
+import { ResultsTable } from '@/components/results/ResultsTable'
+import { DemographicsSummary } from '@/components/results/DemographicsSummary'
+import { DemographicFilter } from '@/components/results/DemographicFilter'
+import type { Backstory, DemographicKey } from '@/types/database'
 
 // Chart colors (vibrant for data visualization)
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
@@ -48,7 +55,19 @@ export function SurveyResults() {
   const [run, setRun] = useState<SurveyRun | null>(null)
   const [stats, setStats] = useState<QuestionStats[]>([])
   const [loading, setLoading] = useState(true)
+
+  // Demographic filtering state
+  const [backstories, setBackstories] = useState<Backstory[] | null>(null)
+  const [demographicKeys, setDemographicKeys] = useState<DemographicKey[] | null>(null)
+  const [selectedFilters, setSelectedFilters] = useState<{ key: string; value: string }[]>([])
+  const [loadingDemographics, setLoadingDemographics] = useState(false)
   const chartRefs = useRef<Map<string, HTMLDivElement>>(new Map())
+
+  useEffect(() => {
+    if (survey && run && backstories) {
+      calculateStats(survey, run.results, selectedFilters)
+    }
+  }, [backstories])
 
   useEffect(() => {
     fetchData()
@@ -97,24 +116,102 @@ export function SurveyResults() {
 
     const surveyRun = runData as SurveyRun
     setRun(surveyRun)
-    calculateStats(survey, surveyRun.results)
+
+    // Fetch demographic keys immediately
+    const { data: keysData } = await supabase
+      .from('demographic_keys')
+      .select('*')
+
+    if (keysData) {
+      setDemographicKeys(keysData as DemographicKey[])
+    }
+
+    calculateStats(survey, surveyRun.results, [])
+
     setLoading(false)
   }
 
-  const calculateStats = (survey: Survey, results: SurveyResultsType) => {
-    const totalResponses = Object.keys(results || {}).length
+  const fetchDemographics = async () => {
+    if (backstories) return
+    if (!run?.results) return
 
-    // Map letter (A, B, C, D...) to option index
-    const letterToOption = (letter: string, options: string[] | undefined): string | null => {
-      if (!options) return null
-      const index = letter.charCodeAt(0) - 'A'.charCodeAt(0)
-      if (index >= 0 && index < options.length) {
-        return options[index]
+    setLoadingDemographics(true)
+    try {
+      const backstoryIds = Object.keys(run.results)
+
+      // If there are many backstories, fetching by "in" can be slow.
+      // We'll batch the requests to be safer and potentially faster than one giant "in".
+      const BATCH_SIZE = 100
+      let allBackstories: Backstory[] = []
+
+      for (let i = 0; i < backstoryIds.length; i += BATCH_SIZE) {
+        const batchIds = backstoryIds.slice(i, i + BATCH_SIZE)
+        const { data, error } = await supabase
+          .from('backstories')
+          .select('*')
+          .in('id', batchIds)
+
+        if (error) throw error
+        if (data) {
+          allBackstories = [...allBackstories, ...(data as Backstory[])]
+        }
       }
-      return null
+
+      setBackstories(allBackstories)
+    } catch (error) {
+      console.error('Error fetching demographics:', error)
+    } finally {
+      setLoadingDemographics(false)
     }
+  }
+
+  const calculateStats = (
+    survey: Survey,
+    results: SurveyResultsType,
+    filters: { key: string; value: string }[]
+  ) => {
+    const backstoryEntries = Object.entries(results || {})
+
+    // Map of backstory ID to weight
+    const weights: Record<string, number> = {}
+    let totalWeight = 0
+
+    backstoryEntries.forEach(([backstoryId, _]) => {
+      let weight = 1.0
+
+      if (filters.length > 0 && backstories) {
+        const backstory = backstories.find(b => b.id === backstoryId)
+
+        for (const filter of filters) {
+          const demoData = backstory?.demographics?.[filter.key]
+          let filterWeight = 0
+
+          if (demoData?.distribution) {
+            filterWeight = demoData.distribution[filter.value] ?? 0
+          } else if (demoData?.value === filter.value) {
+            filterWeight = 1.0
+          }
+
+          weight *= filterWeight
+          if (weight === 0) break // Short circuit if any weight is 0
+        }
+      }
+
+      weights[backstoryId] = weight
+      totalWeight += weight
+    })
 
     const questionStats: QuestionStats[] = survey.questions.map((question) => {
+      // Map letter (A, B, C, D...) to option index
+      const letterToOption = (letter: string, options: string[] | undefined): string | null => {
+        if (!options) return null
+        const index = letter.charCodeAt(0) - 'A'.charCodeAt(0)
+        if (index >= 0 && index < options.length) {
+          return options[index]
+        }
+        return null
+      }
+
       if (question.type === 'open_response') {
         const openResponses = Object.values(results)
           .map((r) => r[question.qkey] as string)
@@ -144,7 +241,10 @@ export function SurveyResults() {
           bordaScores[opt] = 0
         })
 
-        Object.values(results).forEach((response) => {
+        Object.entries(results).forEach(([backstoryId, response]) => {
+          const weight = weights[backstoryId]
+          if (weight <= 0) return
+
           const answer = response[question.qkey] as string
           if (!answer) return
 
@@ -156,16 +256,16 @@ export function SurveyResults() {
             if (optionText) {
               // Position is 0-indexed, rank is 1-indexed
               const rank = position + 1
-              rankSums[optionText] += rank
-              rankCounts[optionText] += 1
+              rankSums[optionText] += rank * weight
+              rankCounts[optionText] += weight
 
               // First place count
               if (position === 0) {
-                firstPlaceCounts[optionText] += 1
+                firstPlaceCounts[optionText] += weight
               }
 
               // Borda score: 1st place gets N points, 2nd gets N-1, etc.
-              bordaScores[optionText] += (numOptions - position)
+              bordaScores[optionText] += (numOptions - position) * weight
             }
           })
         })
@@ -173,8 +273,8 @@ export function SurveyResults() {
         const rankingStats = question.options.map((opt) => ({
           option: opt,
           avgRank: rankCounts[opt] > 0 ? Math.round((rankSums[opt] / rankCounts[opt]) * 10) / 10 : 0,
-          bordaScore: bordaScores[opt],
-          firstPlaceCount: firstPlaceCounts[opt],
+          bordaScore: Math.round(bordaScores[opt] * 10) / 10,
+          firstPlaceCount: Math.round(firstPlaceCounts[opt] * 10) / 10,
         }))
 
         // Sort by Borda score (higher is better)
@@ -198,7 +298,10 @@ export function SurveyResults() {
         })
       }
 
-      Object.values(results).forEach((response) => {
+      Object.entries(results).forEach(([backstoryId, response]) => {
+        const weight = weights[backstoryId]
+        if (weight <= 0) return
+
         const answer = response[question.qkey]
         if (answer) {
           // Handle comma-separated answers (from multiple_select)
@@ -208,15 +311,15 @@ export function SurveyResults() {
 
           answers.forEach((a) => {
             const optionText = letterToOption(a, question.options) || a
-            counts[optionText] = (counts[optionText] || 0) + 1
+            counts[optionText] = (counts[optionText] || 0) + weight
           })
         }
       })
 
       const distribution = Object.entries(counts).map(([option, count]) => ({
         option,
-        count,
-        percentage: totalResponses > 0 ? Math.round((count / totalResponses) * 100) : 0,
+        count: Math.round(count * 10) / 10,
+        percentage: totalWeight > 0 ? Math.round((count / totalWeight) * 100) : 0,
       }))
 
       return {
@@ -373,27 +476,22 @@ export function SurveyResults() {
   return (
     <Layout>
       <div className="max-w-5xl mx-auto space-y-6">
-        <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => navigate(`/surveys/${survey.id}`)}>
-            <ArrowLeft className="h-4 w-4" />
-          </Button>
-          <div className="flex-1">
-            <h1 className="text-3xl font-bold">{survey.name || 'Untitled Survey'} - Results</h1>
-            <p className="text-muted-foreground">
-              {totalResponses} responses • {survey.questions.length} questions
-            </p>
-          </div>
-          <Button onClick={downloadCSV}>
-            <Download className="h-4 w-4 mr-2" />
-            Download CSV
-          </Button>
-        </div>
+        <ResultsHero
+          survey={survey}
+          totalResponses={totalResponses}
+          onBack={() => navigate(`/surveys/${survey.id}`)}
+          onDownloadCSV={downloadCSV}
+        />
 
         <Tabs defaultValue="charts">
           <TabsList>
             <TabsTrigger value="charts">
               <BarChart2 className="h-4 w-4 mr-2" />
               Charts
+            </TabsTrigger>
+            <TabsTrigger value="demographics">
+              <Table className="h-4 w-4 mr-2" />
+              Demographics
             </TabsTrigger>
             <TabsTrigger value="table">
               <Table className="h-4 w-4 mr-2" />
@@ -402,6 +500,19 @@ export function SurveyResults() {
           </TabsList>
 
           <TabsContent value="charts" className="space-y-6 mt-6">
+            <DemographicFilter
+              demographicKeys={demographicKeys}
+              selectedFilters={selectedFilters}
+              onFiltersChange={(filters) => {
+                setSelectedFilters(filters)
+                if (survey && run) {
+                  calculateStats(survey, run.results, filters)
+                }
+              }}
+              onTriggerFetch={fetchDemographics}
+              isLoading={loadingDemographics}
+            />
+
             {stats.map((stat, index) => (
               <Card key={stat.qkey}>
                 <CardHeader>
@@ -424,117 +535,27 @@ export function SurveyResults() {
                 </CardHeader>
                 <CardContent>
                   {stat.question.type === 'open_response' ? (
-                    <div className="space-y-2 max-h-64 overflow-y-auto">
-                      {stat.openResponses?.slice(0, 10).map((response, i) => (
-                        <div key={i} className="p-3 bg-muted rounded-md text-sm">
-                          {response}
-                        </div>
-                      ))}
-                      {(stat.openResponses?.length || 0) > 10 && (
-                        <p className="text-sm text-muted-foreground">
-                          ...and {(stat.openResponses?.length || 0) - 10} more responses
-                        </p>
-                      )}
-                    </div>
+                    <OpenResponseList responses={stat.openResponses} />
                   ) : stat.question.type === 'ranking' && stat.rankingStats ? (
-                    <div className="space-y-4">
-                      {/* Borda Score Chart */}
-                      <div>
-                        <h4 className="text-sm font-medium mb-2 text-muted-foreground">
-                          Borda Score (higher = more preferred)
-                        </h4>
-                        <div
-                          className="h-48"
-                          ref={(el) => { if (el) chartRefs.current.set(stat.qkey, el) }}
-                        >
-                          <ResponsiveContainer width="100%" height="100%">
-                            <BarChart data={stat.rankingStats} layout="vertical">
-                              <CartesianGrid strokeDasharray="3 3" />
-                              <XAxis type="number" />
-                              <YAxis
-                                type="category"
-                                dataKey="option"
-                                width={150}
-                                tick={{ fontSize: 12 }}
-                              />
-                              <Tooltip
-                                formatter={(value, name) => {
-                                  if (name === 'bordaScore') return [`${value} points`, 'Borda Score']
-                                  return [value, name]
-                                }}
-                              />
-                              <Bar dataKey="bordaScore" radius={[0, 4, 4, 0]}>
-                                {stat.rankingStats.map((_, i) => (
-                                  <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                                ))}
-                              </Bar>
-                            </BarChart>
-                          </ResponsiveContainer>
-                        </div>
-                      </div>
-                      {/* Detailed Stats Table */}
-                      <div className="border rounded-md overflow-hidden">
-                        <table className="w-full text-sm">
-                          <thead className="bg-muted">
-                            <tr>
-                              <th className="text-left p-2 font-medium">Option</th>
-                              <th className="text-right p-2 font-medium">Avg Rank</th>
-                              <th className="text-right p-2 font-medium">Borda Score</th>
-                              <th className="text-right p-2 font-medium">#1 Votes</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {stat.rankingStats.map((item, i) => (
-                              <tr key={item.option} className="border-t">
-                                <td className="p-2 flex items-center gap-2">
-                                  <span
-                                    className="w-3 h-3 rounded-full"
-                                    style={{ backgroundColor: COLORS[i % COLORS.length] }}
-                                  />
-                                  {item.option}
-                                </td>
-                                <td className="text-right p-2">{item.avgRank || '-'}</td>
-                                <td className="text-right p-2 font-medium">{item.bordaScore}</td>
-                                <td className="text-right p-2">{item.firstPlaceCount}</td>
-                              </tr>
-                            ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    </div>
+                    <RankingResults
+                      rankingStats={stat.rankingStats}
+                      colors={COLORS}
+                      onRef={(el) => { if (el) chartRefs.current.set(stat.qkey, el) }}
+                    />
                   ) : (
-                    <div
-                      className="h-64"
-                      ref={(el) => { if (el) chartRefs.current.set(stat.qkey, el) }}
-                    >
-                      <ResponsiveContainer width="100%" height="100%">
-                        <BarChart data={stat.distribution} layout="vertical">
-                          <CartesianGrid strokeDasharray="3 3" />
-                          <XAxis type="number" domain={[0, 100]} tickFormatter={(v) => `${v}%`} />
-                          <YAxis
-                            type="category"
-                            dataKey="option"
-                            width={150}
-                            tick={{ fontSize: 12 }}
-                          />
-                          <Tooltip
-                            formatter={(value, _name, props) => [
-                              `${value}% (${(props as { payload: { count: number } }).payload.count} responses)`,
-                              'Percentage'
-                            ]}
-                          />
-                          <Bar dataKey="percentage" radius={[0, 4, 4, 0]}>
-                            {stat.distribution.map((_, i) => (
-                              <Cell key={i} fill={COLORS[i % COLORS.length]} />
-                            ))}
-                          </Bar>
-                        </BarChart>
-                      </ResponsiveContainer>
-                    </div>
+                    <DistributionChart
+                      distribution={stat.distribution}
+                      colors={COLORS}
+                      onRef={(el) => { if (el) chartRefs.current.set(stat.qkey, el) }}
+                    />
                   )}
                 </CardContent>
               </Card>
             ))}
+          </TabsContent>
+
+          <TabsContent value="demographics" className="mt-6">
+            <DemographicsSummary backstoryIds={Object.keys(results)} colors={COLORS} />
           </TabsContent>
 
           <TabsContent value="table" className="mt-6">
@@ -546,41 +567,7 @@ export function SurveyResults() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b">
-                        <th className="text-left p-2 font-medium">Backstory ID</th>
-                        {survey.questions.map((q, i) => (
-                          <th key={q.qkey} className="text-left p-2 font-medium">
-                            Q{i + 1}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {Object.entries(results).slice(0, 20).map(([backstoryId, responses]) => (
-                        <tr key={backstoryId} className="border-b">
-                          <td className="p-2 font-mono text-xs">
-                            {backstoryId.slice(0, 8)}...
-                          </td>
-                          {survey.questions.map((q) => (
-                            <td key={q.qkey} className="p-2">
-                              {Array.isArray(responses[q.qkey])
-                                ? (responses[q.qkey] as string[]).join(', ')
-                                : (responses[q.qkey] as string) || '-'}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {Object.keys(results).length > 20 && (
-                    <p className="text-sm text-muted-foreground mt-4">
-                      Showing 20 of {Object.keys(results).length} responses. Download CSV for full data.
-                    </p>
-                  )}
-                </div>
+                <ResultsTable survey={survey} results={results} />
               </CardContent>
             </Card>
           </TabsContent>

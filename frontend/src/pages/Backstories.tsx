@@ -128,129 +128,141 @@ export function Backstories() {
                   Upload Backstory
                 </Button>
               </DialogTrigger>
-            <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>Upload New Backstory</DialogTitle>
-                <DialogDescription>
-                  Add a new backstory to your collection. You can make it public to contribute to the shared pool.
-                </DialogDescription>
-              </DialogHeader>
-              <div className="space-y-4 py-4">
-                <div className="space-y-2">
-                  <Label htmlFor="backstory">Backstory Text</Label>
-                  <Textarea
-                    id="backstory"
-                    value={backstoryText}
-                    onChange={(e) => setBackstoryText(e.target.value)}
-                    placeholder="Enter the backstory narrative..."
-                    rows={8}
-                  />
-                </div>
+              <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Upload New Backstory</DialogTitle>
+                  <DialogDescription>
+                    Add a new backstory to your collection. You can make it public to contribute to the shared pool.
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4 py-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="backstory">Backstory Text</Label>
+                    <Textarea
+                      id="backstory"
+                      value={backstoryText}
+                      onChange={(e) => setBackstoryText(e.target.value)}
+                      placeholder="Enter the backstory narrative..."
+                      rows={8}
+                    />
+                  </div>
 
-                <div className="flex items-center space-x-2">
-                  <Checkbox
-                    id="is-public"
-                    checked={isPublic}
-                    onCheckedChange={(checked) => setIsPublic(checked as boolean)}
-                  />
-                  <label htmlFor="is-public" className="text-sm">
-                    Make this backstory public (contribute to shared pool)
-                  </label>
-                </div>
+                  <div className="flex items-center space-x-2">
+                    <Checkbox
+                      id="is-public"
+                      checked={isPublic}
+                      onCheckedChange={(checked) => setIsPublic(checked as boolean)}
+                    />
+                    <label htmlFor="is-public" className="text-sm">
+                      Make this backstory public (contribute to shared pool)
+                    </label>
+                  </div>
 
-                <div className="border-t pt-4">
-                  <h4 className="font-medium mb-3">Demographics (Optional)</h4>
-                  <div className="grid grid-cols-2 gap-4">
-                    <div className="space-y-2">
-                      <Label htmlFor="age">Age</Label>
-                      <Input
-                        id="age"
-                        type="number"
-                        min={0}
-                        max={120}
-                        value={demographics.age ?? ''}
-                        onChange={(e) =>
-                          setDemographics({
-                            ...demographics,
-                            age: e.target.value ? parseInt(e.target.value, 10) : undefined,
-                          })
-                        }
-                        placeholder="e.g., 28"
-                      />
-                    </div>
+                  <div className="border-t pt-4">
+                    <h4 className="font-medium mb-3">Demographics (Optional)</h4>
+                    <div className="grid grid-cols-2 gap-4">
+                      <div className="space-y-2">
+                        <Label htmlFor="age">Age</Label>
+                        <Input
+                          id="age"
+                          type="number"
+                          min={0}
+                          max={120}
+                          value={demographics.age?.value ?? ''}
+                          onChange={(e) =>
+                            setDemographics({
+                              ...demographics,
+                              age: {
+                                value: e.target.value || null,
+                                distribution: e.target.value ? { [e.target.value]: 1 } : {},
+                              },
+                            })
+                          }
+                          placeholder="e.g., 28"
+                        />
+                      </div>
 
-                    <div className="space-y-2">
-                      <Label htmlFor="gender">Gender</Label>
-                      <Select
-                        value={(demographics.gender as string) || ''}
-                        onValueChange={(value) =>
-                          setDemographics({ ...demographics, gender: value })
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select gender" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="male">Male</SelectItem>
-                          <SelectItem value="female">Female</SelectItem>
-                          <SelectItem value="non-binary">Non-binary</SelectItem>
-                          <SelectItem value="other">Other</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="gender">Gender</Label>
+                        <Select
+                          value={(demographics.gender?.value as string) || ''}
+                          onValueChange={(value) =>
+                            setDemographics({
+                              ...demographics,
+                              gender: { value, distribution: { [value]: 1 } },
+                            })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select gender" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="male">Male</SelectItem>
+                            <SelectItem value="female">Female</SelectItem>
+                            <SelectItem value="non-binary">Non-binary</SelectItem>
+                            <SelectItem value="other">Other</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
 
-                    <div className="space-y-2">
-                      <Label htmlFor="party">Political Affiliation</Label>
-                      <Select
-                        value={(demographics.party as string) || ''}
-                        onValueChange={(value) =>
-                          setDemographics({ ...demographics, party: value })
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select party" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="democrat">Democrat</SelectItem>
-                          <SelectItem value="republican">Republican</SelectItem>
-                          <SelectItem value="independent">Independent</SelectItem>
-                          <SelectItem value="other">Other</SelectItem>
-                        </SelectContent>
-                      </Select>
-                    </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="party">Political Affiliation</Label>
+                        <Select
+                          value={(demographics.party?.value as string) || ''}
+                          onValueChange={(value) =>
+                            setDemographics({
+                              ...demographics,
+                              party: { value, distribution: { [value]: 1 } },
+                            })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select party" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="democrat">Democrat</SelectItem>
+                            <SelectItem value="republican">Republican</SelectItem>
+                            <SelectItem value="independent">Independent</SelectItem>
+                            <SelectItem value="other">Other</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
 
-                    <div className="space-y-2">
-                      <Label htmlFor="education">Education Level</Label>
-                      <Select
-                        value={(demographics.education as string) || ''}
-                        onValueChange={(value) =>
-                          setDemographics({ ...demographics, education: value })
-                        }
-                      >
-                        <SelectTrigger>
-                          <SelectValue placeholder="Select education" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="high_school">High School</SelectItem>
-                          <SelectItem value="some_college">Some College</SelectItem>
-                          <SelectItem value="bachelors">Bachelor's Degree</SelectItem>
-                          <SelectItem value="masters">Master's Degree</SelectItem>
-                          <SelectItem value="doctorate">Doctorate</SelectItem>
-                        </SelectContent>
-                      </Select>
+                      <div className="space-y-2">
+                        <Label htmlFor="education">Education Level</Label>
+                        <Select
+                          value={(demographics.education?.value as string) || ''}
+                          onValueChange={(value) =>
+                            setDemographics({
+                              ...demographics,
+                              education: { value, distribution: { [value]: 1 } },
+                            })
+                          }
+                        >
+                          <SelectTrigger>
+                            <SelectValue placeholder="Select education" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="high_school">High School</SelectItem>
+                            <SelectItem value="some_college">Some College</SelectItem>
+                            <SelectItem value="bachelors">Bachelor's Degree</SelectItem>
+                            <SelectItem value="masters">Master's Degree</SelectItem>
+                            <SelectItem value="doctorate">Doctorate</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
                     </div>
                   </div>
                 </div>
-              </div>
-              <DialogFooter>
-                <Button variant="outline" onClick={() => setDialogOpen(false)}>
-                  Cancel
-                </Button>
-                <Button onClick={handleSubmit} disabled={saving || !backstoryText.trim()}>
-                  {saving ? 'Uploading...' : 'Upload Backstory'}
-                </Button>
-              </DialogFooter>
-            </DialogContent>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setDialogOpen(false)}>
+                    Cancel
+                  </Button>
+                  <Button onClick={handleSubmit} disabled={saving || !backstoryText.trim()}>
+                    {saving ? 'Uploading...' : 'Upload Backstory'}
+                  </Button>
+                </DialogFooter>
+              </DialogContent>
             </Dialog>
           </div>
         </div>
@@ -298,7 +310,7 @@ export function Backstories() {
                     <div className="flex flex-wrap gap-2 mb-4">
                       {Object.entries(backstory.demographics).map(([key, value]) => (
                         <Badge key={key} variant="secondary" className="text-xs">
-                          {key}: {value}
+                          {key}: {value.value}
                         </Badge>
                       ))}
                     </div>
@@ -351,7 +363,7 @@ export function Backstories() {
                   <div className="flex flex-wrap gap-2">
                     {Object.entries(selectedBackstory.demographics).map(([key, value]) => (
                       <Badge key={key} variant="secondary">
-                        {key}: {value}
+                        {key}: {value.value}
                       </Badge>
                     ))}
                   </div>

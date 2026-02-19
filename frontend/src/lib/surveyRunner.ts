@@ -2,7 +2,8 @@
  * Survey runner - functions to create and manage survey runs
  */
 import { supabase } from './supabase'
-import type { LLMConfig, SurveyRun } from '@/types/database'
+import { applyDemographicFilters } from './backstoryFilters'
+import type { LLMConfig, SurveyRun, DemographicFilter } from '@/types/database'
 
 interface CreateSurveyRunOptions {
   surveyId: string
@@ -42,16 +43,20 @@ export async function createSurveyRun(
       return { success: false, error: surveyError.message }
     }
 
-    // Extract sample size from demographics (stored as _sample_size: [number])
-    const demographics = survey?.demographics as Record<string, unknown> | null
-    const sampleSizeArray = demographics?._sample_size as number[] | undefined
-    const sampleSize = sampleSizeArray?.[0]
+    // Extract sample size and demographic filters from saved demographics
+    const demographics = survey?.demographics as (DemographicFilter & { _sample_size?: number[] }) | null
+    const sampleSize = demographics?._sample_size?.[0]
 
     console.log('[createSurveyRun] demographics:', demographics)
     console.log('[createSurveyRun] sampleSize:', sampleSize)
 
-    // 2. Get matching backstories (all public for now, with optional limit)
+    // 2. Get matching backstories with demographic filters
     let query = supabase.from('backstories').select('id').eq('is_public', true)
+
+    // Apply demographic filters
+    if (demographics) {
+      query = applyDemographicFilters(query, demographics)
+    }
 
     // Apply sample size limit if set
     if (sampleSize && sampleSize > 0) {

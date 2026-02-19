@@ -3,7 +3,7 @@ import { useAuth } from '@/hooks/useAuth'
 
 type AuthContextType = ReturnType<typeof useAuth>
 
-const AuthContext = createContext<AuthContextType | null>(null)
+export const AuthContext = createContext<AuthContextType | null>(null)
 
 export function AuthProvider({ children }: { children: ReactNode }) {
   const auth = useAuth()

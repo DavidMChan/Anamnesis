@@ -7,10 +7,27 @@ export interface User {
 }
 
 export interface LLMConfig {
-  provider?: 'openai' | 'anthropic' | 'together' | 'vllm'
-  api_key?: string
-  vllm_endpoint?: string
-  model?: string
+  // Provider selection
+  provider?: 'openrouter' | 'vllm'
+
+  // OpenRouter settings
+  openrouter_model?: string  // e.g., "anthropic/claude-3-haiku"
+
+  // vLLM settings
+  vllm_endpoint?: string     // e.g., "http://localhost:8000/v1"
+  vllm_model?: string        // e.g., "meta-llama/Llama-3-70b"
+
+  // Generation settings
+  temperature?: number       // e.g., 0.0
+  max_tokens?: number        // e.g., 512
+
+  // vLLM-specific inference settings
+  use_guided_decoding?: boolean  // Enable vLLM guided decoding for MCQ parsing
+
+  // Parser LLM (Tier 2 fallback for MCQ parsing via OpenRouter)
+  parser_llm_model?: string  // e.g., "google/gemini-2.0-flash-001"
+
+  // Note: API keys are stored securely in Supabase Vault, not in this config
 }
 
 export interface Backstory {
@@ -43,7 +60,7 @@ export interface Demographics {
 
 // Survey filter: match backstories by their demographic value field
 export interface DemographicFilter {
-  [key: string]: string[] | undefined
+  [key: string]: string[] | { min?: number; max?: number } | undefined
 }
 
 // Metadata about demographic keys

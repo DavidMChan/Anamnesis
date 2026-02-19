@@ -6,6 +6,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { supabase } from '@/lib/supabase'
+import { applyDemographicFilters } from '@/lib/backstoryFilters'
 import type { DemographicFilter as DemographicFilterType, DemographicKey } from '@/types/database'
 import { Plus, X } from 'lucide-react'
 
@@ -86,13 +87,14 @@ export function DemographicFilter({ value, onChange, sampleSize, onSampleSizeCha
   }
 
   const estimateMatchCount = async () => {
-    // For now, just count all public backstories
-    // TODO: Implement proper filtering query
-    const { count } = await supabase
+    let query = supabase
       .from('backstories')
       .select('id', { count: 'exact', head: true })
       .eq('is_public', true)
 
+    query = applyDemographicFilters(query, value)
+
+    const { count } = await query
     setMatchCount(count)
   }
 
@@ -384,10 +386,15 @@ export function DemographicFilter({ value, onChange, sampleSize, onSampleSizeCha
           <p className="text-sm text-muted-foreground">
             Estimated matches:{' '}
             <span className="font-semibold text-foreground">
-              ~{matchCount ?? 0} backstories
+              {matchCount ?? 0} backstories
             </span>
-            {sampleSize && matchCount && sampleSize < matchCount && (
-              <span className="text-primary"> → will use {sampleSize}</span>
+            {sampleSize && matchCount !== null && sampleSize < matchCount && (
+              <span className="text-primary"> → will sample {sampleSize}</span>
+            )}
+            {sampleSize && matchCount !== null && sampleSize > matchCount && (
+              <span className="text-destructive">
+                {' '}→ only {matchCount} available (will use all)
+              </span>
             )}
           </p>
         </div>
