@@ -99,7 +99,7 @@ Files created/modified:
 - path/to/file1.tsx
 - path/to/file2.tsx
 
-Ready for: /pr ${FEATURE_NAME}
+Ready for: /refactor ${FEATURE_NAME}
 ```
 
 **If blocked:**
