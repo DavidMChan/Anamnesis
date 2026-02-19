@@ -51,8 +51,10 @@ services:
       - LLM_TEMPERATURE=${LLM_TEMPERATURE:-1.0}
       - USE_GUIDED_DECODING=${USE_GUIDED_DECODING:-true}
       - PARSER_LLM_MODEL=${PARSER_LLM_MODEL:-google/gemini-2.0-flash-001}
+      - MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS:-50}
     deploy:
-      # Can scale workers: docker compose up -d --scale worker=2
+      # With async worker, one replica handles 50 concurrent tasks.
+      # Scale only if you need more than MAX_CONCURRENT_TASKS total.
       replicas: 1
 
 volumes:
