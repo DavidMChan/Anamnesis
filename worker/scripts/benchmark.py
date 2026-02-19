@@ -321,12 +321,13 @@ async def main() -> None:
             f"p95={format_duration(p95)} p99={format_duration(p99)} errors={errors} status={status}"
         )
 
-    # Find recommendation: highest concurrency that's still OK
+    # Find recommendation: last OK before first degradation (WARN/OVERLOAD)
     recommended = None
-    for r in reversed(results):
+    for r in results:
         if r.status == "OK":
             recommended = r.concurrency
-            break
+        else:
+            break  # Stop at first degradation — don't trust recovery after
 
     # If no OK level found, recommend the first level
     if recommended is None and results:
