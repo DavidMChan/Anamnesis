@@ -101,10 +101,13 @@ class TaskProcessor:
         """Fetch task details from database."""
         return self.db.get_task(task_id)
 
-    def mark_processing(self, task_id: str) -> None:
-        """Mark task as processing and increment attempts."""
-        self.db.update_task_status(task_id, "processing")
-        self.db.increment_task_attempts(task_id)
+    def claim_task(self, task_id: str) -> bool:
+        """
+        Atomically claim a task for processing.
+
+        Returns False if already claimed by another worker (duplicate message).
+        """
+        return self.db.claim_task(task_id)
 
     def process_questions_in_series(
         self,
@@ -213,16 +216,18 @@ class TaskProcessor:
 
         return results
 
-    def store_result(self, task_id: str, result: Dict[str, Any]) -> None:
+    def store_result(self, task_id: str, result: Dict[str, Any]) -> bool:
         """
-        Store task result and mark as completed.
+        Atomically store task result and mark as completed.
 
         Args:
             task_id: UUID of the task
             result: Result data (qkey -> answer mapping)
+
+        Returns:
+            True if completed, False if task was not in 'processing' state.
         """
-        self.db.update_task_result(task_id, result)
-        self.db.update_task_status(task_id, "completed")
+        return self.db.complete_task(task_id, result)
 
     def update_run_progress(
         self,
@@ -234,6 +239,9 @@ class TaskProcessor:
         """
         Update survey run progress after task completion.
 
+        Counter increments (completed_tasks, failed_tasks) are no longer done
+        here — check_run_completion now derives them from survey_tasks.
+
         Args:
             run_id: UUID of the survey run
             backstory_id: UUID of the processed backstory
@@ -241,12 +249,9 @@ class TaskProcessor:
             success: Whether task succeeded
         """
         if success and result:
-            self.db.increment_completed_tasks(run_id)
             self.db.append_run_result(run_id, backstory_id, result)
-        else:
-            self.db.increment_failed_tasks(run_id)
 
-        # Check if run is complete
+        # Sync counters and check if run is complete
         self.db.check_run_completion(run_id)
 
     def process_task(self, task_id: str) -> TaskProcessorResult:
@@ -254,12 +259,12 @@ class TaskProcessor:
         Process a single survey task.
 
         Full flow:
-        1. Fetch task from DB
-        2. Mark as processing
+        1. Claim task atomically (skip if already claimed — duplicate message)
+        2. Fetch task metadata
         3. Get backstory and questions
         4. Call LLM
-        5. Store result
-        6. Update run progress
+        5. Complete task atomically (result + status in one call)
+        6. Update run progress (derived counts)
 
         Args:
             task_id: UUID of the task to process
@@ -267,7 +272,16 @@ class TaskProcessor:
         Returns:
             TaskProcessorResult indicating success/failure
         """
-        # 1. Fetch task
+        # 1. Claim task atomically — prevents duplicate processing
+        if not self.claim_task(task_id):
+            logger.info(f"Task {task_id} already claimed, skipping (duplicate message)")
+            return TaskProcessorResult(
+                success=False,
+                task_id=task_id,
+                error="Already claimed by another worker",
+            )
+
+        # 2. Fetch task metadata
         task = self.fetch_task(task_id)
         if not task:
             return TaskProcessorResult(
@@ -278,12 +292,8 @@ class TaskProcessor:
 
         run_id = task["survey_run_id"]
         backstory_id = task["backstory_id"]
-        attempts = task.get("attempts", 0)
 
         try:
-            # 2. Mark as processing
-            self.mark_processing(task_id)
-
             # 3. Get backstory and questions
             backstory_data = self.db.get_backstory(backstory_id)
             if not backstory_data:
@@ -301,7 +311,7 @@ class TaskProcessor:
             logger.info(f"Processing {len(questions)} questions for backstory {backstory_id}")
             results = self.process_questions_in_series(backstory_text, questions)
 
-            # 5. Store result
+            # 5. Complete task atomically
             self.store_result(task_id, results)
 
             # 6. Update run progress
@@ -314,12 +324,10 @@ class TaskProcessor:
             )
 
         except NonRetryableError as e:
-            # Permanent failure - don't retry
             error_msg = str(e)
-            self.db.update_task_error(task_id, error_msg)
-            self.db.update_task_status(task_id, "failed")
+            self.db.fail_task(task_id, error_msg)
             self.db.append_run_error(run_id, backstory_id, error_msg)
-            self.update_run_progress(run_id, backstory_id, None, success=False)
+            self.db.check_run_completion(run_id)
 
             return TaskProcessorResult(
                 success=False,
@@ -328,16 +336,14 @@ class TaskProcessor:
             )
 
         except (RetryableError, LLMError, Exception) as e:
-            # Check if we should retry
             error_msg = str(e)
-            new_attempts = attempts + 1
+            attempts = task.get("attempts", 0)
 
-            if new_attempts >= self.max_retries:
-                # Max retries exceeded - mark as failed
-                self.db.update_task_error(task_id, error_msg)
-                self.db.update_task_status(task_id, "failed")
+            if attempts >= self.max_retries:
+                # Max retries exceeded — fail permanently
+                self.db.fail_task(task_id, error_msg)
                 self.db.append_run_error(run_id, backstory_id, error_msg)
-                self.update_run_progress(run_id, backstory_id, None, success=False)
+                self.db.check_run_completion(run_id)
 
                 return TaskProcessorResult(
                     success=False,
@@ -345,11 +351,11 @@ class TaskProcessor:
                     error=error_msg,
                 )
             else:
-                # Can retry - revert to pending
+                # Revert to pending for retry (dispatcher will re-dispatch)
                 self.db.update_task_status(task_id, "pending")
 
                 return TaskProcessorResult(
                     success=False,
                     task_id=task_id,
-                    error=f"Will retry ({new_attempts}/{self.max_retries}): {error_msg}",
+                    error=f"Will retry ({attempts}/{self.max_retries}): {error_msg}",
                 )
