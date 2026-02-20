@@ -47,9 +47,7 @@ export function DemographicsSummary({ backstoryIds, colors }: DemographicsSummar
                 .select('*')
 
             const { data: backstoriesData, error } = await supabase
-                .from('backstories')
-                .select('*')
-                .in('id', backstoryIds)
+                .rpc('get_backstory_demographics', { backstory_ids: backstoryIds })
 
             if (error) {
                 console.error('Error fetching backstories for demographics:', error)
