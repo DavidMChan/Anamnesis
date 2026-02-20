@@ -53,10 +53,6 @@ export function Home() {
         {/* Hero Section */}
         <section className="pt-32 pb-16 px-4 bg-gradient-to-b from-background to-muted/20">
           <div className="container max-w-4xl mx-auto text-center space-y-8">
-            <div className="inline-flex items-center gap-2 px-4 py-1.5 rounded-full bg-primary/10 text-primary text-sm font-medium">
-              <Sparkles className="h-4 w-4" />
-              Language Models as Agent Models
-            </div>
             <h1 className="text-4xl sm:text-5xl lg:text-5xl font-bold tracking-tight leading-tight">
               Conditioning LLMs to simulate representative<br className="hidden sm:block" /> virtual personas across<br />
               <span className="block mt-2 text-primary">
