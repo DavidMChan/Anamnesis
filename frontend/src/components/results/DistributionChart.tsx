@@ -33,9 +33,11 @@ const CustomTooltip = ({ active, payload }: CustomTooltipProps) => {
 }
 
 export function DistributionChart({ distribution, colors, onRef }: DistributionChartProps) {
+    // Compute the height of the chart based on the number of options
+    const height = distribution.length * 80 + 50
     return (
-        <div className="h-64" ref={onRef}>
-            <ResponsiveContainer width="100%" height="100%">
+        <div ref={onRef}>
+            <ResponsiveContainer width="100%" height={height}>
                 <BarChart data={distribution} layout="vertical" margin={{ left: 10, right: 10 }}>
                     <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="var(--color-border)" />
                     <XAxis
