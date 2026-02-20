@@ -3,7 +3,7 @@ import { useAuthContext } from '@/contexts/AuthContext'
 import { PublicLayout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
 import { Typewriter } from '@/components/ui/typewriter'
-import { ArrowRight, Sparkles, BookOpen, Database, BarChart3, LineChart, FileText, ExternalLink } from 'lucide-react'
+import { ArrowRight, BookOpen, Database, BarChart3, LineChart, FileText, ExternalLink } from 'lucide-react'
 
 const HERO_WORDS = [
   'demographics',
