@@ -3,6 +3,7 @@ Database operations module using Supabase.
 """
 from typing import Optional, Dict, Any, List
 from supabase import create_client, Client
+from postgrest.exceptions import APIError
 from .config import SupabaseConfig
 
 
@@ -20,6 +21,17 @@ class DatabaseClient:
             config = SupabaseConfig()
         self.client: Client = create_client(config.url, config.service_key)
 
+    @staticmethod
+    def _safe_single_execute(query):
+        """Execute a .single() query, returning None instead of raising on 0 rows."""
+        try:
+            result = query.single().execute()
+            return result.data if result.data else None
+        except APIError as e:
+            if e.code == "PGRST116":  # 0 rows — record was deleted
+                return None
+            raise
+
     # ==================== Task Operations ====================
 
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
@@ -32,14 +44,11 @@ class DatabaseClient:
         Returns:
             Task record or None if not found
         """
-        result = (
+        return self._safe_single_execute(
             self.client.table("survey_tasks")
             .select("*")
             .eq("id", task_id)
-            .single()
-            .execute()
         )
-        return result.data if result.data else None
 
     def get_pending_tasks(self, run_id: str, limit: int = 10) -> List[Dict[str, Any]]:
         """
@@ -189,14 +198,11 @@ class DatabaseClient:
         Returns:
             Backstory record or None if not found
         """
-        result = (
+        return self._safe_single_execute(
             self.client.table("backstories")
             .select("*")
             .eq("id", backstory_id)
-            .single()
-            .execute()
         )
-        return result.data if result.data else None
 
     # ==================== Survey Run Operations ====================
 
@@ -210,14 +216,11 @@ class DatabaseClient:
         Returns:
             Survey run record or None if not found
         """
-        result = (
+        return self._safe_single_execute(
             self.client.table("survey_runs")
             .select("*")
             .eq("id", run_id)
-            .single()
-            .execute()
         )
-        return result.data if result.data else None
 
     def get_survey_questions(self, run_id: str) -> List[Dict[str, Any]]:
         """
@@ -232,18 +235,16 @@ class DatabaseClient:
             List of question objects
         """
         # Single query joining survey_runs -> surveys
-        result = (
+        data = self._safe_single_execute(
             self.client.table("survey_runs")
             .select("surveys(questions)")
             .eq("id", run_id)
-            .single()
-            .execute()
         )
 
-        if not result.data:
+        if not data:
             return []
 
-        surveys_data = result.data.get("surveys")
+        surveys_data = data.get("surveys")
         if not surveys_data:
             return []
 
@@ -560,14 +561,11 @@ class DatabaseClient:
         Returns:
             User record or None if not found
         """
-        result = (
+        return self._safe_single_execute(
             self.client.table("users")
             .select("*")
             .eq("id", user_id)
-            .single()
-            .execute()
         )
-        return result.data if result.data else None
 
     def get_user_llm_config(self, user_id: str) -> Optional[Dict[str, Any]]:
         """
@@ -616,18 +614,16 @@ class DatabaseClient:
             User ID or None if not found
         """
         # Get the survey run, then get the survey, then get the user_id
-        result = (
+        data = self._safe_single_execute(
             self.client.table("survey_runs")
             .select("surveys(user_id)")
             .eq("id", run_id)
-            .single()
-            .execute()
         )
 
-        if not result.data:
+        if not data:
             return None
 
-        surveys_data = result.data.get("surveys")
+        surveys_data = data.get("surveys")
         if not surveys_data:
             return None
 
