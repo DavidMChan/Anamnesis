@@ -9,6 +9,7 @@ import {
   LogOut,
   Menu,
   X,
+  Info,
 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
@@ -26,6 +27,7 @@ const mainNavItems: NavItem[] = [
 
 const accountNavItems: NavItem[] = [
   { label: 'Settings', href: '/settings', icon: Settings },
+  { label: 'About', href: '/about', icon: Info },
 ]
 
 export function Sidebar() {
@@ -70,35 +72,16 @@ export function Sidebar() {
   const sidebarContent = (
     <>
       {/* Logo */}
-      <div className="flex items-center gap-3 px-4 py-4 pt-5">
-        <div className="flex h-9 w-9 items-center justify-center rounded-full bg-white shadow-sm">
+      <div className="flex items-center gap-3 px-4 py-4 pt-6 pb-2">
+        <div className="flex h-10 w-10 items-center justify-center rounded-full">
           <img
-            src="https://bair.berkeley.edu/logos/BAIR_Logo_Blue_BearOnly.svg"
-            alt="BAIR Logo"
-            className="h-7 w-7"
+            src="/Anamnesis.svg"
+            alt="Anamnesis Logo"
+            className="h-10 w-10"
           />
         </div>
         <div className="flex flex-col">
-          <span className="text-sm font-semibold">Anamnesis</span>
-          <span className="text-xs text-muted-foreground">
-            <a
-              href="https://bair.berkeley.edu"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-foreground transition-colors"
-            >
-              BAIR Lab
-            </a>
-            {' · '}
-            <a
-              href="https://www.linkedin.com/in/vaclis/"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="hover:text-foreground transition-colors"
-            >
-              Song-Ze Yu
-            </a>
-          </span>
+          <span className="text-lg font-light tracking-tight">ANAMNESIS</span>
         </div>
       </div>
 
@@ -167,7 +150,7 @@ export function Sidebar() {
         </div>
       </div>
 
-          </>
+    </>
   )
 
   return (
