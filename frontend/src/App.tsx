@@ -12,6 +12,7 @@ import { SurveyCreate } from '@/pages/SurveyCreate'
 import { SurveyView } from '@/pages/SurveyView'
 import { SurveyResults } from '@/pages/SurveyResults'
 import { Backstories } from '@/pages/Backstories'
+import { About } from '@/pages/About'
 
 function App() {
   return (
@@ -20,6 +21,7 @@ function App() {
         <Routes>
           {/* Public routes */}
           <Route path="/" element={<Home />} />
+          <Route path="/about" element={<About />} />
           <Route path="/login" element={<Login />} />
           <Route path="/register" element={<Register />} />
           <Route path="/auth/callback" element={<AuthCallback />} />
