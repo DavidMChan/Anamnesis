@@ -77,11 +77,11 @@ export function Home() {
                   Access Platform <ArrowRight className="h-4 w-4" />
                 </Button>
               </Link>
-              <a href="#approach" className="w-full sm:w-auto">
+              <Link to="/about" className="w-full sm:w-auto">
                 <Button size="lg" variant="outline" className="w-full">
-                  Read Abstract
+                  About Us
                 </Button>
-              </a>
+              </Link>
             </div>
           </div>
         </section>
