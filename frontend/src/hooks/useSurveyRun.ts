@@ -129,7 +129,7 @@ export function useCreateSurveyRun() {
   const [error, setError] = useState<string | null>(null)
 
   const createRun = useCallback(
-    async (surveyId: string, llmConfig: Record<string, unknown>): Promise<string | null> => {
+    async (surveyId: string, llmConfig: import('@/types/database').LLMConfig): Promise<string | null> => {
       setLoading(true)
       setError(null)
 
