@@ -130,6 +130,17 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain }: SurveyRunP
   )
 }
 
+function formatDuration(ms: number): string {
+  const seconds = Math.floor(ms / 1000)
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  const remainingSeconds = seconds % 60
+  if (minutes < 60) return `${minutes}m ${remainingSeconds}s`
+  const hours = Math.floor(minutes / 60)
+  const remainingMinutes = minutes % 60
+  return `${hours}h ${remainingMinutes}m`
+}
+
 function formatCompletionTime(run: SurveyRun): string {
   if (run.status === 'pending') {
     return 'Waiting to start...'
@@ -141,9 +152,12 @@ function formatCompletionTime(run: SurveyRun): string {
     }
     return 'Running...'
   }
+  if (run.started_at && run.completed_at) {
+    const duration = new Date(run.completed_at).getTime() - new Date(run.started_at).getTime()
+    return `Completed in ${formatDuration(duration)}`
+  }
   if (run.completed_at) {
-    const completed = new Date(run.completed_at)
-    return `Finished ${formatRelativeTime(completed)}`
+    return `Finished ${formatRelativeTime(new Date(run.completed_at))}`
   }
   return ''
 }
@@ -209,6 +223,9 @@ export function SurveyRunHistory({ runs, onSelectRun }: SurveyRunHistoryProps) {
                     </div>
                     <div className="text-xs text-muted-foreground">
                       {run.completed_tasks}/{run.total_tasks} completed
+                      {run.started_at && run.completed_at && (
+                        <> &middot; {formatDuration(new Date(run.completed_at).getTime() - new Date(run.started_at).getTime())}</>
+                      )}
                     </div>
                   </div>
                 </div>
