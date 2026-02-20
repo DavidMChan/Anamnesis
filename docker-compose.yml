@@ -40,7 +40,7 @@ services:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - RABBITMQ_URL=amqp://${RABBITMQ_USER:-arena}:${RABBITMQ_PASS}@rabbitmq:5672
-      - MAX_CONCURRENT_TASKS=50
+      - MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS:-50}
     deploy:
       # With async worker, one replica handles 50 concurrent tasks.
       # Scale only if you need more than MAX_CONCURRENT_TASKS total.
