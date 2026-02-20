@@ -181,6 +181,13 @@ async def main():
 
             logger.info(f"Processing task: {task_id}")
 
+            # Check if task still exists (may have been deleted mid-run)
+            task = await asyncio.to_thread(db.get_task, task_id)
+            if not task:
+                logger.warning(f"Task {task_id} not found (survey likely deleted), discarding message")
+                await message.ack()
+                return
+
             try:
                 llm, parser_llm = await get_llm_for_task(task_id)
             except ValueError as e:
