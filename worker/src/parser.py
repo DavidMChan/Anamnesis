@@ -6,6 +6,8 @@ the answer letter from verbose/ambiguous base model responses.
 
 Follows Alterity's approach: send the question + raw response to a
 parser model with strict instructions to output only a single letter.
+
+Provides both sync (parse) and async (async_parse) interfaces.
 """
 import logging
 from typing import Optional
@@ -81,6 +83,7 @@ class ParserLLM:
         self.max_tokens = max_tokens
         self.temperature = temperature
         self.timeout = timeout
+        self._async_client: Optional[httpx.AsyncClient] = None
 
     @property
     def is_configured(self) -> bool:
@@ -185,3 +188,72 @@ class ParserLLM:
         require_all = question.type == "ranking"
         result = LLMResponse.from_comma_separated(content, num_options, require_all=require_all)
         return result.answer
+
+    def _get_async_client(self) -> httpx.AsyncClient:
+        """Get or create shared async HTTP client."""
+        if self._async_client is None or self._async_client.is_closed:
+            self._async_client = httpx.AsyncClient(timeout=self.timeout)
+        return self._async_client
+
+    async def async_parse(self, raw_response: str, question: Question) -> str:
+        """
+        Async version of parse().
+
+        Same interface but uses async HTTP client.
+        """
+        if not self.is_configured:
+            return ""
+
+        prompt = self._build_prompt(raw_response, question)
+
+        effective_max_tokens = self.max_tokens
+        if question.type in ("multiple_select", "ranking") and question.options:
+            effective_max_tokens = 3 * len(question.options)
+
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "model": self.model,
+                "messages": [{"role": "user", "content": prompt}],
+                "temperature": self.temperature,
+                "max_tokens": effective_max_tokens,
+            }
+
+            client = self._get_async_client()
+            response = await client.post(self.BASE_URL, headers=headers, json=payload)
+
+            if response.status_code != 200:
+                logger.warning(f"Parser LLM request failed: {response.status_code}")
+                return ""
+
+            data = response.json()
+            if "choices" not in data or not data["choices"]:
+                return ""
+
+            content = data["choices"][0]["message"]["content"].strip()
+
+            if "Answer:" in content:
+                content = content.split("Answer:")[1].strip().upper()
+            else:
+                content = content.strip().upper()
+
+            if content == "X":
+                return ""
+
+            if question.type in ("multiple_select", "ranking"):
+                return self._parse_comma_separated(content, question)
+            else:
+                return self._parse_single_letter(content, question)
+
+        except Exception as e:
+            logger.warning(f"Parser LLM error: {e}")
+            return ""
+
+    async def close(self) -> None:
+        """Close the shared async HTTP client."""
+        if self._async_client and not self._async_client.is_closed:
+            await self._async_client.aclose()
+            self._async_client = None

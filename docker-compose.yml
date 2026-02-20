@@ -40,8 +40,10 @@ services:
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_SERVICE_KEY=${SUPABASE_SERVICE_KEY}
       - RABBITMQ_URL=amqp://${RABBITMQ_USER:-arena}:${RABBITMQ_PASS}@rabbitmq:5672
+      - MAX_CONCURRENT_TASKS=${MAX_CONCURRENT_TASKS:-50}
     deploy:
-      # Can scale workers: docker compose up -d --scale worker=2
+      # With async worker, one replica handles 50 concurrent tasks.
+      # Scale only if you need more than MAX_CONCURRENT_TASKS total.
       replicas: 1
 
 volumes:

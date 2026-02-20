@@ -5,7 +5,12 @@ Follows anthology approach:
 - Questions are asked in series with context accumulation
 - LLM sees its previous answers when answering follow-up questions
 - Uses Completions API for base models
+
+Provides both sync and async interfaces:
+- process_task() / process_questions_in_series() — sync (used by tests, simple scripts)
+- async_process_task() / async_process_questions_in_series() — async (used by async worker)
 """
+import asyncio
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 import logging
@@ -353,6 +358,182 @@ class TaskProcessor:
             else:
                 # Revert to pending for retry (dispatcher will re-dispatch)
                 self.db.update_task_status(task_id, "pending")
+
+                return TaskProcessorResult(
+                    success=False,
+                    task_id=task_id,
+                    error=f"Will retry ({attempts}/{self.max_retries}): {error_msg}",
+                )
+
+    # ==================== Async Methods ====================
+
+    async def async_process_questions_in_series(
+        self,
+        backstory: str,
+        questions: List[Question],
+    ) -> Dict[str, str]:
+        """
+        Async version of process_questions_in_series.
+
+        Questions are still processed sequentially (context accumulation),
+        but LLM calls use async I/O to avoid blocking the event loop.
+        """
+        results: Dict[str, str] = {}
+        context = ""
+
+        llm_max_tokens = getattr(self.llm, "max_tokens", None)
+        open_response_max_words = int(llm_max_tokens * 2 / 3) if isinstance(llm_max_tokens, (int, float)) else None
+
+        for i, question in enumerate(questions):
+            max_words = open_response_max_words if question.type == "open_response" else None
+            if i == 0:
+                prompt = build_initial_prompt(backstory, question, max_words=max_words)
+            else:
+                prompt = build_followup_prompt(context, question, max_words=max_words)
+
+            max_compliance_retries = 10
+            answer = ""
+            raw_answer = ""
+
+            for retry in range(max_compliance_retries):
+                if retry == 0:
+                    logger.debug(f"Asking question {i+1}/{len(questions)}: {question.qkey}")
+                else:
+                    logger.debug(f"Compliance retry {retry}/{max_compliance_retries} for {question.qkey}")
+
+                response = await self.llm.async_complete(prompt, question=question)
+                raw_answer = response.raw if response.raw else ""
+
+                answer = response.answer
+                tier = ""
+
+                if answer:
+                    tier = "tier1_guided"
+
+                if question.type == "open_response":
+                    if answer:
+                        tier = "tier1_text"
+                        logger.info(f"[{tier}] {question.qkey}={repr(answer[:80])} (raw={repr(raw_answer[:80])})")
+                        break
+                    else:
+                        logger.warning(f"[parse_fail] {question.qkey} open_response empty, retrying")
+                        continue
+
+                if not answer and question.type in ("mcq", "multiple_select", "ranking") and self.parser_llm and response.raw:
+                    answer = await self.parser_llm.async_parse(response.raw, question)
+                    if answer:
+                        tier = "tier2_parser"
+
+                if not answer and question.type == "mcq" and question.options and response.raw:
+                    answer = match_option_text(response.raw, question.options)
+                    if answer:
+                        tier = "tier3_regex"
+
+                if answer:
+                    logger.info(f"[{tier}] {question.qkey}={answer} (raw={repr(raw_answer[:80])})")
+                else:
+                    logger.warning(f"[parse_fail] {question.qkey} raw={repr(raw_answer[:80])}")
+
+                if answer:
+                    break
+
+            if not answer:
+                logger.warning(f"All {max_compliance_retries} retries failed for {question.qkey}, marking as non-compliant")
+
+            results[question.qkey] = answer
+            logger.info(f"Parsed answer for {question.qkey}: {answer} (raw: {repr(raw_answer[:100]) if raw_answer else 'None'})")
+
+            context = append_answer_to_context(prompt, raw_answer)
+
+        return results
+
+    async def async_process_task(self, task_id: str) -> TaskProcessorResult:
+        """
+        Async version of process_task.
+
+        DB calls are wrapped in asyncio.to_thread() since the Supabase
+        client is sync. LLM calls use native async.
+        """
+        # 1. Claim task atomically
+        claimed = await asyncio.to_thread(self.claim_task, task_id)
+        if not claimed:
+            logger.info(f"Task {task_id} already claimed, skipping (duplicate message)")
+            return TaskProcessorResult(
+                success=False,
+                task_id=task_id,
+                error="Already claimed by another worker",
+            )
+
+        # 2. Fetch task metadata
+        task = await asyncio.to_thread(self.fetch_task, task_id)
+        if not task:
+            return TaskProcessorResult(
+                success=False,
+                task_id=task_id,
+                error="Task not found",
+            )
+
+        run_id = task["survey_run_id"]
+        backstory_id = task["backstory_id"]
+
+        try:
+            # 3. Get backstory and questions
+            backstory_data = await asyncio.to_thread(self.db.get_backstory, backstory_id)
+            if not backstory_data:
+                raise ValueError(f"Backstory {backstory_id} not found")
+
+            backstory_text = backstory_data.get("backstory_text", "")
+
+            questions_data = await asyncio.to_thread(self.db.get_survey_questions, run_id)
+            if not questions_data:
+                raise ValueError(f"No questions found for run {run_id}")
+
+            questions = [Question.from_dict(q) for q in questions_data]
+
+            # 4. Process questions in series (async LLM, sequential questions)
+            logger.info(f"Processing {len(questions)} questions for backstory {backstory_id}")
+            results = await self.async_process_questions_in_series(backstory_text, questions)
+
+            # 5. Complete task atomically
+            await asyncio.to_thread(self.store_result, task_id, results)
+
+            # 6. Update run progress
+            await asyncio.to_thread(self.update_run_progress, run_id, backstory_id, results, True)
+
+            return TaskProcessorResult(
+                success=True,
+                task_id=task_id,
+                result=results,
+            )
+
+        except NonRetryableError as e:
+            error_msg = str(e)
+            await asyncio.to_thread(self.db.fail_task, task_id, error_msg)
+            await asyncio.to_thread(self.db.append_run_error, run_id, backstory_id, error_msg)
+            await asyncio.to_thread(self.db.check_run_completion, run_id)
+
+            return TaskProcessorResult(
+                success=False,
+                task_id=task_id,
+                error=error_msg,
+            )
+
+        except (RetryableError, LLMError, Exception) as e:
+            error_msg = str(e)
+            attempts = task.get("attempts", 0)
+
+            if attempts >= self.max_retries:
+                await asyncio.to_thread(self.db.fail_task, task_id, error_msg)
+                await asyncio.to_thread(self.db.append_run_error, run_id, backstory_id, error_msg)
+                await asyncio.to_thread(self.db.check_run_completion, run_id)
+
+                return TaskProcessorResult(
+                    success=False,
+                    task_id=task_id,
+                    error=error_msg,
+                )
+            else:
+                await asyncio.to_thread(self.db.update_task_status, task_id, "pending")
 
                 return TaskProcessorResult(
                     success=False,
