@@ -2,11 +2,13 @@
  * Survey run progress display component.
  * Shows real-time progress of a survey run.
  */
+import { useState, useEffect } from 'react'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle } from 'lucide-react'
+import { RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, ChevronDown } from 'lucide-react'
+import { supabase } from '@/lib/supabase'
 import type { SurveyRun, SurveyRunStatus } from '@/types/database'
 
 interface SurveyRunProgressProps {
@@ -78,6 +80,11 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain }: SurveyRunP
             </span>
           </div>
           <Progress value={progress} className="h-2" />
+          {isInProgress && run.started_at && totalProcessed >= 3 && (
+            <p className="text-xs text-muted-foreground text-right">
+              ~{estimateEta(run)} remaining
+            </p>
+          )}
         </div>
 
         {/* Stats */}
@@ -100,31 +107,108 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain }: SurveyRunP
 
         {/* Error summary */}
         {run.failed_tasks > 0 && (
-          <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
-            <div className="text-sm font-medium text-destructive">
-              {run.failed_tasks} task{run.failed_tasks > 1 ? 's' : ''} failed
-            </div>
-          </div>
+          <FailedTaskErrors runId={run.id} failedCount={run.failed_tasks} />
         )}
 
         {/* Actions */}
-        {isComplete && (
-          <div className="flex gap-2">
-            {run.completed_tasks > 0 && onViewResults && (
-              <Button onClick={onViewResults} className="flex-1">
-                View Results
-              </Button>
-            )}
-            {onRunAgain && (
-              <Button variant="outline" onClick={onRunAgain}>
-                Run Again
-              </Button>
-            )}
-          </div>
-        )}
+        <div className="flex gap-2">
+          {run.completed_tasks > 0 && onViewResults && (
+            <Button onClick={onViewResults} className="flex-1">
+              {isInProgress ? 'View Partial Results' : 'View Results'}
+            </Button>
+          )}
+          {isComplete && onRunAgain && (
+            <Button variant="outline" onClick={onRunAgain}>
+              Run Again
+            </Button>
+          )}
+        </div>
       </CardContent>
     </Card>
   )
+}
+
+const MAX_DISPLAYED_ERRORS = 20
+
+interface FailedTaskError {
+  backstory_id: string
+  error: string | null
+}
+
+function FailedTaskErrors({ runId, failedCount }: { runId: string; failedCount: number }) {
+  const [expanded, setExpanded] = useState(false)
+  const [errors, setErrors] = useState<FailedTaskError[]>([])
+  const [loaded, setLoaded] = useState(false)
+
+  useEffect(() => {
+    if (expanded && !loaded) {
+      fetchErrors()
+    }
+  }, [expanded])
+
+  const fetchErrors = async () => {
+    const { data } = await supabase
+      .from('survey_tasks')
+      .select('backstory_id, error')
+      .eq('survey_run_id', runId)
+      .eq('status', 'failed')
+      .limit(MAX_DISPLAYED_ERRORS + 1)
+
+    if (data) {
+      setErrors(data as FailedTaskError[])
+    }
+    setLoaded(true)
+  }
+
+  return (
+    <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
+      <button
+        type="button"
+        className="flex items-center justify-between w-full text-left"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <span className="text-sm font-medium text-destructive">
+          {failedCount} task{failedCount > 1 ? 's' : ''} failed
+        </span>
+        <ChevronDown className={`h-4 w-4 text-destructive transition-transform ${expanded ? 'rotate-180' : ''}`} />
+      </button>
+      {expanded && (
+        <div className="mt-3 space-y-2">
+          {!loaded ? (
+            <p className="text-xs text-muted-foreground">Loading errors...</p>
+          ) : errors.length === 0 ? (
+            <p className="text-xs text-muted-foreground">No error details available</p>
+          ) : (
+            <>
+              {errors.slice(0, MAX_DISPLAYED_ERRORS).map((err, i) => (
+                <div key={i} className="text-xs rounded border border-destructive/10 bg-background p-2">
+                  <span className="font-mono text-muted-foreground">
+                    {err.backstory_id.slice(0, 8)}...
+                  </span>
+                  <span className="mx-2 text-destructive/40">|</span>
+                  <span className="text-destructive">{err.error || 'Unknown error'}</span>
+                </div>
+              ))}
+              {failedCount > MAX_DISPLAYED_ERRORS && (
+                <p className="text-xs text-muted-foreground">
+                  and {failedCount - MAX_DISPLAYED_ERRORS} more...
+                </p>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function estimateEta(run: SurveyRun): string {
+  const elapsed = Date.now() - new Date(run.started_at!).getTime()
+  const processed = run.completed_tasks + run.failed_tasks
+  if (processed === 0 || elapsed <= 0) return 'calculating...'
+  const msPerTask = elapsed / processed
+  const remaining = run.total_tasks - processed
+  return formatDuration(Math.round(msPerTask * remaining))
 }
 
 function formatDuration(ms: number): string {

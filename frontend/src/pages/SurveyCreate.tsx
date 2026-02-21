@@ -28,7 +28,7 @@ import { useAuthContext } from '@/contexts/AuthContext'
 import { useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import type { Question, DemographicFilter as DemographicFilterType, Survey } from '@/types/database'
 import { toast } from '@/hooks/use-toast'
-import { Plus, Save, Play, ArrowLeft } from 'lucide-react'
+import { Plus, Save, Play, ArrowLeft, ChevronDown, Settings } from 'lucide-react'
 
 export function SurveyCreate() {
   const { id } = useParams()
@@ -40,6 +40,9 @@ export function SurveyCreate() {
   const [questions, setQuestions] = useState<Question[]>([])
   const [demographics, setDemographics] = useState<DemographicFilterType>({})
   const [sampleSize, setSampleSize] = useState<number | undefined>(undefined)
+  const [temperature, setTemperature] = useState<number | undefined>(undefined)
+  const [maxTokens, setMaxTokens] = useState<number | undefined>(undefined)
+  const [showLlmSettings, setShowLlmSettings] = useState(false)
   const [includeOwnBackstories, setIncludeOwnBackstories] = useState(false)
   const [ownBackstoriesCount, setOwnBackstoriesCount] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -73,6 +76,11 @@ export function SurveyCreate() {
       const { _sample_size, ...restDemographics } = survey.demographics as DemographicFilterType & { _sample_size?: number[] }
       setDemographics(restDemographics)
       setSampleSize(_sample_size?.[0])
+      setTemperature(survey.temperature ?? undefined)
+      setMaxTokens(survey.max_tokens ?? undefined)
+      if (survey.temperature != null || survey.max_tokens != null) {
+        setShowLlmSettings(true)
+      }
     }
   }
 
@@ -184,6 +192,8 @@ export function SurveyCreate() {
       questions: questions as unknown,
       demographics: demographicsWithSampleSize as unknown,
       status,
+      temperature: temperature ?? null,
+      max_tokens: maxTokens ?? null,
     } as Record<string, unknown>
 
     let result: Survey | null = null
@@ -260,7 +270,13 @@ export function SurveyCreate() {
     // Save as draft first, createSurveyRun will set it to 'active'
     const result = await saveSurvey('draft')
     if (result) {
-      const runId = await createRun(result.id, llmConfig)
+      // Merge per-survey settings into llm_config snapshot
+      const runLlmConfig = {
+        ...llmConfig,
+        ...(result.temperature != null && { temperature: result.temperature }),
+        ...(result.max_tokens != null && { max_tokens: result.max_tokens }),
+      }
+      const runId = await createRun(result.id, runLlmConfig)
       if (runId) {
         navigate(`/surveys/${result.id}`)
       } else {
@@ -366,6 +382,66 @@ export function SurveyCreate() {
           sampleSize={sampleSize}
           onSampleSizeChange={setSampleSize}
         />
+
+        <Card>
+          <CardHeader
+            className="cursor-pointer"
+            onClick={() => setShowLlmSettings(!showLlmSettings)}
+          >
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Settings className="h-4 w-4" />
+                <CardTitle className="text-base">LLM Settings</CardTitle>
+              </div>
+              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${showLlmSettings ? 'rotate-180' : ''}`} />
+            </div>
+            <p className="text-sm text-muted-foreground">
+              Override temperature and max tokens for this survey (optional)
+            </p>
+          </CardHeader>
+          {showLlmSettings && (
+            <CardContent className="space-y-4">
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="survey_temperature">Temperature</Label>
+                  <Input
+                    id="survey_temperature"
+                    type="number"
+                    min="0"
+                    max="2"
+                    step="0.1"
+                    value={temperature ?? ''}
+                    onChange={(e) =>
+                      setTemperature(e.target.value ? parseFloat(e.target.value) : undefined)
+                    }
+                    placeholder="Default"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Controls randomness. 0 = deterministic.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="survey_max_tokens">Max Tokens</Label>
+                  <Input
+                    id="survey_max_tokens"
+                    type="number"
+                    min="1"
+                    max="16384"
+                    step="1"
+                    value={maxTokens ?? ''}
+                    onChange={(e) =>
+                      setMaxTokens(e.target.value ? parseInt(e.target.value, 10) : undefined)
+                    }
+                    placeholder="Default"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Maximum tokens in response.
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          )}
+        </Card>
 
         {ownBackstoriesCount > 0 && (
           <Card>
