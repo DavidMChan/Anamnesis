@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any
 
 from src.config import get_config, LLMConfig
 from src.db import DatabaseClient
-from src.llm import LLMClient, VLLMClient, BaseLLMClient, NonRetryableError
+from src.llm import UnifiedLLMClient, NonRetryableError
 from src.metrics import LatencyTracker, MetricsLogger
 from src.parser import ParserLLM
 from src.queue import AsyncQueueConsumer
@@ -31,34 +31,28 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-def create_llm_client(llm_config: LLMConfig) -> BaseLLMClient:
+def create_llm_client(llm_config: LLMConfig) -> UnifiedLLMClient:
     """Create an LLM client from config."""
-    if llm_config.provider == "openrouter":
-        return LLMClient.create(
-            provider="openrouter",
-            api_key=llm_config.openrouter_api_key,
-            model=llm_config.openrouter_model,
-            temperature=llm_config.temperature,
-            max_tokens=llm_config.max_tokens,
-        )
-    elif llm_config.provider == "vllm":
-        return VLLMClient(
-            endpoint=llm_config.vllm_endpoint,
-            model=llm_config.vllm_model,
-            api_key=llm_config.vllm_api_key or None,
-            temperature=llm_config.temperature,
-            max_tokens=llm_config.max_tokens if llm_config.max_tokens is not None else 128,
-            use_guided_decoding=llm_config.use_guided_decoding,
-        )
-    else:
-        raise ValueError(f"Unknown LLM provider: {llm_config.provider}")
+    return UnifiedLLMClient(
+        base_url=llm_config.base_url,
+        api_key=llm_config.api_key,
+        model=llm_config.model,
+        provider=llm_config.provider,
+        temperature=llm_config.temperature,
+        max_tokens=llm_config.max_tokens,
+        use_guided_decoding=llm_config.use_guided_decoding,
+    )
 
 
 def create_parser_llm(llm_config: LLMConfig) -> Optional[ParserLLM]:
-    """Create a parser LLM from config (Tier 2 fallback for MCQ parsing)."""
-    if llm_config.openrouter_api_key:
+    """Create a parser LLM from config (Tier 2 fallback for MCQ parsing).
+
+    Parser LLM always uses OpenRouter, so it's only available when the
+    main provider is OpenRouter (same API key).
+    """
+    if llm_config.provider == "openrouter" and llm_config.api_key:
         return ParserLLM(
-            api_key=llm_config.openrouter_api_key,
+            api_key=llm_config.api_key,
             model=llm_config.parser_llm_model,
         )
     return None
@@ -86,27 +80,22 @@ def get_llm_config_for_user(db: DatabaseClient, user_id: str) -> LLMConfig:
             "Please configure LLM settings in the Settings page."
         )
 
-    # Fetch API keys from Vault based on provider
+    # Fetch API key based on provider
     provider = user_config["provider"]
-    openrouter_key = None
-    vllm_key = None
+    api_key = None
 
     if provider == "openrouter":
-        openrouter_key = db.get_user_api_key(user_id, "openrouter")
-        if not openrouter_key:
+        api_key = db.get_user_api_key(user_id, "openrouter")
+        if not api_key:
             raise ValueError(
                 f"User {user_id} selected OpenRouter but has no API key. "
                 "Please add your OpenRouter API key in the Settings page."
             )
     elif provider == "vllm":
-        vllm_key = db.get_user_api_key(user_id, "vllm")
+        api_key = db.get_user_api_key(user_id, "vllm")
         # vLLM key is optional — some deployments don't need auth
 
-    return LLMConfig.from_user_config(
-        user_config,
-        openrouter_api_key=openrouter_key,
-        vllm_api_key=vllm_key,
-    )
+    return LLMConfig.from_user_config(user_config, api_key=api_key)
 
 
 async def main():
@@ -120,7 +109,7 @@ async def main():
     db = DatabaseClient(config.supabase)
 
     # Cache for LLM clients and parser LLMs per user
-    llm_cache: Dict[str, BaseLLMClient] = {}
+    llm_cache: Dict[str, UnifiedLLMClient] = {}
     parser_cache: Dict[str, Optional[ParserLLM]] = {}
 
     # Metrics
@@ -132,7 +121,7 @@ async def main():
     in_flight_tasks: set[asyncio.Task] = set()
     shutting_down = False
 
-    async def get_llm_for_task(task: Dict[str, Any]) -> tuple[BaseLLMClient, Optional[ParserLLM]]:
+    async def get_llm_for_task(task: Dict[str, Any]) -> tuple[UnifiedLLMClient, Optional[ParserLLM]]:
         """
         Get or create LLM client + parser for a task based on the survey run's user.
 

@@ -1,51 +1,41 @@
 """
-LLM client module supporting OpenRouter and vLLM.
-Uses structured outputs for reliable response parsing.
+Unified OpenAI SDK client for both OpenRouter and vLLM.
 Provides both sync (complete) and async (async_complete) interfaces.
 """
-import asyncio
 import json
-import time
-from abc import ABC, abstractmethod
+import logging
+import re
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, List, TYPE_CHECKING
+from typing import Optional, List, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .prompt import Question
 
-import httpx
-from tenacity import (
-    retry,
-    stop_after_attempt,
-    wait_exponential,
-    retry_if_exception_type,
-)
+import openai
+from openai import AsyncOpenAI, OpenAI
 
+logger = logging.getLogger(__name__)
+
+
+# ─── Error classes ───────────────────────────────────────────────────────────
 
 class LLMError(Exception):
     """Base exception for LLM errors."""
-    pass
-
 
 class RetryableError(LLMError):
     """Error that can be retried (rate limits, server errors)."""
-    pass
-
 
 class NonRetryableError(LLMError):
     """Error that should not be retried (auth, bad request)."""
-    pass
-
 
 class TruncationError(LLMError):
     """Response was truncated (likely exceeded max_tokens)."""
-    pass
-
 
 class StructuredOutputNotSupported(LLMError):
     """Model doesn't support structured output (json_schema)."""
-    pass
 
+
+# ─── LLMResponse ─────────────────────────────────────────────────────────────
 
 @dataclass
 class LLMResponse:
@@ -66,7 +56,6 @@ class LLMResponse:
         try:
             data = json.loads(json_str)
         except json.JSONDecodeError as e:
-            # Detect truncation patterns
             error_msg = str(e).lower()
             if "unterminated string" in error_msg or "expecting" in error_msg:
                 raise TruncationError(f"Response appears truncated: {e}. Raw: {json_str[:200]}")
@@ -77,12 +66,10 @@ class LLMResponse:
         if answer is None:
             answers = data.get("answers")
             if answers is not None:
-                # Multiple select: join array as comma-separated
                 answer = ",".join(answers) if isinstance(answers, list) else str(answers)
             else:
                 ranking = data.get("ranking")
                 if ranking is not None:
-                    # Ranking: join array as comma-separated (preserves order)
                     answer = ",".join(ranking) if isinstance(ranking, list) else str(ranking)
                 else:
                     answer = ""
@@ -99,36 +86,25 @@ class LLMResponse:
         text: str,
         num_options: int,
         require_all: bool = False,
-        options: "Optional[List[str]]" = None,
+        options: Optional[List[str]] = None,
     ) -> "LLMResponse":
         """
         Parse comma-separated letters from various formats.
 
-        Handles:
-        - Clean: "A, C, D"
-        - Parenthesized: "(A), (B), (D)"
-        - Bracketed: "[A], [B]"
-        - Mixed: "A, (C), D"
-        - Option text: "Software engineer/ML, Data scientist" (matched against options)
+        Handles: "A, C, D", "(A), (B), (D)", "[A], [B]", mixed formats,
+        and option text fallback.
 
         Args:
             text: Raw response text
             num_options: Number of valid options (determines valid letter range)
             require_all: If True, all letters must be present (for ranking)
             options: Optional list of option texts for text-matching fallback
-
-        Returns:
-            LLMResponse with comma-separated answer or empty if invalid
         """
-        import re
         valid = {chr(65 + i) for i in range(num_options)}
 
-        # Extract letters from each comma-separated segment
-        # Strip parentheses, brackets, periods, spaces
         segments = [s.strip() for s in text.split(",")]
         letters = []
         for seg in segments:
-            # Strip wrapping punctuation: (A) → A, [B] → B, "C" → C
             cleaned = re.sub(r'^[\(\[\"\' ]+|[\)\]\"\' .]+$', '', seg).strip().upper()
             if cleaned in valid:
                 letters.append(cleaned)
@@ -151,10 +127,10 @@ class LLMResponse:
                         if letter not in seen:
                             seen.add(letter)
                             result.append(letter)
-                        break  # one match per segment
+                        break
 
         if require_all and set(result) != valid:
-            return cls(answer="", raw=text)  # Incomplete → retry
+            return cls(answer="", raw=text)
         if result:
             return cls(answer=",".join(result), raw=text)
         return cls(answer="", raw=text)
@@ -165,11 +141,9 @@ class LLMResponse:
         Parse LLM response from plain text (anthology style).
         Extracts the first letter (A, B, C, D, etc.) from the response.
         """
-        import re
         text = text.strip()
 
         # Try to find answer letter at the start
-        # Patterns: "(A)", "[A]", "A.", "A:", "A)" - letter in brackets or with punctuation
         patterns = [
             r'^[\(\[]([A-Za-z])[\)\]]',  # (A) or [A] at start
             r'^([A-Za-z])[\.\:\)]',  # A. A: A) at start
@@ -181,772 +155,240 @@ class LLMResponse:
             match = re.search(pattern, text)
             if match:
                 answer = match.group(1).upper()
-                if answer in 'ABCDEFGHIJ':  # Valid MCQ options
+                if answer in 'ABCDEFGHIJ':
                     return cls(answer=answer, raw=text)
 
-        # Stricter fallback: only accept standalone letter followed by valid delimiter
-        # Use anthology-style pattern with negative lookahead to exclude common words
-        # Including contractions like "I'm", "I'd", "I'll"
+        # Stricter fallback: anthology-style pattern
         anthology_pattern = r"(?:^|[\[\(\"\' ])([A-Z])(?=$|[\]\)\"., ])(?!'m)(?!'d)(?!'ll)(?!'ve)(?!'re)(?! think)(?! am)(?! have)(?! would)(?! was)(?! great)(?! lot)(?! little)(?! good)(?! bad)(?! don)"
         match = re.search(anthology_pattern, text)
         if match:
             answer = match.group(1).upper()
-            # Only accept A-E for typical MCQ (not I, which is often "I think...")
             if answer in 'ABCDEFGH':
                 return cls(answer=answer, raw=text)
 
-        # If nothing works, return empty string (not raw text) to keep context clean
-        # The raw text is still available in the raw field for debugging
-        import logging
-        logging.getLogger(__name__).warning(f"Failed to parse MCQ answer from: {repr(text[:100])}")
+        logger.warning(f"Failed to parse MCQ answer from: {repr(text[:100])}")
         return cls(answer="", raw=text)
 
 
-class BaseLLMClient(ABC):
-    """Abstract base class for LLM clients."""
-
-    @abstractmethod
-    def complete(self, prompt: str, response_schema: dict = None, *, question: "Optional[Question]" = None) -> LLMResponse:
-        """
-        Get completion from LLM with structured output (sync).
-
-        Args:
-            prompt: The input prompt
-            response_schema: JSON schema for expected response format
-            question: Optional question metadata (enables guided decoding for MCQ on vLLM)
-
-        Returns:
-            Parsed LLMResponse
-
-        Raises:
-            RetryableError: For transient failures (rate limits, server errors)
-            NonRetryableError: For permanent failures (auth, bad request)
-        """
-        pass
-
-    @abstractmethod
-    async def async_complete(self, prompt: str, response_schema: dict = None, *, question: "Optional[Question]" = None) -> LLMResponse:
-        """
-        Get completion from LLM with structured output (async).
-
-        Same interface as complete() but uses async I/O.
-        """
-        pass
-
-    async def close(self) -> None:
-        """Close any async resources (e.g. httpx.AsyncClient). Override in subclasses."""
-        pass
+# ─── UnifiedLLMClient ────────────────────────────────────────────────────────
 
 
-class OpenRouterClient(BaseLLMClient):
-    """Client for OpenRouter API (OpenAI-compatible)."""
+class UnifiedLLMClient:
+    """
+    Single LLM client for both OpenRouter and vLLM via OpenAI SDK.
 
-    BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
+    Both OpenRouter and vLLM expose OpenAI-compatible APIs.
+    Uses openai.OpenAI/AsyncOpenAI(base_url=...) for both.
+
+    Structured output:
+      - vLLM: extra_body={"structured_outputs": {"choice": [...]}} or {"regex": "..."}
+      - OpenRouter: response_format={"type": "json_schema", ...}
+    """
 
     def __init__(
         self,
+        base_url: str,
         api_key: str,
         model: str,
+        provider: str,
         temperature: float = 0.0,
-        max_tokens: Optional[int] = None,
+        max_tokens: Optional[int] = 512,
         max_retries: int = 3,
-        timeout: float = 60.0,
-    ):
-        self.api_key = api_key
-        self.model = model
-        self.temperature = temperature
-        self.max_tokens = max_tokens
-        self.max_retries = max_retries
-        self.timeout = timeout
-        self._async_client: Optional[httpx.AsyncClient] = None
-
-    # JSON Schema for structured output
-    ANSWER_SCHEMA = {
-        "type": "object",
-        "properties": {
-            "answer": {
-                "type": "string",
-                "description": "The letter of the chosen option (A, B, C, D, etc.)"
-            }
-        },
-        "required": ["answer"],
-        "additionalProperties": False
-    }
-
-    def _make_request(self, prompt: str, response_schema: dict, max_tokens_override: Optional[int] = None, use_structured: bool = True) -> LLMResponse:
-        """Make a single API request.
-
-        Args:
-            prompt: The input prompt
-            response_schema: JSON schema for expected response format
-            max_tokens_override: Override max_tokens for this request (used for retry)
-            use_structured: Whether to use structured output (json_schema) or plain text
-        """
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://anamnesis-rho.vercel.app",
-        }
-
-        # Use provided schema or default
-        schema = response_schema if response_schema else self.ANSWER_SCHEMA
-
-        # Determine max_tokens: override > instance setting
-        effective_max_tokens = max_tokens_override if max_tokens_override is not None else self.max_tokens
-
-        # Build prompt - add JSON instruction if using text mode
-        if use_structured:
-            messages = [{"role": "user", "content": prompt}]
-        else:
-            # For text mode, append instruction to respond with just the answer letter
-            text_prompt = prompt + "\n\nRespond with ONLY the letter of your answer (A, B, C, D, etc.) and nothing else."
-            messages = [{"role": "user", "content": text_prompt}]
-
-        payload: Dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": self.temperature,
-        }
-
-        # Only add structured output format if requested
-        if use_structured:
-            payload["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "answer",
-                    "strict": True,
-                    "schema": schema
-                }
-            }
-
-        # Only add max_tokens if specified (None means no limit)
-        if effective_max_tokens is not None:
-            payload["max_tokens"] = effective_max_tokens
-
-        with httpx.Client(timeout=self.timeout) as client:
-            response = client.post(self.BASE_URL, headers=headers, json=payload)
-
-            # Handle errors
-            if response.status_code == 401:
-                raise NonRetryableError(f"Authentication failed: {response.json()}")
-            elif response.status_code == 400:
-                error_data = response.json()
-                error_msg = str(error_data)
-                # Check if this is a structured output not supported error
-                if "chat_template" in error_msg.lower() or "json" in error_msg.lower() or "schema" in error_msg.lower():
-                    raise StructuredOutputNotSupported(f"Model doesn't support structured output: {error_msg}")
-                raise NonRetryableError(f"Bad request: {error_data}")
-            elif response.status_code == 429:
-                raise RetryableError(f"Rate limited: {response.json()}")
-            elif response.status_code >= 500:
-                raise RetryableError(f"Server error ({response.status_code}): {response.json()}")
-            elif response.status_code != 200:
-                raise LLMError(f"Unexpected status {response.status_code}: {response.json()}")
-
-            # Parse response
-            data = response.json()
-
-            # Check for error response (OpenRouter returns error in body, not HTTP status)
-            if "error" in data:
-                error_msg = data["error"].get("message", str(data["error"])) if isinstance(data["error"], dict) else str(data["error"])
-                error_code = data["error"].get("code", "") if isinstance(data["error"], dict) else ""
-
-                # Check if this is a structured output not supported error
-                if "chat_template" in error_msg.lower() or "json" in error_msg.lower() or "schema" in error_msg.lower() or "Hyperbolic" in error_msg:
-                    raise StructuredOutputNotSupported(f"Model doesn't support structured output: {error_msg}")
-
-                # Rate limits and server errors are retryable
-                if error_code in ("rate_limit_exceeded", "server_error", 429, 500, 502, 503):
-                    raise RetryableError(f"OpenRouter error: {error_msg}")
-                else:
-                    raise NonRetryableError(f"OpenRouter error: {error_msg}")
-
-            # Validate response structure
-            if "choices" not in data or not data["choices"]:
-                raise NonRetryableError(f"Invalid response structure (no choices): {str(data)[:500]}")
-
-            content = data["choices"][0]["message"]["content"]
-
-            # Parse based on mode
-            if use_structured:
-                return LLMResponse.from_json(content)
-            else:
-                return LLMResponse.from_text(content)
-
-    def complete(self, prompt: str, response_schema: dict = None, *, question: "Optional[Question]" = None) -> LLMResponse:
-        """Get completion with retry logic, truncation handling, and text fallback."""
-        import logging
-        logger = logging.getLogger(__name__)
-
-        last_error = None
-        truncation_retried = False
-        text_fallback_used = False
-
-        for attempt in range(self.max_retries):
-            try:
-                return self._make_request(prompt, response_schema, use_structured=not text_fallback_used)
-            except StructuredOutputNotSupported as e:
-                # Fall back to text mode
-                if not text_fallback_used:
-                    text_fallback_used = True
-                    logger.warning(f"Structured output not supported, falling back to text mode: {e}")
-                    continue  # Retry immediately with text mode
-                else:
-                    raise NonRetryableError(f"Text fallback also failed: {e}")
-            except TruncationError as e:
-                # Retry once without max_tokens limit (only if we haven't tried already)
-                if not truncation_retried and self.max_tokens is not None:
-                    truncation_retried = True
-                    logger.warning(f"Response truncated, retrying without max_tokens limit: {e}")
-                    try:
-                        return self._make_request(prompt, response_schema, max_tokens_override=16384, use_structured=not text_fallback_used)
-                    except TruncationError as retry_e:
-                        raise NonRetryableError(f"Response still truncated after retry: {retry_e}")
-                else:
-                    raise NonRetryableError(f"Response truncated: {e}")
-            except NonRetryableError:
-                raise
-            except RetryableError as e:
-                last_error = e
-                if attempt < self.max_retries - 1:
-                    # Exponential backoff
-                    wait_time = min(2 ** attempt, 30)
-                    time.sleep(wait_time)
-            except httpx.TimeoutException as e:
-                last_error = RetryableError(f"Timeout: {e}")
-                if attempt < self.max_retries - 1:
-                    wait_time = min(2 ** attempt, 30)
-                    time.sleep(wait_time)
-
-        raise RetryableError(f"Max retries exceeded: {last_error}")
-
-    def _get_async_client(self) -> httpx.AsyncClient:
-        """Get or create shared async HTTP client."""
-        if self._async_client is None or self._async_client.is_closed:
-            self._async_client = httpx.AsyncClient(timeout=self.timeout)
-        return self._async_client
-
-    async def _async_make_request(self, prompt: str, response_schema: dict, max_tokens_override: Optional[int] = None, use_structured: bool = True) -> LLMResponse:
-        """Async version of _make_request."""
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://anamnesis-rho.vercel.app",
-        }
-
-        schema = response_schema if response_schema else self.ANSWER_SCHEMA
-        effective_max_tokens = max_tokens_override if max_tokens_override is not None else self.max_tokens
-
-        if use_structured:
-            messages = [{"role": "user", "content": prompt}]
-        else:
-            text_prompt = prompt + "\n\nRespond with ONLY the letter of your answer (A, B, C, D, etc.) and nothing else."
-            messages = [{"role": "user", "content": text_prompt}]
-
-        payload: Dict[str, Any] = {
-            "model": self.model,
-            "messages": messages,
-            "temperature": self.temperature,
-        }
-
-        if use_structured:
-            payload["response_format"] = {
-                "type": "json_schema",
-                "json_schema": {
-                    "name": "answer",
-                    "strict": True,
-                    "schema": schema
-                }
-            }
-
-        if effective_max_tokens is not None:
-            payload["max_tokens"] = effective_max_tokens
-
-        client = self._get_async_client()
-        response = await client.post(self.BASE_URL, headers=headers, json=payload)
-
-        if response.status_code == 401:
-            raise NonRetryableError(f"Authentication failed: {response.json()}")
-        elif response.status_code == 400:
-            error_data = response.json()
-            error_msg = str(error_data)
-            if "chat_template" in error_msg.lower() or "json" in error_msg.lower() or "schema" in error_msg.lower():
-                raise StructuredOutputNotSupported(f"Model doesn't support structured output: {error_msg}")
-            raise NonRetryableError(f"Bad request: {error_data}")
-        elif response.status_code == 429:
-            raise RetryableError(f"Rate limited: {response.json()}")
-        elif response.status_code >= 500:
-            raise RetryableError(f"Server error ({response.status_code}): {response.json()}")
-        elif response.status_code != 200:
-            raise LLMError(f"Unexpected status {response.status_code}: {response.json()}")
-
-        data = response.json()
-
-        if "error" in data:
-            error_msg = data["error"].get("message", str(data["error"])) if isinstance(data["error"], dict) else str(data["error"])
-            error_code = data["error"].get("code", "") if isinstance(data["error"], dict) else ""
-
-            if "chat_template" in error_msg.lower() or "json" in error_msg.lower() or "schema" in error_msg.lower() or "Hyperbolic" in error_msg:
-                raise StructuredOutputNotSupported(f"Model doesn't support structured output: {error_msg}")
-
-            if error_code in ("rate_limit_exceeded", "server_error", 429, 500, 502, 503):
-                raise RetryableError(f"OpenRouter error: {error_msg}")
-            else:
-                raise NonRetryableError(f"OpenRouter error: {error_msg}")
-
-        if "choices" not in data or not data["choices"]:
-            raise NonRetryableError(f"Invalid response structure (no choices): {str(data)[:500]}")
-
-        content = data["choices"][0]["message"]["content"]
-
-        if use_structured:
-            return LLMResponse.from_json(content)
-        else:
-            return LLMResponse.from_text(content)
-
-    async def async_complete(self, prompt: str, response_schema: dict = None, *, question: "Optional[Question]" = None) -> LLMResponse:
-        """Async version of complete() with same retry/fallback logic."""
-        import logging
-        logger = logging.getLogger(__name__)
-
-        last_error = None
-        truncation_retried = False
-        text_fallback_used = False
-
-        for attempt in range(self.max_retries):
-            try:
-                return await self._async_make_request(prompt, response_schema, use_structured=not text_fallback_used)
-            except StructuredOutputNotSupported as e:
-                if not text_fallback_used:
-                    text_fallback_used = True
-                    logger.warning(f"Structured output not supported, falling back to text mode: {e}")
-                    continue
-                else:
-                    raise NonRetryableError(f"Text fallback also failed: {e}")
-            except TruncationError as e:
-                if not truncation_retried and self.max_tokens is not None:
-                    truncation_retried = True
-                    logger.warning(f"Response truncated, retrying without max_tokens limit: {e}")
-                    try:
-                        return await self._async_make_request(prompt, response_schema, max_tokens_override=16384, use_structured=not text_fallback_used)
-                    except TruncationError as retry_e:
-                        raise NonRetryableError(f"Response still truncated after retry: {retry_e}")
-                else:
-                    raise NonRetryableError(f"Response truncated: {e}")
-            except NonRetryableError:
-                raise
-            except RetryableError as e:
-                last_error = e
-                if attempt < self.max_retries - 1:
-                    wait_time = min(2 ** attempt, 30)
-                    await asyncio.sleep(wait_time)
-            except httpx.TimeoutException as e:
-                last_error = RetryableError(f"Timeout: {e}")
-                if attempt < self.max_retries - 1:
-                    wait_time = min(2 ** attempt, 30)
-                    await asyncio.sleep(wait_time)
-
-        raise RetryableError(f"Max retries exceeded: {last_error}")
-
-    async def close(self) -> None:
-        """Close the shared async HTTP client."""
-        if self._async_client and not self._async_client.is_closed:
-            await self._async_client.aclose()
-            self._async_client = None
-
-
-class VLLMClient(BaseLLMClient):
-    """
-    Client for vLLM server using Completions API.
-
-    Designed for base models (not instruction-tuned) following anthology approach.
-    Uses /v1/completions endpoint which doesn't require chat templates.
-
-    Supports guided decoding via structured_outputs.choice for MCQ questions,
-    which constrains generation to valid option letters at the token level.
-    """
-
-    def __init__(
-        self,
-        endpoint: str,
-        model: str,
-        api_key: Optional[str] = None,
-        temperature: float = 1.0,  # Default 1.0 like anthology
-        max_tokens: int = 128,  # Default 128 like anthology (never None to avoid infinite generation)
-        max_retries: int = 3,
-        timeout: float = 120.0,
-        top_p: float = 1.0,
         use_guided_decoding: bool = True,
     ):
-        self.endpoint = endpoint.rstrip("/")
         self.model = model
-        self.api_key = api_key
+        self.provider = provider
         self.temperature = temperature
         self.max_tokens = max_tokens
-        self.max_retries = max_retries
-        self.timeout = timeout
-        self.top_p = top_p
         self.use_guided_decoding = use_guided_decoding
-        self._async_client: Optional[httpx.AsyncClient] = None
 
-    def _make_request(
-        self,
-        prompt: str,
-        max_tokens_override: Optional[int] = None,
-        guided_params: Optional[tuple] = None,
-        question: "Optional[Question]" = None,
-    ) -> LLMResponse:
+        self._sync_client = OpenAI(
+            base_url=base_url, api_key=api_key, max_retries=max_retries,
+        )
+        self._async_client = AsyncOpenAI(
+            base_url=base_url, api_key=api_key, max_retries=max_retries,
+        )
+
+    def _build_create_params(self, question: "Optional[Question]") -> dict:
         """
-        Make a request using the Completions API.
+        Build extra kwargs for chat.completions.create() based on provider + question type.
 
-        Args:
-            prompt: The full prompt (backstory + questions + "Answer:")
-            max_tokens_override: Override max_tokens for this request
-            guided_params: Tuple of (type, value) for structured_outputs.
-                           ("choice", ["A","B","C","D"]) or ("regex", "[A-D](, [A-D])*")
-            question: Question metadata for response dispatch
+        For vLLM: returns extra_body with structured_outputs (choice/regex)
+        For OpenRouter: returns response_format with json_schema
         """
-        url = f"{self.endpoint}/completions"
+        if not self.use_guided_decoding or not question or not question.options:
+            return {}
 
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        n = len(question.options)
+        letters = [chr(65 + i) for i in range(n)]
+        last = letters[-1]
 
-        effective_max_tokens = max_tokens_override if max_tokens_override is not None else self.max_tokens
-
-        # Determine stop sequences based on question type
-        question_type = question.type if question else None
-        if question_type == "open_response":
-            stop_sequences = ["Question:"]
-        else:
-            stop_sequences = ["\n", ".", "Question:"]
-
-        payload: Dict[str, Any] = {
-            "model": self.model,
-            "prompt": prompt,
-            "temperature": self.temperature,
-            "max_tokens": effective_max_tokens,
-            "top_p": self.top_p,
-            "stop": stop_sequences,
-        }
-
-        # Add guided decoding constraint
-        if guided_params:
-            param_type, param_value = guided_params
-            payload["structured_outputs"] = {param_type: param_value}
-            if param_type == "choice":
-                # MCQ: single token, no stop sequences needed
-                payload.pop("stop", None)
-                payload["max_tokens"] = 1
-            elif param_type == "regex":
-                # Regex patterns include \n? so the model can output \n to stop
-                # (stop sequence "\n" then fires and strips it from output)
-                num_options = len(question.options) if question and question.options else 4
-                payload["max_tokens"] = 3 * num_options
-
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(f"vLLM prompt (last 500 chars): {repr(prompt[-500:])}")
-        if guided_params:
-            logger.info(f"vLLM guided_params: {guided_params}")
-
-        with httpx.Client(timeout=self.timeout) as client:
-            response = client.post(url, headers=headers, json=payload)
-
-            if response.status_code == 401:
-                raise NonRetryableError(f"Authentication failed: {response.json()}")
-            elif response.status_code == 400:
-                raise NonRetryableError(f"Bad request: {response.json()}")
-            elif response.status_code == 429:
-                raise RetryableError(f"Rate limited: {response.json()}")
-            elif response.status_code >= 500:
-                raise RetryableError(f"Server error ({response.status_code})")
-            elif response.status_code != 200:
-                raise LLMError(f"Unexpected status {response.status_code}: {response.text}")
-
-            data = response.json()
-
-            if "error" in data:
-                error_msg = data["error"].get("message", str(data["error"])) if isinstance(data["error"], dict) else str(data["error"])
-                raise NonRetryableError(f"vLLM error: {error_msg}")
-
-            if "choices" not in data or not data["choices"]:
-                raise NonRetryableError(f"Invalid response structure: {str(data)[:500]}")
-
-            # Completions API returns 'text' field
-            content = data["choices"][0].get("text", "").strip()
-
-            logging.getLogger(__name__).info(f"vLLM raw response: {repr(content[:200] if len(content) > 200 else content)}")
-
-            # Dispatch response parsing based on guided decoding type
-            if guided_params:
-                param_type, param_value = guided_params
-                if param_type == "choice":
-                    # MCQ: existing logic
-                    if content and content.upper() in param_value:
-                        return LLMResponse(answer=content.upper(), raw=content)
-                elif param_type == "regex":
-                    num_options = len(question.options) if question and question.options else 0
-                    opts = question.options if question else None
-                    if question and question.type == "multiple_select":
-                        return LLMResponse.from_comma_separated(content, num_options, require_all=False, options=opts)
-                    elif question and question.type == "ranking":
-                        return LLMResponse.from_comma_separated(content, num_options, require_all=True, options=opts)
-
-            # Open response: use raw text directly
-            if question_type == "open_response":
-                text = content.strip()
-                return LLMResponse(answer=text if text else "", raw=content)
-
-            # Multiple select: parse comma-separated letters from natural response
-            if question_type == "multiple_select" and question and question.options:
-                return LLMResponse.from_comma_separated(content, len(question.options), require_all=False, options=question.options)
-
-            return LLMResponse.from_text(content)
-
-    def complete(self, prompt: str, response_schema: dict = None, *, question: "Optional[Question]" = None) -> LLMResponse:
-        """
-        Get completion from vLLM using Completions API.
-
-        Args:
-            prompt: The full prompt (should end with "Answer:")
-            response_schema: Ignored for vLLM (kept for interface compatibility)
-            question: Optional question metadata. Enables type-appropriate
-                      guided decoding (choice for MCQ, regex for multiple_select/ranking).
-        """
-        import logging
-        logger = logging.getLogger(__name__)
-
-        # Determine guided decoding params based on question type
-        guided_params = None
-        if self.use_guided_decoding and question is not None and question.options:
-            n = len(question.options)
-            last = chr(64 + n)  # 'D' for 4 options
+        if self.provider == "vllm":
             if question.type == "mcq":
-                guided_params = ("choice", [chr(65 + i) for i in range(n)])
+                return {"extra_body": {"structured_outputs": {"choice": letters}}}
             elif question.type == "multiple_select":
-                guided_params = ("regex", f"[A-{last}](, [A-{last}])*\n?")
+                return {"extra_body": {"structured_outputs": {"regex": f"[A-{last}](, [A-{last}])*"}}}
             elif question.type == "ranking":
-                guided_params = ("regex", f"[A-{last}](, [A-{last}]){{{n-1}}}\n?")
-            # open_response: no guided decoding
+                return {"extra_body": {"structured_outputs": {"regex": f"[A-{last}](, [A-{last}]){{{n-1}}}"}}}
+        elif self.provider == "openrouter":
+            from .prompt import get_response_schema
+            schema = get_response_schema(question)
+            return {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "answer", "strict": True, "schema": schema}
+                }
+            }
 
-        last_error = None
+        return {}
 
-        for attempt in range(self.max_retries):
-            try:
-                return self._make_request(prompt, guided_params=guided_params, question=question)
-            except NonRetryableError:
-                raise
-            except RetryableError as e:
-                last_error = e
-                if attempt < self.max_retries - 1:
-                    wait_time = min(2 ** attempt, 30)
-                    logger.warning(f"Retrying in {wait_time}s after error: {e}")
-                    time.sleep(wait_time)
-            except httpx.TimeoutException as e:
-                last_error = RetryableError(f"Timeout: {e}")
-                if attempt < self.max_retries - 1:
-                    wait_time = min(2 ** attempt, 30)
-                    logger.warning(f"Retrying in {wait_time}s after timeout")
-                    time.sleep(wait_time)
+    def _effective_max_tokens(self, question: "Optional[Question]") -> Optional[int]:
+        """Determine max_tokens based on question type and guided decoding."""
+        if not question:
+            return self.max_tokens
+        if self.provider == "vllm" and self.use_guided_decoding and question.options:
+            if question.type == "mcq":
+                return 1
+            elif question.type in ("multiple_select", "ranking"):
+                return 3 * len(question.options)
+        return self.max_tokens
 
-        raise RetryableError(f"Max retries exceeded: {last_error}")
+    def _parse_response(self, content: str, question: "Optional[Question]") -> LLMResponse:
+        """Parse response based on provider and question type."""
+        if not content:
+            return LLMResponse(answer="", raw="")
 
-    def _get_async_client(self) -> httpx.AsyncClient:
-        """Get or create shared async HTTP client."""
-        if self._async_client is None or self._async_client.is_closed:
-            self._async_client = httpx.AsyncClient(timeout=self.timeout)
-        return self._async_client
+        # OpenRouter with json_schema returns JSON
+        if self.provider == "openrouter" and self.use_guided_decoding and question and question.options:
+            return LLMResponse.from_json(content)
 
-    async def _async_make_request(
-        self,
-        prompt: str,
-        max_tokens_override: Optional[int] = None,
-        guided_params: Optional[tuple] = None,
-        question: "Optional[Question]" = None,
-    ) -> LLMResponse:
-        """Async version of _make_request."""
-        url = f"{self.endpoint}/completions"
+        # vLLM with guided decoding
+        if self.provider == "vllm" and self.use_guided_decoding and question and question.options:
+            if question.type == "mcq":
+                letter = content.strip().upper()
+                valid = {chr(65 + i) for i in range(len(question.options))}
+                if letter in valid:
+                    return LLMResponse(answer=letter, raw=content)
+            elif question.type in ("multiple_select", "ranking"):
+                require_all = question.type == "ranking"
+                return LLMResponse.from_comma_separated(
+                    content, len(question.options),
+                    require_all=require_all, options=question.options,
+                )
 
-        headers = {"Content-Type": "application/json"}
-        if self.api_key:
-            headers["Authorization"] = f"Bearer {self.api_key}"
+        # Open response: use raw text directly
+        if question and question.type == "open_response":
+            return LLMResponse(answer=content.strip(), raw=content)
 
-        effective_max_tokens = max_tokens_override if max_tokens_override is not None else self.max_tokens
+        # Multiple select / ranking without guided decoding
+        if question and question.type == "multiple_select" and question.options:
+            return LLMResponse.from_comma_separated(
+                content, len(question.options), require_all=False, options=question.options,
+            )
+        if question and question.type == "ranking" and question.options:
+            return LLMResponse.from_comma_separated(
+                content, len(question.options), require_all=True, options=question.options,
+            )
 
-        question_type = question.type if question else None
-        if question_type == "open_response":
-            stop_sequences = ["Question:"]
-        else:
-            stop_sequences = ["\n", ".", "Question:"]
-
-        payload: Dict[str, Any] = {
-            "model": self.model,
-            "prompt": prompt,
-            "temperature": self.temperature,
-            "max_tokens": effective_max_tokens,
-            "top_p": self.top_p,
-            "stop": stop_sequences,
-        }
-
-        if guided_params:
-            param_type, param_value = guided_params
-            payload["structured_outputs"] = {param_type: param_value}
-            if param_type == "choice":
-                payload.pop("stop", None)
-                payload["max_tokens"] = 1
-            elif param_type == "regex":
-                num_options = len(question.options) if question and question.options else 4
-                payload["max_tokens"] = 3 * num_options
-
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(f"vLLM prompt (last 500 chars): {repr(prompt[-500:])}")
-        if guided_params:
-            logger.info(f"vLLM guided_params: {guided_params}")
-
-        client = self._get_async_client()
-        response = await client.post(url, headers=headers, json=payload)
-
-        if response.status_code == 401:
-            raise NonRetryableError(f"Authentication failed: {response.json()}")
-        elif response.status_code == 400:
-            raise NonRetryableError(f"Bad request: {response.json()}")
-        elif response.status_code == 429:
-            raise RetryableError(f"Rate limited: {response.json()}")
-        elif response.status_code >= 500:
-            raise RetryableError(f"Server error ({response.status_code})")
-        elif response.status_code != 200:
-            raise LLMError(f"Unexpected status {response.status_code}: {response.text}")
-
-        data = response.json()
-
-        if "error" in data:
-            error_msg = data["error"].get("message", str(data["error"])) if isinstance(data["error"], dict) else str(data["error"])
-            raise NonRetryableError(f"vLLM error: {error_msg}")
-
-        if "choices" not in data or not data["choices"]:
-            raise NonRetryableError(f"Invalid response structure: {str(data)[:500]}")
-
-        content = data["choices"][0].get("text", "").strip()
-
-        logging.getLogger(__name__).info(f"vLLM raw response: {repr(content[:200] if len(content) > 200 else content)}")
-
-        if guided_params:
-            param_type, param_value = guided_params
-            if param_type == "choice":
-                if content and content.upper() in param_value:
-                    return LLMResponse(answer=content.upper(), raw=content)
-            elif param_type == "regex":
-                num_options = len(question.options) if question and question.options else 0
-                opts = question.options if question else None
-                if question and question.type == "multiple_select":
-                    return LLMResponse.from_comma_separated(content, num_options, require_all=False, options=opts)
-                elif question and question.type == "ranking":
-                    return LLMResponse.from_comma_separated(content, num_options, require_all=True, options=opts)
-
-        if question_type == "open_response":
-            text = content.strip()
-            return LLMResponse(answer=text if text else "", raw=content)
-
-        if question_type == "multiple_select" and question and question.options:
-            return LLMResponse.from_comma_separated(content, len(question.options), require_all=False, options=question.options)
-
+        # Fallback: text parsing
         return LLMResponse.from_text(content)
 
-    async def async_complete(self, prompt: str, response_schema: dict = None, *, question: "Optional[Question]" = None) -> LLMResponse:
-        """Async version of complete()."""
-        import logging
-        logger = logging.getLogger(__name__)
+    def complete(self, prompt: str, *, question: "Optional[Question]" = None) -> LLMResponse:
+        """Get completion from LLM (sync)."""
+        params = self._build_create_params(question)
+        messages = [{"role": "user", "content": prompt}]
 
-        guided_params = None
-        if self.use_guided_decoding and question is not None and question.options:
-            n = len(question.options)
-            last = chr(64 + n)
-            if question.type == "mcq":
-                guided_params = ("choice", [chr(65 + i) for i in range(n)])
-            elif question.type == "multiple_select":
-                guided_params = ("regex", f"[A-{last}](, [A-{last}])*\n?")
-            elif question.type == "ranking":
-                guided_params = ("regex", f"[A-{last}](, [A-{last}]){{{n-1}}}\n?")
-
-        last_error = None
-
-        for attempt in range(self.max_retries):
-            try:
-                return await self._async_make_request(prompt, guided_params=guided_params, question=question)
-            except NonRetryableError:
-                raise
-            except RetryableError as e:
-                last_error = e
-                if attempt < self.max_retries - 1:
-                    wait_time = min(2 ** attempt, 30)
-                    logger.warning(f"Retrying in {wait_time}s after error: {e}")
-                    await asyncio.sleep(wait_time)
-            except httpx.TimeoutException as e:
-                last_error = RetryableError(f"Timeout: {e}")
-                if attempt < self.max_retries - 1:
-                    wait_time = min(2 ** attempt, 30)
-                    logger.warning(f"Retrying in {wait_time}s after timeout")
-                    await asyncio.sleep(wait_time)
-
-        raise RetryableError(f"Max retries exceeded: {last_error}")
-
-    async def close(self) -> None:
-        """Close the shared async HTTP client."""
-        if self._async_client and not self._async_client.is_closed:
-            await self._async_client.aclose()
-            self._async_client = None
-
-
-class LLMClient:
-    """Factory for creating LLM clients."""
-
-    @staticmethod
-    def create(
-        provider: str,
-        api_key: Optional[str] = None,
-        endpoint: Optional[str] = None,
-        model: Optional[str] = None,
-        temperature: float = 0.0,
-        max_tokens: Optional[int] = None,
-        max_retries: int = 3,
-    ) -> BaseLLMClient:
-        """
-        Create an LLM client based on provider.
-
-        Args:
-            provider: "openrouter" or "vllm"
-            api_key: API key (for openrouter)
-            endpoint: Server endpoint (for vllm)
-            model: Model name
-            temperature: Sampling temperature
-            max_tokens: Maximum tokens in response
-            max_retries: Maximum retry attempts
-
-        Returns:
-            Configured LLM client
-        """
-        if provider == "openrouter":
-            if not api_key:
-                raise ValueError("api_key required for openrouter provider")
-            return OpenRouterClient(
-                api_key=api_key,
-                model=model or "anthropic/claude-3-haiku",
-                temperature=temperature,
-                max_tokens=max_tokens,
-                max_retries=max_retries,
+        try:
+            response = self._sync_client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self._effective_max_tokens(question),
+                **params,
             )
-        elif provider == "vllm":
-            if not endpoint:
-                raise ValueError("endpoint required for vllm provider")
-            return VLLMClient(
-                endpoint=endpoint,
-                model=model or "meta-llama/Llama-3-70b",
-                api_key=api_key,  # Optional: for authenticated vLLM servers
-                temperature=temperature,
-                max_tokens=max_tokens if max_tokens is not None else 128,  # Default 128 like anthology
-                max_retries=max_retries,
+            content = response.choices[0].message.content or ""
+            return self._parse_response(content, question)
+        except openai.BadRequestError as e:
+            error_str = str(e).lower()
+            if "json" in error_str or "schema" in error_str or "chat_template" in error_str:
+                if self.provider == "openrouter":
+                    logger.warning(f"Structured output not supported, falling back to text mode: {e}")
+                    return self._complete_text_fallback(prompt, question)
+                raise StructuredOutputNotSupported(str(e))
+            raise NonRetryableError(str(e))
+        except openai.AuthenticationError as e:
+            raise NonRetryableError(str(e))
+        except openai.RateLimitError as e:
+            raise RetryableError(str(e))
+        except openai.APIStatusError as e:
+            if e.status_code >= 500:
+                raise RetryableError(str(e))
+            raise NonRetryableError(str(e))
+
+    def _complete_text_fallback(self, prompt: str, question: "Optional[Question]") -> LLMResponse:
+        """Retry without structured output (text mode for OpenRouter)."""
+        text_prompt = prompt + "\n\nRespond with ONLY the letter of your answer (A, B, C, D, etc.) and nothing else."
+        messages = [{"role": "user", "content": text_prompt}]
+        try:
+            response = self._sync_client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self._effective_max_tokens(question),
             )
-        else:
-            raise ValueError(f"Unknown provider: {provider}. Supported: openrouter, vllm")
+            content = response.choices[0].message.content or ""
+            return LLMResponse.from_text(content)
+        except Exception as e:
+            raise NonRetryableError(f"Text fallback also failed: {e}")
+
+    async def async_complete(self, prompt: str, *, question: "Optional[Question]" = None) -> LLMResponse:
+        """Get completion from LLM (async)."""
+        params = self._build_create_params(question)
+        messages = [{"role": "user", "content": prompt}]
+
+        try:
+            response = await self._async_client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self._effective_max_tokens(question),
+                **params,
+            )
+            content = response.choices[0].message.content or ""
+            return self._parse_response(content, question)
+        except openai.BadRequestError as e:
+            error_str = str(e).lower()
+            if "json" in error_str or "schema" in error_str or "chat_template" in error_str:
+                if self.provider == "openrouter":
+                    logger.warning(f"Structured output not supported, falling back to text mode: {e}")
+                    return await self._async_complete_text_fallback(prompt, question)
+                raise StructuredOutputNotSupported(str(e))
+            raise NonRetryableError(str(e))
+        except openai.AuthenticationError as e:
+            raise NonRetryableError(str(e))
+        except openai.RateLimitError as e:
+            raise RetryableError(str(e))
+        except openai.APIStatusError as e:
+            if e.status_code >= 500:
+                raise RetryableError(str(e))
+            raise NonRetryableError(str(e))
+
+    async def _async_complete_text_fallback(self, prompt: str, question: "Optional[Question]") -> LLMResponse:
+        """Retry without structured output (text mode for OpenRouter, async)."""
+        text_prompt = prompt + "\n\nRespond with ONLY the letter of your answer (A, B, C, D, etc.) and nothing else."
+        messages = [{"role": "user", "content": text_prompt}]
+        try:
+            response = await self._async_client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self._effective_max_tokens(question),
+            )
+            content = response.choices[0].message.content or ""
+            return LLMResponse.from_text(content)
+        except Exception as e:
+            raise NonRetryableError(f"Text fallback also failed: {e}")
+
+    async def close(self):
+        """Close the async client."""
+        await self._async_client.close()

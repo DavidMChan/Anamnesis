@@ -27,17 +27,11 @@ class RabbitMQConfig:
 
 @dataclass
 class LLMConfig:
-    """LLM provider configuration — built entirely from per-user database config."""
-    provider: str = ""
-
-    # OpenRouter
-    openrouter_api_key: str = ""
-    openrouter_model: str = ""
-
-    # vLLM
-    vllm_endpoint: str = ""
-    vllm_model: str = ""
-    vllm_api_key: str = ""
+    """Unified LLM configuration — built from per-user database config."""
+    provider: str = ""           # "openrouter" or "vllm"
+    base_url: str = ""           # Full API base URL
+    api_key: str = ""            # API key (required for openrouter, optional for vllm)
+    model: str = ""              # Model identifier
 
     # Common settings
     temperature: float = 0.0
@@ -51,11 +45,14 @@ class LLMConfig:
     def from_user_config(
         cls,
         user_config: dict,
-        openrouter_api_key: Optional[str] = None,
-        vllm_api_key: Optional[str] = None,
+        api_key: Optional[str] = None,
     ) -> "LLMConfig":
         """
         Create LLMConfig from user's database configuration.
+
+        Args:
+            user_config: User's LLM settings from the database
+            api_key: API key for the provider (OpenRouter key or vLLM auth token)
 
         Raises ValueError if the config is invalid or incomplete.
         """
@@ -63,34 +60,34 @@ class LLMConfig:
         if not provider:
             raise ValueError("No LLM provider set in user configuration")
 
-        config = cls(
+        if provider == "openrouter":
+            base_url = "https://openrouter.ai/api/v1"
+            model = user_config.get("openrouter_model", "")
+            if not api_key:
+                raise ValueError("OpenRouter API key is required")
+            if not model:
+                raise ValueError("OpenRouter model is required")
+        elif provider == "vllm":
+            endpoint = user_config.get("vllm_endpoint", "").rstrip("/")
+            if not endpoint:
+                raise ValueError("vLLM endpoint is required")
+            base_url = f"{endpoint}/v1" if not endpoint.endswith("/v1") else endpoint
+            model = user_config.get("vllm_model", "")
+            if not model:
+                raise ValueError("vLLM model is required")
+        else:
+            raise ValueError(f"Unknown LLM provider: {provider!r}")
+
+        return cls(
             provider=provider,
-            openrouter_api_key=openrouter_api_key or "",
-            openrouter_model=user_config.get("openrouter_model", ""),
-            vllm_endpoint=user_config.get("vllm_endpoint", ""),
-            vllm_model=user_config.get("vllm_model", ""),
-            vllm_api_key=vllm_api_key or "",
+            base_url=base_url,
+            api_key=api_key or "",
+            model=model,
             temperature=user_config.get("temperature") if user_config.get("temperature") is not None else 0.0,
             max_tokens=user_config.get("max_tokens") if user_config.get("max_tokens") is not None else 512,
             use_guided_decoding=user_config.get("use_guided_decoding") if user_config.get("use_guided_decoding") is not None else True,
             parser_llm_model=user_config.get("parser_llm_model") or "google/gemini-2.0-flash-001",
         )
-
-        # Validate provider-specific requirements
-        if provider == "openrouter":
-            if not config.openrouter_api_key:
-                raise ValueError("OpenRouter API key is required")
-            if not config.openrouter_model:
-                raise ValueError("OpenRouter model is required")
-        elif provider == "vllm":
-            if not config.vllm_endpoint:
-                raise ValueError("vLLM endpoint is required")
-            if not config.vllm_model:
-                raise ValueError("vLLM model is required")
-        else:
-            raise ValueError(f"Unknown LLM provider: {provider!r}")
-
-        return config
 
 
 @dataclass
