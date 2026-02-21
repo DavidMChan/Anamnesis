@@ -94,17 +94,21 @@ class TestVLLMGuidedDecoding:
         call_kwargs = mock.chat.completions.create.call_args.kwargs
         assert "extra_body" not in call_kwargs
 
-        # multiple_select and ranking use regex, not choice
+        # multiple_select and ranking use response_format (json_schema), not extra_body
         for qtype in ["multiple_select", "ranking"]:
             client = make_vllm_client()
-            mock = setup_sync_response(client, "A, B")
+            if qtype == "multiple_select":
+                json_resp = '{"choice_A": true, "choice_B": false}'
+            else:
+                json_resp = '{"ranking": ["A", "B"]}'
+            mock = setup_sync_response(client, json_resp)
             question = Question(qkey="q1", type=qtype, text="Q?", options=["A", "B"])
 
             client.complete("Prompt", question=question)
 
             call_kwargs = mock.chat.completions.create.call_args.kwargs
-            assert "extra_body" in call_kwargs, f"extra_body should be in kwargs for {qtype}"
-            assert "regex" in call_kwargs["extra_body"]["structured_outputs"]
+            assert "response_format" in call_kwargs, f"response_format should be in kwargs for {qtype}"
+            assert call_kwargs["response_format"]["type"] == "json_schema"
 
     def test_vllm_guided_decoding_returns_valid_letter(self):
         """Response from guided decoding is correctly parsed as single letter."""

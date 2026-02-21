@@ -90,19 +90,27 @@ class TestStructuredParams:
         params = client._build_create_params(question)
         assert params == {"extra_body": {"structured_outputs": {"choice": ["A", "B", "C", "D"]}}}
 
-    def test_vllm_multiple_select_regex(self):
-        """vLLM multiple_select returns extra_body with regex."""
+    def test_vllm_multiple_select_json_schema(self):
+        """vLLM multiple_select returns response_format with boolean map schema."""
         client = make_client(provider="vllm")
         question = Question(qkey="q1", type="multiple_select", text="Q?", options=["X", "Y", "Z", "W"])
         params = client._build_create_params(question)
-        assert params == {"extra_body": {"structured_outputs": {"regex": "[A-D](, [A-D])*"}}}
+        assert "response_format" in params
+        assert params["response_format"]["type"] == "json_schema"
+        schema = params["response_format"]["json_schema"]["schema"]
+        assert "choice_A" in schema["properties"]
+        assert schema["properties"]["choice_A"]["type"] == "boolean"
 
-    def test_vllm_ranking_regex(self):
-        """vLLM ranking returns extra_body with regex requiring all letters."""
+    def test_vllm_ranking_json_schema(self):
+        """vLLM ranking returns response_format with ranking array schema."""
         client = make_client(provider="vllm")
         question = Question(qkey="q1", type="ranking", text="Q?", options=["X", "Y", "Z"])
         params = client._build_create_params(question)
-        assert params == {"extra_body": {"structured_outputs": {"regex": "[A-C](, [A-C]){2}"}}}
+        assert "response_format" in params
+        schema = params["response_format"]["json_schema"]["schema"]
+        assert "ranking" in schema["properties"]
+        assert schema["properties"]["ranking"]["minItems"] == 3
+        assert schema["properties"]["ranking"]["maxItems"] == 3
 
     def test_openrouter_mcq_json_schema(self):
         """OpenRouter MCQ returns response_format with json_schema."""
@@ -150,10 +158,11 @@ class TestEffectiveMaxTokens:
         question = Question(qkey="q1", type="mcq", text="Q?", options=["Yes", "No"])
         assert client._effective_max_tokens(question) == 1
 
-    def test_multiple_select_returns_3n(self):
+    def test_multiple_select_returns_default(self):
+        """JSON schema constrains output; uses default max_tokens."""
         client = make_client(provider="vllm")
         question = Question(qkey="q1", type="multiple_select", text="Q?", options=["A", "B", "C", "D", "E"])
-        assert client._effective_max_tokens(question) == 15
+        assert client._effective_max_tokens(question) == 512  # default, not 3 * 5
 
     def test_default_for_open_response(self):
         client = make_client(provider="vllm", max_tokens=256)
@@ -311,39 +320,6 @@ class TestErrorMapping:
 
 
 # ─── LLMResponse Tests ──────────────────────────────────────────────────────
-
-
-class TestLLMResponse:
-    """Tests for LLMResponse dataclass."""
-
-    def test_response_from_json(self):
-        json_str = '{"answer": "A", "reasoning": "Because option A is correct."}'
-        response = LLMResponse.from_json(json_str)
-        assert response.answer == "A"
-        assert response.reasoning == "Because option A is correct."
-
-    def test_response_answer_only(self):
-        json_str = '{"answer": "B"}'
-        response = LLMResponse.from_json(json_str)
-        assert response.answer == "B"
-        assert response.reasoning is None
-
-    def test_response_raw_content(self):
-        json_str = '{"answer": "C"}'
-        response = LLMResponse.from_json(json_str)
-        assert response.raw == json_str
-
-    def test_response_answers_array(self):
-        """Handles 'answers' field for multiple_select."""
-        json_str = '{"answers": ["A", "C", "D"]}'
-        response = LLMResponse.from_json(json_str)
-        assert response.answer == "A,C,D"
-
-    def test_response_ranking_array(self):
-        """Handles 'ranking' field."""
-        json_str = '{"ranking": ["B", "A", "C"]}'
-        response = LLMResponse.from_json(json_str)
-        assert response.answer == "B,A,C"
 
 
 class TestLLMResponseFromText:

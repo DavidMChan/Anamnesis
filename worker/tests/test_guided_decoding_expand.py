@@ -9,6 +9,7 @@ Covers:
 - Integration flows: compliance retry, context accumulation, mixed types
 - MCQ regression: existing behavior unchanged
 """
+import json
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 
@@ -63,74 +64,88 @@ def get_call_kwargs(mock):
 
 
 class TestMultipleSelectGuidedDecoding:
-    """Tests for multiple_select: regex guided decoding."""
+    """Tests for multiple_select: JSON schema via response_format."""
 
-    def test_vllm_multiple_select_uses_guided_regex(self):
-        """Multiple select uses extra_body with structured_outputs.regex."""
+    def test_vllm_multiple_select_uses_json_schema(self):
+        """Multiple select uses response_format with json_schema (boolean map)."""
         client = make_vllm_client()
-        mock = setup_sync_response(client, "A, C, D")
+        json_resp = '{"choice_A": true, "choice_B": false, "choice_C": true, "choice_D": true}'
+        mock = setup_sync_response(client, json_resp)
         question = Question(qkey="q1", type="multiple_select", text="Select all?",
                             options=["Opt1", "Opt2", "Opt3", "Opt4"])
 
         client.complete("Test prompt", question=question)
 
         kwargs = get_call_kwargs(mock)
-        assert kwargs["extra_body"]["structured_outputs"]["regex"] == "[A-D](, [A-D])*"
+        assert "response_format" in kwargs
+        assert kwargs["response_format"]["type"] == "json_schema"
+        schema = kwargs["response_format"]["json_schema"]["schema"]
+        assert "choice_A" in schema["properties"]
+        assert "choice_D" in schema["properties"]
+        assert schema["properties"]["choice_A"]["type"] == "boolean"
 
-    def test_vllm_multiple_select_max_tokens(self):
-        """Multiple select max_tokens is 3 * num_options."""
+    def test_vllm_multiple_select_default_max_tokens(self):
+        """Multiple select uses default max_tokens (schema constrains output)."""
         client = make_vllm_client()
-        mock = setup_sync_response(client, "A, B")
+        json_resp = '{"choice_A": true, "choice_B": false, "choice_C": false, "choice_D": false, "choice_E": false}'
+        mock = setup_sync_response(client, json_resp)
         question = Question(qkey="q1", type="multiple_select", text="Select?",
                             options=["A", "B", "C", "D", "E"])
 
         client.complete("Prompt", question=question)
 
         kwargs = get_call_kwargs(mock)
-        assert kwargs["max_tokens"] == 15  # 3 * 5
+        assert kwargs["max_tokens"] == 128  # default, not 3 * 5
 
     def test_vllm_multiple_select_dynamic_options(self):
-        """Regex pattern adjusts to option count."""
+        """JSON schema properties adjust to option count."""
         test_cases = [
-            (2, "[A-B](, [A-B])*"),
-            (3, "[A-C](, [A-C])*"),
-            (5, "[A-E](, [A-E])*"),
+            (2, ["choice_A", "choice_B"]),
+            (3, ["choice_A", "choice_B", "choice_C"]),
+            (5, ["choice_A", "choice_B", "choice_C", "choice_D", "choice_E"]),
         ]
-        for num_options, expected_regex in test_cases:
+        for num_options, expected_keys in test_cases:
             options = [f"Opt{i}" for i in range(num_options)]
+            all_false = {f"choice_{chr(65+i)}": False for i in range(num_options)}
+            all_false["choice_A"] = True
+            json_resp = json.dumps(all_false)
             client = make_vllm_client()
-            mock = setup_sync_response(client, "A")
+            mock = setup_sync_response(client, json_resp)
             question = Question(qkey="q1", type="multiple_select", text="Select?", options=options)
 
             client.complete("Prompt", question=question)
 
             kwargs = get_call_kwargs(mock)
-            assert kwargs["extra_body"]["structured_outputs"]["regex"] == expected_regex
+            schema = kwargs["response_format"]["json_schema"]["schema"]
+            assert sorted(schema["properties"].keys()) == sorted(expected_keys)
 
-    def test_vllm_multiple_select_parses_comma_list(self):
-        """Response 'A, C, D' is parsed as 'A,C,D'."""
+    def test_vllm_multiple_select_parses_boolean_map(self):
+        """Boolean map is parsed as 'A,C,D'."""
         client = make_vllm_client()
-        setup_sync_response(client, "A, C, D")
+        json_resp = '{"choice_A": true, "choice_B": false, "choice_C": true, "choice_D": true}'
+        setup_sync_response(client, json_resp)
         question = Question(qkey="q1", type="multiple_select", text="Select?",
                             options=["Opt1", "Opt2", "Opt3", "Opt4"])
 
         result = client.complete("Prompt", question=question)
         assert result.answer == "A,C,D"
 
-    def test_vllm_multiple_select_deduplicates(self):
-        """Response 'A, A, C' is deduplicated to 'A,C'."""
+    def test_vllm_multiple_select_all_false(self):
+        """All-false boolean map returns empty answer."""
         client = make_vllm_client()
-        setup_sync_response(client, "A, A, C")
+        json_resp = '{"choice_A": false, "choice_B": false, "choice_C": false}'
+        setup_sync_response(client, json_resp)
         question = Question(qkey="q1", type="multiple_select", text="Select?",
                             options=["Opt1", "Opt2", "Opt3"])
 
         result = client.complete("Prompt", question=question)
-        assert result.answer == "A,C"
+        assert result.answer == ""
 
-    def test_vllm_multiple_select_single_letter(self):
-        """Response 'B' is parsed as 'B' (single selection is valid)."""
+    def test_vllm_multiple_select_single_true(self):
+        """Single true in boolean map is parsed correctly."""
         client = make_vllm_client()
-        setup_sync_response(client, "B")
+        json_resp = '{"choice_A": false, "choice_B": true, "choice_C": false}'
+        setup_sync_response(client, json_resp)
         question = Question(qkey="q1", type="multiple_select", text="Select?",
                             options=["Opt1", "Opt2", "Opt3"])
 
@@ -144,42 +159,53 @@ class TestMultipleSelectGuidedDecoding:
 
 
 class TestRankingGuidedDecoding:
-    """Tests for vLLM regex guided decoding with ranking questions."""
+    """Tests for vLLM JSON schema guided decoding with ranking questions."""
 
-    def test_vllm_ranking_uses_guided_regex(self):
-        """UnifiedLLMClient sends extra_body with regex for ranking."""
+    def test_vllm_ranking_uses_json_schema(self):
+        """UnifiedLLMClient sends response_format with json_schema for ranking."""
         client = make_vllm_client()
-        mock = setup_sync_response(client, "B, A, C, D")
+        json_resp = '{"ranking": ["B", "A", "C", "D"]}'
+        mock = setup_sync_response(client, json_resp)
         question = Question(qkey="q1", type="ranking", text="Rank these?",
                             options=["Opt1", "Opt2", "Opt3", "Opt4"])
 
         client.complete("Test prompt", question=question)
 
         kwargs = get_call_kwargs(mock)
-        assert kwargs["extra_body"]["structured_outputs"]["regex"] == "[A-D](, [A-D]){3}"
+        assert "response_format" in kwargs
+        assert kwargs["response_format"]["type"] == "json_schema"
+        schema = kwargs["response_format"]["json_schema"]["schema"]
+        assert "ranking" in schema["properties"]
+        assert schema["properties"]["ranking"]["minItems"] == 4
+        assert schema["properties"]["ranking"]["maxItems"] == 4
 
-    def test_vllm_ranking_enforces_exact_count(self):
-        """Regex pattern requires exactly N letters."""
+    def test_vllm_ranking_enforces_exact_count_in_schema(self):
+        """JSON schema minItems/maxItems matches option count."""
         test_cases = [
-            (2, "[A-B](, [A-B]){1}"),
-            (3, "[A-C](, [A-C]){2}"),
-            (5, "[A-E](, [A-E]){4}"),
+            (2, 2),
+            (3, 3),
+            (5, 5),
         ]
-        for num_options, expected_regex in test_cases:
+        for num_options, expected_count in test_cases:
             options = [f"Opt{i}" for i in range(num_options)]
+            letters = [chr(65 + i) for i in range(num_options)]
+            json_resp = json.dumps({"ranking": letters})
             client = make_vllm_client()
-            mock = setup_sync_response(client, "A")
+            mock = setup_sync_response(client, json_resp)
             question = Question(qkey="q1", type="ranking", text="Rank?", options=options)
 
             client.complete("Prompt", question=question)
 
             kwargs = get_call_kwargs(mock)
-            assert kwargs["extra_body"]["structured_outputs"]["regex"] == expected_regex
+            schema = kwargs["response_format"]["json_schema"]["schema"]
+            assert schema["properties"]["ranking"]["minItems"] == expected_count
+            assert schema["properties"]["ranking"]["maxItems"] == expected_count
 
     def test_vllm_ranking_parses_complete_permutation(self):
-        """Response 'B, A, C, D' is parsed as 'B,A,C,D'."""
+        """Response '{"ranking": ["B","A","C","D"]}' is parsed as 'B,A,C,D'."""
         client = make_vllm_client()
-        setup_sync_response(client, "B, A, C, D")
+        json_resp = '{"ranking": ["B", "A", "C", "D"]}'
+        setup_sync_response(client, json_resp)
         question = Question(qkey="q1", type="ranking", text="Rank?",
                             options=["Opt1", "Opt2", "Opt3", "Opt4"])
 
@@ -187,9 +213,10 @@ class TestRankingGuidedDecoding:
         assert result.answer == "B,A,C,D"
 
     def test_vllm_ranking_rejects_duplicates(self):
-        """Response 'A, A, C, D' returns empty (missing B after dedup)."""
+        """Ranking with duplicates returns empty (triggers compliance retry)."""
         client = make_vllm_client()
-        setup_sync_response(client, "A, A, C, D")
+        json_resp = '{"ranking": ["A", "A", "C", "D"]}'
+        setup_sync_response(client, json_resp)
         question = Question(qkey="q1", type="ranking", text="Rank?",
                             options=["Opt1", "Opt2", "Opt3", "Opt4"])
 
@@ -197,9 +224,10 @@ class TestRankingGuidedDecoding:
         assert result.answer == ""
 
     def test_vllm_ranking_rejects_incomplete(self):
-        """Response 'A, B' (missing letters) returns empty."""
+        """Ranking with missing letters returns empty."""
         client = make_vllm_client()
-        setup_sync_response(client, "A, B")
+        json_resp = '{"ranking": ["A", "B"]}'
+        setup_sync_response(client, json_resp)
         question = Question(qkey="q1", type="ranking", text="Rank?",
                             options=["Opt1", "Opt2", "Opt3", "Opt4"])
 

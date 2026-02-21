@@ -8,7 +8,9 @@ Key design principles (from anthology):
 4. Consistency prompt added for follow-up questions
 """
 from dataclasses import dataclass
-from typing import Optional, List, Tuple
+from typing import Optional, List, Tuple, Type
+
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 
 # Consistency prompt for follow-up questions (from anthology)
@@ -233,70 +235,59 @@ def build_single_question_prompt(
     return build_initial_prompt(backstory, question)
 
 
-# Response schema for structured outputs (strict mode compatible)
-def get_response_schema(question: Question) -> dict:
-    """
-    Get the appropriate response schema for a question type.
+# ─── Pydantic response models for structured outputs ────────────────────────
 
-    Note: For strict mode, all properties must be in required,
-    so we only include the answer field.
+
+class _StrictBase(BaseModel):
+    """Base for all structured output models (additionalProperties: false)."""
+    model_config = ConfigDict(extra="forbid")
+
+
+class OpenResponseModel(_StrictBase):
+    """Open response: free-form text."""
+    answer: str
+
+
+def get_response_model(question: Question) -> Type[BaseModel]:
     """
+    Return a Pydantic model class whose JSON schema matches the expected
+    structured output for this question type.
+
+    The model is used for:
+      1. Schema generation: model.model_json_schema() → response_format
+      2. Response parsing: model.model_validate_json(content) → typed object
+    """
+    num_options = len(question.options) if question.options else 4
+    letters = [chr(65 + i) for i in range(num_options)]
+
     if question.type == "mcq":
-        # Generate enum based on number of options
-        num_options = len(question.options) if question.options else 4
-        letters = [chr(65 + i) for i in range(num_options)]
-        return {
-            "type": "object",
-            "properties": {
-                "answer": {
-                    "type": "string",
-                    "enum": letters,
-                    "description": "The selected answer letter"
-                }
-            },
-            "required": ["answer"],
-            "additionalProperties": False
-        }
+        return create_model(
+            "MCQResponse",
+            __base__=_StrictBase,
+            answer=(str, Field(json_schema_extra={"enum": letters})),
+        )
+
     elif question.type == "multiple_select":
-        num_options = len(question.options) if question.options else 4
-        letters = [chr(65 + i) for i in range(num_options)]
-        return {
-            "type": "object",
-            "properties": {
-                "answers": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": letters},
-                    "description": "Array of selected answer letters"
-                }
-            },
-            "required": ["answers"],
-            "additionalProperties": False
-        }
+        fields = {f"choice_{l}": (bool, ...) for l in letters}
+        return create_model("MultipleSelectResponse", __base__=_StrictBase, **fields)
+
     elif question.type == "ranking":
-        num_options = len(question.options) if question.options else 4
-        letters = [chr(65 + i) for i in range(num_options)]
-        return {
-            "type": "object",
-            "properties": {
-                "ranking": {
-                    "type": "array",
+        return create_model(
+            "RankingResponse",
+            __base__=_StrictBase,
+            ranking=(List[str], Field(
+                json_schema_extra={
                     "items": {"type": "string", "enum": letters},
-                    "description": "Array of answer letters in ranked order (first = highest)"
-                }
-            },
-            "required": ["ranking"],
-            "additionalProperties": False
-        }
+                    "minItems": num_options,
+                    "maxItems": num_options,
+                },
+            )),
+        )
+
     else:
-        # Open response
-        return {
-            "type": "object",
-            "properties": {
-                "answer": {
-                    "type": "string",
-                    "description": "Free-form text response"
-                }
-            },
-            "required": ["answer"],
-            "additionalProperties": False
-        }
+        return OpenResponseModel
+
+
+def get_response_schema(question: Question) -> dict:
+    """Get JSON schema dict for the question type (delegates to Pydantic)."""
+    return get_response_model(question).model_json_schema()

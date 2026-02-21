@@ -2,7 +2,6 @@
 Unified OpenAI SDK client for both OpenRouter and vLLM.
 Provides both sync (complete) and async (async_complete) interfaces.
 """
-import json
 import logging
 import re
 from dataclasses import dataclass
@@ -13,6 +12,7 @@ if TYPE_CHECKING:
 
 import openai
 from openai import AsyncOpenAI, OpenAI
+from pydantic import ValidationError
 
 logger = logging.getLogger(__name__)
 
@@ -43,42 +43,6 @@ class LLMResponse:
     answer: str
     reasoning: Optional[str] = None
     raw: Optional[str] = None
-
-    @classmethod
-    def from_json(cls, json_str: str) -> "LLMResponse":
-        """
-        Parse LLM response from JSON string.
-
-        Raises:
-            TruncationError: If JSON appears to be truncated.
-            NonRetryableError: If JSON is invalid or malformed.
-        """
-        try:
-            data = json.loads(json_str)
-        except json.JSONDecodeError as e:
-            error_msg = str(e).lower()
-            if "unterminated string" in error_msg or "expecting" in error_msg:
-                raise TruncationError(f"Response appears truncated: {e}. Raw: {json_str[:200]}")
-            raise NonRetryableError(f"Invalid JSON response from LLM: {e}. Raw: {json_str[:200]}")
-
-        # Handle different response formats: answer, answers (multiple_select), ranking
-        answer = data.get("answer")
-        if answer is None:
-            answers = data.get("answers")
-            if answers is not None:
-                answer = ",".join(answers) if isinstance(answers, list) else str(answers)
-            else:
-                ranking = data.get("ranking")
-                if ranking is not None:
-                    answer = ",".join(ranking) if isinstance(ranking, list) else str(ranking)
-                else:
-                    answer = ""
-
-        return cls(
-            answer=answer,
-            reasoning=data.get("reasoning"),
-            raw=json_str,
-        )
 
     @classmethod
     def from_comma_separated(
@@ -226,10 +190,21 @@ class UnifiedLLMClient:
         if self.provider == "vllm":
             if question.type == "mcq":
                 return {"extra_body": {"structured_outputs": {"choice": letters}}}
-            elif question.type == "multiple_select":
-                return {"extra_body": {"structured_outputs": {"regex": f"[A-{last}](, [A-{last}])*"}}}
-            elif question.type == "ranking":
-                return {"extra_body": {"structured_outputs": {"regex": f"[A-{last}](, [A-{last}]){{{n-1}}}"}}}
+            elif question.type in ("multiple_select", "ranking"):
+                # Use JSON schema via response_format (same as OpenRouter)
+                from .prompt import get_response_schema
+                schema = get_response_schema(question)
+                return {
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": {"name": "answer", "strict": True, "schema": schema}
+                    }
+                }
+            # OLD: regex guided decoding for multiple_select/ranking
+            # elif question.type == "multiple_select":
+            #     return {"extra_body": {"structured_outputs": {"regex": f"[A-{last}](, [A-{last}])*"}}}
+            # elif question.type == "ranking":
+            #     return {"extra_body": {"structured_outputs": {"regex": f"[A-{last}](, [A-{last}]){{{n-1}}}"}}}
         elif self.provider == "openrouter":
             from .prompt import get_response_schema
             schema = get_response_schema(question)
@@ -249,32 +224,68 @@ class UnifiedLLMClient:
         if self.provider == "vllm" and self.use_guided_decoding and question.options:
             if question.type == "mcq":
                 return 1
-            elif question.type in ("multiple_select", "ranking"):
-                return 3 * len(question.options)
+            # multiple_select/ranking: JSON schema constrains output, use default max_tokens
         return self.max_tokens
+
+    def _parse_structured_response(self, content: str, question: "Question") -> LLMResponse:
+        """Parse a JSON structured output response using the Pydantic model."""
+        from .prompt import get_response_model
+
+        model = get_response_model(question)
+        try:
+            parsed = model.model_validate_json(content)
+        except ValidationError as e:
+            errors = e.errors()
+            if any(err["type"] == "json_invalid" for err in errors):
+                raise TruncationError(
+                    f"Response appears truncated: {e}. Raw: {content[:200]}"
+                )
+            raise NonRetryableError(
+                f"Invalid structured response: {e}. Raw: {content[:200]}"
+            )
+
+        if question.type == "mcq":
+            return LLMResponse(answer=parsed.answer, raw=content)
+
+        elif question.type == "multiple_select":
+            data = parsed.model_dump()
+            selected = sorted(
+                k.split("_", 1)[1]
+                for k, v in data.items()
+                if k.startswith("choice_") and v
+            )
+            return LLMResponse(answer=",".join(selected), raw=content)
+
+        elif question.type == "ranking":
+            # Validate complete permutation (no duplicates, all letters present)
+            num_options = len(question.options)
+            expected = {chr(65 + i) for i in range(num_options)}
+            if set(parsed.ranking) != expected or len(parsed.ranking) != num_options:
+                return LLMResponse(answer="", raw=content)
+            return LLMResponse(answer=",".join(parsed.ranking), raw=content)
+
+        else:
+            return LLMResponse(answer=parsed.answer, raw=content)
 
     def _parse_response(self, content: str, question: "Optional[Question]") -> LLMResponse:
         """Parse response based on provider and question type."""
         if not content:
             return LLMResponse(answer="", raw="")
 
-        # OpenRouter with json_schema returns JSON
-        if self.provider == "openrouter" and self.use_guided_decoding and question and question.options:
-            return LLMResponse.from_json(content)
+        # JSON schema response (OpenRouter all types, vLLM multiple_select/ranking)
+        if self.use_guided_decoding and question and question.options:
+            if question.type in ("multiple_select", "ranking"):
+                return self._parse_structured_response(content, question)
+            elif self.provider == "openrouter":
+                return self._parse_structured_response(content, question)
 
-        # vLLM with guided decoding
+        # vLLM MCQ with guided decoding (extra_body choice, not JSON)
         if self.provider == "vllm" and self.use_guided_decoding and question and question.options:
             if question.type == "mcq":
                 letter = content.strip().upper()
                 valid = {chr(65 + i) for i in range(len(question.options))}
                 if letter in valid:
                     return LLMResponse(answer=letter, raw=content)
-            elif question.type in ("multiple_select", "ranking"):
-                require_all = question.type == "ranking"
-                return LLMResponse.from_comma_separated(
-                    content, len(question.options),
-                    require_all=require_all, options=question.options,
-                )
 
         # Open response: use raw text directly
         if question and question.type == "open_response":
