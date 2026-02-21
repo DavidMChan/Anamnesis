@@ -105,48 +105,24 @@ class DatabaseClient:
         """
         self.client.table("survey_tasks").update({"error": error}).eq("id", task_id).execute()
 
-    def increment_task_attempts(self, task_id: str) -> int:
+    def start_task(self, task_id: str) -> int:
         """
-        Atomically increment the attempt counter for a task.
+        Set task to processing and increment attempts atomically.
+
+        Returns the new attempt count so the caller can check max_retries
+        without a separate fetch.
 
         Args:
             task_id: UUID of the task
 
         Returns:
-            The new attempt count.
-
-        Raises:
-            RuntimeError: If the RPC call fails.
+            New attempt count (0 if task not found).
         """
         result = self.client.rpc(
-            "increment_task_attempts",
-            {"task_id": task_id}
-        ).execute()
-
-        if hasattr(result, 'error') and result.error:
-            raise RuntimeError(f"Failed to increment task attempts: {result.error}")
-
-        return result.data if result.data else 0
-
-    def claim_task(self, task_id: str) -> bool:
-        """
-        Atomically claim a task for processing.
-
-        Only succeeds if task is in 'pending' or 'queued' state.
-        This prevents duplicate processing when multiple workers
-        receive the same message from RabbitMQ.
-
-        Args:
-            task_id: UUID of the task
-
-        Returns:
-            True if claimed, False if already claimed by another worker.
-        """
-        result = self.client.rpc(
-            "claim_task",
+            "start_task",
             {"p_task_id": task_id}
         ).execute()
-        return bool(result.data)
+        return result.data if result.data else 0
 
     def complete_task(self, task_id: str, result: dict) -> bool:
         """
@@ -265,76 +241,6 @@ class DatabaseClient:
             update_data["completed_at"] = "now()"
 
         self.client.table("survey_runs").update(update_data).eq("id", run_id).execute()
-
-    def increment_completed_tasks(self, run_id: str) -> None:
-        """
-        Atomically increment completed_tasks counter.
-
-        Args:
-            run_id: UUID of the survey run
-
-        Raises:
-            RuntimeError: If the RPC call fails.
-        """
-        result = self.client.rpc("increment_completed_tasks", {"run_id": run_id}).execute()
-        if hasattr(result, 'error') and result.error:
-            raise RuntimeError(f"Failed to increment completed tasks: {result.error}")
-
-    def increment_failed_tasks(self, run_id: str) -> None:
-        """
-        Atomically increment failed_tasks counter.
-
-        Args:
-            run_id: UUID of the survey run
-
-        Raises:
-            RuntimeError: If the RPC call fails.
-        """
-        result = self.client.rpc("increment_failed_tasks", {"run_id": run_id}).execute()
-        if hasattr(result, 'error') and result.error:
-            raise RuntimeError(f"Failed to increment failed tasks: {result.error}")
-
-    def append_run_result(
-        self,
-        run_id: str,
-        backstory_id: str,
-        result: Dict[str, Any],
-    ) -> None:
-        """
-        Append task result to survey_runs.results.
-
-        Args:
-            run_id: UUID of the survey run
-            backstory_id: UUID of the backstory
-            result: Result data for this backstory
-        """
-        rpc_result = self.client.rpc(
-            "append_run_result",
-            {"run_id": run_id, "backstory_uuid": backstory_id, "task_result": result},
-        ).execute()
-        if hasattr(rpc_result, 'error') and rpc_result.error:
-            raise RuntimeError(f"Failed to append run result: {rpc_result.error}")
-
-    def append_run_error(
-        self,
-        run_id: str,
-        backstory_id: str,
-        error: str,
-    ) -> None:
-        """
-        Append error to survey_runs.error_log.
-
-        Args:
-            run_id: UUID of the survey run
-            backstory_id: UUID of the backstory
-            error: Error message
-        """
-        rpc_result = self.client.rpc(
-            "append_run_error",
-            {"run_id": run_id, "backstory_uuid": backstory_id, "error_msg": error},
-        ).execute()
-        if hasattr(rpc_result, 'error') and rpc_result.error:
-            raise RuntimeError(f"Failed to append run error: {rpc_result.error}")
 
     def check_run_completion(self, run_id: str) -> None:
         """
@@ -502,37 +408,6 @@ class DatabaseClient:
             .select("id, backstory_id")
             .eq("survey_run_id", run_id)
             .eq("status", "pending")
-            .execute()
-        )
-        return result.data or []
-
-    def get_stale_queued_tasks(self, run_id: str, stale_minutes: int = 5) -> List[Dict[str, Any]]:
-        """
-        Get queued tasks that have been stuck for too long.
-
-        These are tasks that were dispatched to RabbitMQ but never processed
-        (likely lost due to worker crash or RabbitMQ issue).
-
-        Args:
-            run_id: UUID of the survey run
-            stale_minutes: Minutes after which a queued task is considered stale
-
-        Returns:
-            List of stale queued task records
-        """
-        from datetime import datetime, timedelta, timezone
-
-        cutoff = datetime.now(timezone.utc) - timedelta(minutes=stale_minutes)
-        cutoff_str = cutoff.isoformat()
-
-        # Look for "queued" tasks that were dispatched but never picked up
-        # We use queued_at (set when dispatching) to check staleness
-        result = (
-            self.client.table("survey_tasks")
-            .select("id, backstory_id, queued_at")
-            .eq("survey_run_id", run_id)
-            .eq("status", "queued")
-            .lt("queued_at", cutoff_str)
             .execute()
         )
         return result.data or []

@@ -15,7 +15,7 @@ from src.prompt import Question
 def mock_db():
     """Mock database client."""
     db = Mock()
-    db.claim_task.return_value = True
+    db.start_task.return_value = 1  # Returns attempt count
     db.complete_task.return_value = True
     db.fail_task.return_value = True
     db.get_task.return_value = {
@@ -49,39 +49,29 @@ def processor(mock_db, mock_llm):
     return TaskProcessor(db=mock_db, llm=mock_llm, max_retries=3)
 
 
-class TestClaimTask:
-    """Tests for atomic task claiming."""
+class TestStartTask:
+    """Tests for start_task integration."""
 
-    def test_claims_task_via_rpc(self, processor, mock_db):
-        """Claim calls db.claim_task RPC."""
+    def test_calls_start_task(self, processor, mock_db):
+        """process_task calls db.start_task."""
         task_id = str(uuid.uuid4())
 
-        result = processor.claim_task(task_id)
+        processor.process_task(task_id)
 
-        mock_db.claim_task.assert_called_once_with(task_id)
-        assert result is True
+        mock_db.start_task.assert_called_once_with(task_id)
 
-    def test_returns_false_when_already_claimed(self, processor, mock_db):
-        """Returns False if task was already claimed by another worker."""
-        mock_db.claim_task.return_value = False
-        task_id = str(uuid.uuid4())
-
-        result = processor.claim_task(task_id)
-
-        assert result is False
-
-    def test_duplicate_message_skips_processing(self, processor, mock_db, mock_llm):
-        """Duplicate messages are silently skipped (idempotent)."""
-        mock_db.claim_task.return_value = False
+    def test_fails_when_max_retries_exceeded(self, processor, mock_db, mock_llm):
+        """Fails permanently when start_task returns attempts > max_retries."""
+        mock_db.start_task.return_value = 4  # > max_retries=3
         task_id = str(uuid.uuid4())
 
         result = processor.process_task(task_id)
 
         assert result.success is False
-        assert "Already claimed" in result.error
-        # Should NOT have called LLM or fetched task data
+        assert "Max retries" in result.error
+        mock_db.fail_task.assert_called_once()
+        # Should NOT have called LLM
         mock_llm.complete.assert_not_called()
-        mock_db.get_backstory.assert_not_called()
 
 
 class TestFetchTask:
@@ -172,39 +162,6 @@ class TestStoreResult:
         assert success is False
 
 
-class TestUpdateRunProgress:
-    """Tests for updating survey run progress."""
-
-    def test_appends_result_to_run(self, processor, mock_db):
-        """Appends task result to survey_runs.results."""
-        run_id = str(uuid.uuid4())
-        backstory_id = str(uuid.uuid4())
-        result = {"q1": "B"}
-
-        processor.update_run_progress(run_id, backstory_id, result, success=True)
-
-        mock_db.append_run_result.assert_called_with(run_id, backstory_id, result)
-
-    def test_checks_run_completion_with_derived_counts(self, processor, mock_db):
-        """Checks run completion (which now derives counts from survey_tasks)."""
-        run_id = str(uuid.uuid4())
-        backstory_id = str(uuid.uuid4())
-
-        processor.update_run_progress(run_id, backstory_id, {"q1": "A"}, success=True)
-
-        mock_db.check_run_completion.assert_called_with(run_id)
-
-    def test_no_blind_counter_increment(self, processor, mock_db):
-        """Does NOT call increment_completed_tasks (counters are derived now)."""
-        run_id = str(uuid.uuid4())
-        backstory_id = str(uuid.uuid4())
-
-        processor.update_run_progress(run_id, backstory_id, {"q1": "A"}, success=True)
-
-        mock_db.increment_completed_tasks.assert_not_called()
-        mock_db.increment_failed_tasks.assert_not_called()
-
-
 class TestErrorHandling:
     """Tests for error handling in task processing."""
 
@@ -231,57 +188,6 @@ class TestErrorHandling:
         assert result.success is False
         assert result.error is not None
 
-    def test_marks_task_failed_after_max_retries(self, processor, mock_db, mock_llm):
-        """Uses atomic fail_task RPC after exceeding max retries."""
-        task_id = str(uuid.uuid4())
-        run_id = str(uuid.uuid4())
-
-        task = {
-            "id": task_id,
-            "survey_run_id": run_id,
-            "backstory_id": str(uuid.uuid4()),
-            "status": "processing",
-            "attempts": 3,  # Already at max
-        }
-        mock_db.get_task.return_value = task
-        mock_db.get_backstory.return_value = {"backstory_text": "Test"}
-        mock_db.get_survey_questions.return_value = [
-            {"qkey": "q1", "type": "mcq", "text": "Test?", "options": ["A", "B"]}
-        ]
-        mock_llm.complete.side_effect = RetryableError("Still failing")
-
-        result = processor.process_task(task_id)
-
-        mock_db.fail_task.assert_called_once()
-        args = mock_db.fail_task.call_args
-        assert args[0][0] == task_id
-
-    def test_logs_error_to_run(self, processor, mock_db, mock_llm):
-        """Logs error to survey_runs.error_log on failure."""
-        task_id = str(uuid.uuid4())
-        run_id = str(uuid.uuid4())
-        backstory_id = str(uuid.uuid4())
-
-        task = {
-            "id": task_id,
-            "survey_run_id": run_id,
-            "backstory_id": backstory_id,
-            "status": "processing",
-            "attempts": 3,
-        }
-        mock_db.get_task.return_value = task
-        mock_db.get_backstory.return_value = {"backstory_text": "Test"}
-        mock_db.get_survey_questions.return_value = [
-            {"qkey": "q1", "type": "mcq", "text": "Test?", "options": ["A", "B"]}
-        ]
-        mock_llm.complete.side_effect = RetryableError("API error")
-
-        processor.process_task(task_id)
-
-        mock_db.append_run_error.assert_called()
-        call_args = mock_db.append_run_error.call_args
-        assert run_id in call_args.args or call_args.kwargs.get("run_id") == run_id
-
     def test_non_retryable_uses_fail_task(self, processor, mock_db, mock_llm):
         """NonRetryableError uses atomic fail_task RPC."""
         task_id = str(uuid.uuid4())
@@ -304,10 +210,9 @@ class TestErrorHandling:
         processor.process_task(task_id)
 
         mock_db.fail_task.assert_called_once()
-        mock_db.check_run_completion.assert_called_with(run_id)
 
-    def test_retryable_reverts_to_pending(self, processor, mock_db, mock_llm):
-        """Retryable error with attempts remaining reverts task to pending."""
+    def test_retryable_error_returns_failure(self, processor, mock_db, mock_llm):
+        """Retryable error returns failure result (caller handles retry via nack)."""
         task_id = str(uuid.uuid4())
 
         task = {
@@ -315,7 +220,7 @@ class TestErrorHandling:
             "survey_run_id": str(uuid.uuid4()),
             "backstory_id": str(uuid.uuid4()),
             "status": "processing",
-            "attempts": 1,  # Below max_retries=3
+            "attempts": 1,
         }
         mock_db.get_task.return_value = task
         mock_db.get_backstory.return_value = {"backstory_text": "Test"}
@@ -326,8 +231,8 @@ class TestErrorHandling:
 
         result = processor.process_task(task_id)
 
-        mock_db.update_task_status.assert_called_with(task_id, "pending")
-        assert "Will retry" in result.error
+        assert result.success is False
+        assert result.error is not None
 
 
 class TestProcessTaskE2E:
@@ -364,10 +269,8 @@ class TestProcessTaskE2E:
 
         # Verify the full flow
         assert result.success is True
-        mock_db.claim_task.assert_called_with(task_id)
+        mock_db.start_task.assert_called_with(task_id)
         mock_db.complete_task.assert_called_once()
-        mock_db.append_run_result.assert_called()
-        mock_db.check_run_completion.assert_called_with(run_id)
 
     def test_processing_with_multiple_questions(self, processor, mock_db, mock_llm):
         """Processing task with multiple questions."""

@@ -17,7 +17,7 @@ from typing import Optional, Dict, Any
 
 from src.config import get_config, LLMConfig
 from src.db import DatabaseClient
-from src.llm import LLMClient, VLLMClient, BaseLLMClient
+from src.llm import LLMClient, VLLMClient, BaseLLMClient, NonRetryableError
 from src.metrics import LatencyTracker, MetricsLogger
 from src.parser import ParserLLM
 from src.queue import AsyncQueueConsumer
@@ -132,19 +132,16 @@ async def main():
     in_flight_tasks: set[asyncio.Task] = set()
     shutting_down = False
 
-    async def get_llm_for_task(task_id: str) -> tuple[BaseLLMClient, Optional[ParserLLM]]:
+    async def get_llm_for_task(task: Dict[str, Any]) -> tuple[BaseLLMClient, Optional[ParserLLM]]:
         """
         Get or create LLM client + parser for a task based on the survey run's user.
 
-        Raises ValueError if the task/run/user chain is broken or user has no config.
+        Accepts the task dict directly (no extra DB fetch).
+        Raises ValueError if the run/user chain is broken or user has no config.
         """
-        task = await asyncio.to_thread(db.get_task, task_id)
-        if not task:
-            raise ValueError(f"Task {task_id} not found in database")
-
         run_id = task.get("survey_run_id")
         if not run_id:
-            raise ValueError(f"Task {task_id} has no associated survey run")
+            raise ValueError(f"Task {task['id']} has no associated survey run")
 
         user_id = await asyncio.to_thread(db.get_survey_run_user_id, run_id)
         if not user_id:
@@ -169,7 +166,20 @@ async def main():
         return llm, parser_llm
 
     async def handle_message(message) -> None:
-        """Process a single message from RabbitMQ."""
+        """
+        Process a single message from RabbitMQ.
+
+        Flow:
+        1. Fetch task (single DB call)
+        2. start_task → get attempt count
+        3. Check max retries → fail permanently if exceeded
+        4. Get LLM client (cached after first call per user)
+        5. Process task
+        6. Success → ACK
+        7. Retryable error → nack(requeue=True)
+        8. Non-retryable error → fail_task + ACK
+        """
+        task_id = None
         try:
             body = json.loads(message.body.decode("utf-8"))
             task_id = body.get("task_id")
@@ -181,32 +191,35 @@ async def main():
 
             logger.info(f"Processing task: {task_id}")
 
-            # Check if task still exists (may have been deleted mid-run)
+            # 1. Fetch task once (single DB call for all downstream use)
             task = await asyncio.to_thread(db.get_task, task_id)
             if not task:
                 logger.warning(f"Task {task_id} not found (survey likely deleted), discarding message")
                 await message.ack()
                 return
 
-            try:
-                llm, parser_llm = await get_llm_for_task(task_id)
-            except ValueError as e:
-                # Config errors won't self-resolve — fail the task permanently
-                error_msg = str(e)
-                logger.error(f"Task {task_id} config error: {error_msg}")
+            # 2. Start task: set status=processing, increment attempts
+            attempts = await asyncio.to_thread(db.start_task, task_id)
 
-                await asyncio.to_thread(db.fail_task, task_id, error_msg)
-
-                # Also log to the survey run if we can find it
-                task = await asyncio.to_thread(db.get_task, task_id)
-                if task and task.get("survey_run_id"):
-                    run_id = task["survey_run_id"]
-                    await asyncio.to_thread(db.append_run_error, run_id, task_id, error_msg)
-                    await asyncio.to_thread(db.check_run_completion, run_id)
-
+            # 3. Check max retries
+            if attempts > config.worker.max_retries:
+                logger.error(f"Task {task_id} exceeded max retries ({attempts}/{config.worker.max_retries})")
+                await asyncio.to_thread(db.fail_task, task_id, f"Max retries ({config.worker.max_retries}) exceeded")
                 await message.ack()
                 return
 
+            # 4. Get LLM client (cached per user)
+            try:
+                llm, parser_llm = await get_llm_for_task(task)
+            except ValueError as e:
+                # Config errors won't self-resolve — fail permanently
+                error_msg = str(e)
+                logger.error(f"Task {task_id} config error: {error_msg}")
+                await asyncio.to_thread(db.fail_task, task_id, error_msg)
+                await message.ack()
+                return
+
+            # 5. Process task
             processor = TaskProcessor(
                 db=db,
                 llm=llm,
@@ -215,22 +228,26 @@ async def main():
             )
 
             start = time.monotonic()
-            result = await processor.async_process_task(task_id)
+            result = await processor.async_process_task(task)
             duration_ms = (time.monotonic() - start) * 1000
             tracker.record(duration_ms)
 
-            if result.success:
-                logger.info(f"Task {task_id} completed successfully ({duration_ms:.0f}ms)")
-            else:
-                logger.warning(f"Task {task_id} failed: {result.error}")
-
+            # 6. Success → ACK
+            logger.info(f"Task {task_id} completed successfully ({duration_ms:.0f}ms)")
             await message.ack()
 
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON message: {e}")
             await message.nack(requeue=False)
+        except NonRetryableError as e:
+            # 8. Non-retryable → fail permanently + ACK
+            logger.error(f"Task {task_id} non-retryable error: {e}")
+            if task_id:
+                await asyncio.to_thread(db.fail_task, task_id, str(e))
+            await message.ack()
         except Exception as e:
-            logger.error(f"Error processing message: {e}", exc_info=True)
+            # 7. Retryable → nack for redelivery
+            logger.warning(f"Task {task_id} retryable error, requeueing: {e}", exc_info=True)
             await message.nack(requeue=True)
 
     async def process_with_semaphore(message) -> None:

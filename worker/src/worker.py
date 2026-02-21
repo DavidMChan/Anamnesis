@@ -106,14 +106,6 @@ class TaskProcessor:
         """Fetch task details from database."""
         return self.db.get_task(task_id)
 
-    def claim_task(self, task_id: str) -> bool:
-        """
-        Atomically claim a task for processing.
-
-        Returns False if already claimed by another worker (duplicate message).
-        """
-        return self.db.claim_task(task_id)
-
     def process_questions_in_series(
         self,
         backstory: str,
@@ -234,42 +226,17 @@ class TaskProcessor:
         """
         return self.db.complete_task(task_id, result)
 
-    def update_run_progress(
-        self,
-        run_id: str,
-        backstory_id: str,
-        result: Optional[Dict[str, Any]],
-        success: bool,
-    ) -> None:
-        """
-        Update survey run progress after task completion.
-
-        Counter increments (completed_tasks, failed_tasks) are no longer done
-        here — check_run_completion now derives them from survey_tasks.
-
-        Args:
-            run_id: UUID of the survey run
-            backstory_id: UUID of the processed backstory
-            result: Task result (if successful)
-            success: Whether task succeeded
-        """
-        if success and result:
-            self.db.append_run_result(run_id, backstory_id, result)
-
-        # Sync counters and check if run is complete
-        self.db.check_run_completion(run_id)
-
     def process_task(self, task_id: str) -> TaskProcessorResult:
         """
-        Process a single survey task.
+        Process a single survey task (sync version, used by tests).
 
-        Full flow:
-        1. Claim task atomically (skip if already claimed — duplicate message)
+        Flow:
+        1. Start task (set processing + increment attempts)
         2. Fetch task metadata
-        3. Get backstory and questions
-        4. Call LLM
-        5. Complete task atomically (result + status in one call)
-        6. Update run progress (derived counts)
+        3. Check max retries
+        4. Get backstory and questions
+        5. Call LLM
+        6. Complete task atomically
 
         Args:
             task_id: UUID of the task to process
@@ -277,14 +244,8 @@ class TaskProcessor:
         Returns:
             TaskProcessorResult indicating success/failure
         """
-        # 1. Claim task atomically — prevents duplicate processing
-        if not self.claim_task(task_id):
-            logger.info(f"Task {task_id} already claimed, skipping (duplicate message)")
-            return TaskProcessorResult(
-                success=False,
-                task_id=task_id,
-                error="Already claimed by another worker",
-            )
+        # 1. Start task
+        attempts = self.db.start_task(task_id)
 
         # 2. Fetch task metadata
         task = self.fetch_task(task_id)
@@ -298,29 +259,36 @@ class TaskProcessor:
         run_id = task["survey_run_id"]
         backstory_id = task["backstory_id"]
 
+        # 3. Check max retries
+        if attempts > self.max_retries:
+            error_msg = f"Max retries ({self.max_retries}) exceeded"
+            self.db.fail_task(task_id, error_msg)
+            return TaskProcessorResult(
+                success=False,
+                task_id=task_id,
+                error=error_msg,
+            )
+
         try:
-            # 3. Get backstory and questions
+            # 4. Get backstory and questions
             backstory_data = self.db.get_backstory(backstory_id)
             if not backstory_data:
-                raise ValueError(f"Backstory {backstory_id} not found")
+                raise NonRetryableError(f"Backstory {backstory_id} not found")
 
             backstory_text = backstory_data.get("backstory_text", "")
 
             questions_data = self.db.get_survey_questions(run_id)
             if not questions_data:
-                raise ValueError(f"No questions found for run {run_id}")
+                raise NonRetryableError(f"No questions found for run {run_id}")
 
             questions = [Question.from_dict(q) for q in questions_data]
 
-            # 4. Process questions in series (with context accumulation)
+            # 5. Process questions in series (with context accumulation)
             logger.info(f"Processing {len(questions)} questions for backstory {backstory_id}")
             results = self.process_questions_in_series(backstory_text, questions)
 
-            # 5. Complete task atomically
+            # 6. Complete task atomically
             self.store_result(task_id, results)
-
-            # 6. Update run progress
-            self.update_run_progress(run_id, backstory_id, results, success=True)
 
             return TaskProcessorResult(
                 success=True,
@@ -329,41 +297,20 @@ class TaskProcessor:
             )
 
         except NonRetryableError as e:
-            error_msg = str(e)
-            self.db.fail_task(task_id, error_msg)
-            self.db.append_run_error(run_id, backstory_id, error_msg)
-            self.db.check_run_completion(run_id)
-
+            self.db.fail_task(task_id, str(e))
             return TaskProcessorResult(
                 success=False,
                 task_id=task_id,
-                error=error_msg,
+                error=str(e),
             )
 
-        except (RetryableError, LLMError, Exception) as e:
-            error_msg = str(e)
-            attempts = task.get("attempts", 0)
-
-            if attempts >= self.max_retries:
-                # Max retries exceeded — fail permanently
-                self.db.fail_task(task_id, error_msg)
-                self.db.append_run_error(run_id, backstory_id, error_msg)
-                self.db.check_run_completion(run_id)
-
-                return TaskProcessorResult(
-                    success=False,
-                    task_id=task_id,
-                    error=error_msg,
-                )
-            else:
-                # Revert to pending for retry (dispatcher will re-dispatch)
-                self.db.update_task_status(task_id, "pending")
-
-                return TaskProcessorResult(
-                    success=False,
-                    task_id=task_id,
-                    error=f"Will retry ({attempts}/{self.max_retries}): {error_msg}",
-                )
+        except Exception as e:
+            # Retryable — caller decides whether to retry
+            return TaskProcessorResult(
+                success=False,
+                task_id=task_id,
+                error=str(e),
+            )
 
     # ==================== Async Methods ====================
 
@@ -447,96 +394,44 @@ class TaskProcessor:
 
         return results
 
-    async def async_process_task(self, task_id: str) -> TaskProcessorResult:
+    async def async_process_task(self, task: Dict[str, Any]) -> TaskProcessorResult:
         """
         Async version of process_task.
 
-        DB calls are wrapped in asyncio.to_thread() since the Supabase
-        client is sync. LLM calls use native async.
+        Caller (handle_message) is responsible for:
+        - Fetching the task
+        - Calling start_task / checking max retries
+        - Retry decisions (nack vs ack)
+
+        This method just processes the task and completes it.
+        Errors propagate to the caller for retry/fail decisions.
         """
-        # 1. Claim task atomically
-        claimed = await asyncio.to_thread(self.claim_task, task_id)
-        if not claimed:
-            logger.info(f"Task {task_id} already claimed, skipping (duplicate message)")
-            return TaskProcessorResult(
-                success=False,
-                task_id=task_id,
-                error="Already claimed by another worker",
-            )
-
-        # 2. Fetch task metadata
-        task = await asyncio.to_thread(self.fetch_task, task_id)
-        if not task:
-            return TaskProcessorResult(
-                success=False,
-                task_id=task_id,
-                error="Task not found",
-            )
-
+        task_id = task["id"]
         run_id = task["survey_run_id"]
         backstory_id = task["backstory_id"]
 
-        try:
-            # 3. Get backstory and questions
-            backstory_data = await asyncio.to_thread(self.db.get_backstory, backstory_id)
-            if not backstory_data:
-                raise ValueError(f"Backstory {backstory_id} not found")
+        # Get backstory and questions
+        backstory_data = await asyncio.to_thread(self.db.get_backstory, backstory_id)
+        if not backstory_data:
+            raise NonRetryableError(f"Backstory {backstory_id} not found")
 
-            backstory_text = backstory_data.get("backstory_text", "")
+        backstory_text = backstory_data.get("backstory_text", "")
 
-            questions_data = await asyncio.to_thread(self.db.get_survey_questions, run_id)
-            if not questions_data:
-                raise ValueError(f"No questions found for run {run_id}")
+        questions_data = await asyncio.to_thread(self.db.get_survey_questions, run_id)
+        if not questions_data:
+            raise NonRetryableError(f"No questions found for run {run_id}")
 
-            questions = [Question.from_dict(q) for q in questions_data]
+        questions = [Question.from_dict(q) for q in questions_data]
 
-            # 4. Process questions in series (async LLM, sequential questions)
-            logger.info(f"Processing {len(questions)} questions for backstory {backstory_id}")
-            results = await self.async_process_questions_in_series(backstory_text, questions)
+        # Process questions in series (async LLM, sequential questions)
+        logger.info(f"Processing {len(questions)} questions for backstory {backstory_id}")
+        results = await self.async_process_questions_in_series(backstory_text, questions)
 
-            # 5. Complete task atomically
-            await asyncio.to_thread(self.store_result, task_id, results)
+        # Complete task atomically
+        await asyncio.to_thread(self.store_result, task_id, results)
 
-            # 6. Update run progress
-            await asyncio.to_thread(self.update_run_progress, run_id, backstory_id, results, True)
-
-            return TaskProcessorResult(
-                success=True,
-                task_id=task_id,
-                result=results,
-            )
-
-        except NonRetryableError as e:
-            error_msg = str(e)
-            await asyncio.to_thread(self.db.fail_task, task_id, error_msg)
-            await asyncio.to_thread(self.db.append_run_error, run_id, backstory_id, error_msg)
-            await asyncio.to_thread(self.db.check_run_completion, run_id)
-
-            return TaskProcessorResult(
-                success=False,
-                task_id=task_id,
-                error=error_msg,
-            )
-
-        except (RetryableError, LLMError, Exception) as e:
-            error_msg = str(e)
-            attempts = task.get("attempts", 0)
-
-            if attempts >= self.max_retries:
-                await asyncio.to_thread(self.db.fail_task, task_id, error_msg)
-                await asyncio.to_thread(self.db.append_run_error, run_id, backstory_id, error_msg)
-                await asyncio.to_thread(self.db.check_run_completion, run_id)
-
-                return TaskProcessorResult(
-                    success=False,
-                    task_id=task_id,
-                    error=error_msg,
-                )
-            else:
-                await asyncio.to_thread(self.db.update_task_status, task_id, "pending")
-
-                return TaskProcessorResult(
-                    success=False,
-                    task_id=task_id,
-                    error=f"Will retry ({attempts}/{self.max_retries}): {error_msg}",
-                )
+        return TaskProcessorResult(
+            success=True,
+            task_id=task_id,
+            result=results,
+        )
