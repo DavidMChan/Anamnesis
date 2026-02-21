@@ -6,7 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { User, Key, Check, X, Eye, EyeOff, Settings as SettingsIcon } from 'lucide-react'
+import { User, Key, Check, X, Eye, EyeOff } from 'lucide-react'
 import type { LLMConfig } from '@/types/database'
 import type { ApiKeyType } from '@/hooks/useAuth'
 
@@ -380,71 +380,18 @@ export function Settings() {
               </div>
             )}
 
-            {/* Generation Settings */}
-            <div className="space-y-4 rounded-lg border p-4">
-              <div className="flex items-center gap-2 text-sm font-medium">
-                <SettingsIcon className="h-4 w-4" />
-                Generation Settings
-              </div>
-
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="temperature">Temperature</Label>
-                  <Input
-                    id="temperature"
-                    type="number"
-                    min="0"
-                    max="2"
-                    step="0.1"
-                    value={llmConfig.temperature ?? ''}
-                    onChange={(e) =>
-                      setLlmConfig({
-                        ...llmConfig,
-                        temperature: e.target.value ? parseFloat(e.target.value) : undefined,
-                      })
-                    }
-                    placeholder="0.0"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Controls randomness. 0 = deterministic.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="max_tokens">Max Tokens</Label>
-                  <Input
-                    id="max_tokens"
-                    type="number"
-                    min="1"
-                    max="16384"
-                    step="1"
-                    value={llmConfig.max_tokens ?? ''}
-                    onChange={(e) =>
-                      setLlmConfig({
-                        ...llmConfig,
-                        max_tokens: e.target.value ? parseInt(e.target.value, 10) : undefined,
-                      })
-                    }
-                    placeholder="512"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Maximum tokens in response.
-                  </p>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                <Label htmlFor="parser_llm_model">Parser LLM Model</Label>
-                <Input
-                  id="parser_llm_model"
-                  value={llmConfig.parser_llm_model || ''}
-                  onChange={(e) => setLlmConfig({ ...llmConfig, parser_llm_model: e.target.value })}
-                  placeholder="google/gemini-2.0-flash-001"
-                />
-                <p className="text-xs text-muted-foreground">
-                  Tier 2 fallback model for MCQ answer parsing (via OpenRouter). Leave empty for default.
-                </p>
-              </div>
+            {/* Parser LLM */}
+            <div className="space-y-2">
+              <Label htmlFor="parser_llm_model">Parser LLM Model</Label>
+              <Input
+                id="parser_llm_model"
+                value={llmConfig.parser_llm_model || ''}
+                onChange={(e) => setLlmConfig({ ...llmConfig, parser_llm_model: e.target.value })}
+                placeholder="google/gemini-2.0-flash-001"
+              />
+              <p className="text-xs text-muted-foreground">
+                Fallback model for parsing survey answers when guided decoding is not used or failed (via OpenRouter). Leave empty for default.
+              </p>
             </div>
           </CardContent>
         </Card>

@@ -1,9 +1,12 @@
 import { Link } from 'react-router-dom'
+import { useAuthContext } from '@/contexts/AuthContext'
 import { PublicLayout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
-import { ExternalLink, Github, Linkedin } from 'lucide-react'
+import { ExternalLink, Github, Linkedin, ArrowRight } from 'lucide-react'
 
 export function About() {
+    const { user } = useAuthContext()
+
     return (
         <PublicLayout>
             <div className="min-h-screen pb-20">
@@ -24,12 +27,22 @@ export function About() {
                             <Link to="/about">
                                 <Button variant="ghost" size="sm" className="hidden sm:inline-flex">About Us</Button>
                             </Link>
-                            <Link to="/login">
-                                <Button variant="ghost" size="sm">Sign In</Button>
-                            </Link>
-                            <Link to="/register">
-                                <Button size="sm">Get Started</Button>
-                            </Link>
+                            {user ? (
+                                <Link to="/surveys">
+                                    <Button size="sm" className="gap-1">
+                                        Dashboard <ArrowRight className="h-3 w-3" />
+                                    </Button>
+                                </Link>
+                            ) : (
+                                <>
+                                    <Link to="/login">
+                                        <Button variant="ghost" size="sm">Sign In</Button>
+                                    </Link>
+                                    <Link to="/register">
+                                        <Button size="sm">Get Started</Button>
+                                    </Link>
+                                </>
+                            )}
                         </div>
                     </div>
                 </nav>

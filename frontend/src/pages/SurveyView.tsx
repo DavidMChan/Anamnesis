@@ -9,7 +9,7 @@ import { useSurveyRun, useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
 import { useAuthContext } from '@/contexts/AuthContext'
 import type { Survey, SurveyRun } from '@/types/database'
-import { ArrowLeft, Edit, Play, History } from 'lucide-react'
+import { ArrowLeft, Edit, Play, History, Settings } from 'lucide-react'
 
 const statusColors: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'gold'> = {
   draft: 'secondary',
@@ -93,7 +93,13 @@ export function SurveyView() {
       }
     }
 
-    const runId = await createRun(survey.id, llmConfig)
+    // Merge per-survey settings into llm_config snapshot
+    const runLlmConfig = {
+      ...llmConfig,
+      ...(survey.temperature != null && { temperature: survey.temperature }),
+      ...(survey.max_tokens != null && { max_tokens: survey.max_tokens }),
+    }
+    const runId = await createRun(survey.id, runLlmConfig)
     if (runId) {
       refreshRuns()
       fetchSurvey()
@@ -232,6 +238,37 @@ export function SurveyView() {
             </div>
           </CardContent>
         </Card>
+
+        {/* Per-Survey LLM Settings */}
+        {(survey.temperature != null || survey.max_tokens != null) && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Settings className="h-4 w-4" />
+                <CardTitle>LLM Settings</CardTitle>
+              </div>
+              <CardDescription>
+                Per-survey overrides for this survey
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="flex gap-6 text-sm">
+                {survey.temperature != null && (
+                  <div>
+                    <span className="font-medium">Temperature:</span>{' '}
+                    <span className="text-muted-foreground">{survey.temperature}</span>
+                  </div>
+                )}
+                {survey.max_tokens != null && (
+                  <div>
+                    <span className="font-medium">Max Tokens:</span>{' '}
+                    <span className="text-muted-foreground">{survey.max_tokens}</span>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Demographic Filters */}
         <Card>
