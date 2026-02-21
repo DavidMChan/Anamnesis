@@ -297,7 +297,7 @@ class TestAsyncVLLMClient:
 def mock_db():
     """Mock database client."""
     db = Mock()
-    db.claim_task.return_value = True
+    db.start_task.return_value = 1  # Returns attempt count
     db.complete_task.return_value = True
     db.fail_task.return_value = True
     db.get_task.return_value = {
@@ -314,10 +314,6 @@ def mock_db():
     db.get_survey_questions.return_value = [
         {"qkey": "q1", "type": "mcq", "text": "Test question?", "options": ["Yes", "No"]},
     ]
-    db.append_run_result = Mock()
-    db.append_run_error = Mock()
-    db.check_run_completion = Mock()
-    db.update_task_status = Mock()
     return db
 
 
@@ -341,13 +337,13 @@ class TestAsyncProcessTask:
     """Tests for async process_task flow."""
 
     @pytest.mark.asyncio
-    async def test_async_process_task_claim_to_complete(self, async_processor, mock_db, mock_async_llm):
-        """Async process_task follows claim→process→complete flow."""
+    async def test_async_process_task_process_and_complete(self, async_processor, mock_db, mock_async_llm):
+        """Async process_task processes questions and completes task."""
         task_id = str(uuid.uuid4())
         run_id = str(uuid.uuid4())
         backstory_id = str(uuid.uuid4())
 
-        mock_db.get_task.return_value = {
+        task = {
             "id": task_id,
             "survey_run_id": run_id,
             "backstory_id": backstory_id,
@@ -355,25 +351,10 @@ class TestAsyncProcessTask:
             "attempts": 1,
         }
 
-        result = await async_processor.async_process_task(task_id)
+        result = await async_processor.async_process_task(task)
 
         assert result.success is True
-        mock_db.claim_task.assert_called_once_with(task_id)
         mock_db.complete_task.assert_called_once()
-        mock_db.append_run_result.assert_called_once()
-        mock_db.check_run_completion.assert_called_once_with(run_id)
-
-    @pytest.mark.asyncio
-    async def test_async_skips_already_claimed(self, async_processor, mock_db, mock_async_llm):
-        """Duplicate messages are silently skipped."""
-        mock_db.claim_task.return_value = False
-        task_id = str(uuid.uuid4())
-
-        result = await async_processor.async_process_task(task_id)
-
-        assert result.success is False
-        assert "Already claimed" in result.error
-        mock_async_llm.async_complete.assert_not_called()
 
 
 class TestAsyncSequentialQuestions:
@@ -467,33 +448,31 @@ class TestAsyncConcurrentTasks:
             run_id = str(uuid.uuid4())
             backstory_id = str(uuid.uuid4())
 
-            # Each task gets its own mock DB with unique IDs
-            task_db = Mock()
-            task_db.claim_task.return_value = True
-            task_db.complete_task.return_value = True
-            task_db.get_task.return_value = {
+            task_dict = {
                 "id": task_id,
                 "survey_run_id": run_id,
                 "backstory_id": backstory_id,
                 "status": "processing",
                 "attempts": 1,
             }
+
+            # Each task gets its own mock DB with unique IDs
+            task_db = Mock()
+            task_db.complete_task.return_value = True
             task_db.get_backstory.return_value = {
                 "backstory_text": "Test backstory",
             }
             task_db.get_survey_questions.return_value = [
                 {"qkey": "q1", "type": "mcq", "text": "Test?", "options": ["Y", "N"]},
             ]
-            task_db.append_run_result = Mock()
-            task_db.check_run_completion = Mock()
 
             processor = TaskProcessor(db=task_db, llm=llm, max_retries=3)
 
-            async def run_with_semaphore(proc, tid):
+            async def run_with_semaphore(proc, td):
                 async with semaphore:
-                    return await proc.async_process_task(tid)
+                    return await proc.async_process_task(td)
 
-            tasks.append(asyncio.create_task(run_with_semaphore(processor, task_id)))
+            tasks.append(asyncio.create_task(run_with_semaphore(processor, task_dict)))
 
         results = await asyncio.gather(*tasks)
 
@@ -506,76 +485,59 @@ class TestAsyncConcurrentTasks:
 
 
 class TestAsyncErrorHandling:
-    """Tests for error handling in async flow."""
+    """Tests for error handling in async flow.
+
+    async_process_task now lets errors propagate to handle_message,
+    which decides whether to nack (retry) or fail permanently.
+    """
 
     @pytest.mark.asyncio
-    async def test_retryable_error_handled(self, async_processor, mock_db, mock_async_llm):
-        """RetryableError handled correctly in async flow."""
+    async def test_retryable_error_propagates(self, async_processor, mock_db, mock_async_llm):
+        """RetryableError propagates to caller for nack handling."""
         mock_async_llm.async_complete.side_effect = RetryableError("Rate limited")
 
-        task_id = str(uuid.uuid4())
-        run_id = str(uuid.uuid4())
-        backstory_id = str(uuid.uuid4())
-
-        mock_db.get_task.return_value = {
-            "id": task_id,
-            "survey_run_id": run_id,
-            "backstory_id": backstory_id,
+        task = {
+            "id": str(uuid.uuid4()),
+            "survey_run_id": str(uuid.uuid4()),
+            "backstory_id": str(uuid.uuid4()),
             "status": "processing",
-            "attempts": 1,  # Below max_retries=3
+            "attempts": 1,
         }
 
-        result = await async_processor.async_process_task(task_id)
-
-        assert result.success is False
-        assert "Will retry" in result.error
-        mock_db.update_task_status.assert_called_with(task_id, "pending")
+        with pytest.raises(RetryableError, match="Rate limited"):
+            await async_processor.async_process_task(task)
 
     @pytest.mark.asyncio
-    async def test_non_retryable_error_fails_permanently(self, async_processor, mock_db, mock_async_llm):
-        """NonRetryableError uses fail_task RPC in async flow."""
+    async def test_non_retryable_error_propagates(self, async_processor, mock_db, mock_async_llm):
+        """NonRetryableError propagates to caller for fail_task handling."""
         mock_async_llm.async_complete.side_effect = NonRetryableError("Bad request")
 
-        task_id = str(uuid.uuid4())
-        run_id = str(uuid.uuid4())
-        backstory_id = str(uuid.uuid4())
-
-        mock_db.get_task.return_value = {
-            "id": task_id,
-            "survey_run_id": run_id,
-            "backstory_id": backstory_id,
+        task = {
+            "id": str(uuid.uuid4()),
+            "survey_run_id": str(uuid.uuid4()),
+            "backstory_id": str(uuid.uuid4()),
             "status": "processing",
             "attempts": 0,
         }
 
-        result = await async_processor.async_process_task(task_id)
-
-        assert result.success is False
-        mock_db.fail_task.assert_called_once()
-        mock_db.check_run_completion.assert_called_with(run_id)
+        with pytest.raises(NonRetryableError, match="Bad request"):
+            await async_processor.async_process_task(task)
 
     @pytest.mark.asyncio
-    async def test_max_retries_exceeded(self, async_processor, mock_db, mock_async_llm):
-        """Task fails permanently after max retries in async flow."""
-        mock_async_llm.async_complete.side_effect = RetryableError("Still failing")
+    async def test_missing_backstory_raises_non_retryable(self, async_processor, mock_db, mock_async_llm):
+        """Missing backstory raises NonRetryableError."""
+        mock_db.get_backstory.return_value = None
 
-        task_id = str(uuid.uuid4())
-        run_id = str(uuid.uuid4())
-        backstory_id = str(uuid.uuid4())
-
-        mock_db.get_task.return_value = {
-            "id": task_id,
-            "survey_run_id": run_id,
-            "backstory_id": backstory_id,
+        task = {
+            "id": str(uuid.uuid4()),
+            "survey_run_id": str(uuid.uuid4()),
+            "backstory_id": str(uuid.uuid4()),
             "status": "processing",
-            "attempts": 3,  # At max
+            "attempts": 1,
         }
 
-        result = await async_processor.async_process_task(task_id)
-
-        assert result.success is False
-        mock_db.fail_task.assert_called_once()
-        mock_db.append_run_error.assert_called_once()
+        with pytest.raises(NonRetryableError, match="not found"):
+            await async_processor.async_process_task(task)
 
 
 # ==================== Async Queue Consumer Tests ====================

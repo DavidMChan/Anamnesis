@@ -99,13 +99,10 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain }: SurveyRunP
         </div>
 
         {/* Error summary */}
-        {run.failed_tasks > 0 && run.error_log && run.error_log.length > 0 && (
+        {run.failed_tasks > 0 && (
           <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
-            <div className="text-sm font-medium text-destructive mb-1">
-              {run.error_log.length} error{run.error_log.length > 1 ? 's' : ''} occurred
-            </div>
-            <div className="text-xs text-muted-foreground line-clamp-2">
-              Latest: {run.error_log[run.error_log.length - 1]?.error}
+            <div className="text-sm font-medium text-destructive">
+              {run.failed_tasks} task{run.failed_tasks > 1 ? 's' : ''} failed
             </div>
           </div>
         )}

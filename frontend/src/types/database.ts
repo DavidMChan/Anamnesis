@@ -118,8 +118,8 @@ export interface SurveyRun {
   total_tasks: number
   completed_tasks: number
   failed_tasks: number
-  results: SurveyResults
-  error_log: SurveyRunErrorLog[]
+  results?: SurveyResults
+  error_log?: SurveyRunErrorLog[]
   llm_config: LLMConfig
   started_at: string | null
   completed_at: string | null

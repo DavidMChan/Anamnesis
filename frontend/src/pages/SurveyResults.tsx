@@ -54,6 +54,7 @@ export function SurveyResults() {
   const [survey, setSurvey] = useState<Survey | null>(null)
   const [run, setRun] = useState<SurveyRun | null>(null)
   const [stats, setStats] = useState<QuestionStats[]>([])
+  const [results, setResults] = useState<SurveyResultsType>({})
   const [loading, setLoading] = useState(true)
 
   // Demographic filtering state
@@ -64,8 +65,8 @@ export function SurveyResults() {
   const chartRefs = useRef<Map<string, HTMLDivElement>>(new Map())
 
   useEffect(() => {
-    if (survey && run && backstories) {
-      calculateStats(survey, run.results, selectedFilters)
+    if (survey && Object.keys(results).length > 0 && backstories) {
+      calculateStats(survey, results, selectedFilters)
     }
   }, [backstories])
 
@@ -117,6 +118,27 @@ export function SurveyResults() {
     const surveyRun = runData as SurveyRun
     setRun(surveyRun)
 
+    // Fetch results from survey_tasks (source of truth)
+    const { data: tasksData, error: tasksError } = await supabase
+      .from('survey_tasks')
+      .select('backstory_id, result')
+      .eq('survey_run_id', surveyRun.id)
+      .eq('status', 'completed')
+
+    if (tasksError) {
+      console.error('Error fetching task results:', tasksError)
+      setLoading(false)
+      return
+    }
+
+    const taskResults: SurveyResultsType = {}
+    for (const task of tasksData || []) {
+      if (task.result) {
+        taskResults[task.backstory_id] = task.result
+      }
+    }
+    setResults(taskResults)
+
     // Fetch demographic keys immediately
     const { data: keysData } = await supabase
       .from('demographic_keys')
@@ -126,18 +148,18 @@ export function SurveyResults() {
       setDemographicKeys(keysData as DemographicKey[])
     }
 
-    calculateStats(survey, surveyRun.results, [])
+    calculateStats(survey, taskResults, [])
 
     setLoading(false)
   }
 
   const fetchDemographics = async () => {
     if (backstories) return
-    if (!run?.results) return
+    if (Object.keys(results).length === 0) return
 
     setLoadingDemographics(true)
     try {
-      const backstoryIds = Object.keys(run.results)
+      const backstoryIds = Object.keys(results)
 
       // If there are many backstories, fetching by "in" can be slow.
       // We'll batch the requests to be safer and potentially faster than one giant "in".
@@ -394,8 +416,6 @@ export function SurveyResults() {
 
   const downloadCSV = () => {
     if (!survey || !run) return
-
-    const results = run.results || {}
     const headers = ['backstory_id', ...survey.questions.map((q) => q.qkey)]
 
     const rows = Object.entries(results).map(([backstoryId, responses]) => {
@@ -470,7 +490,6 @@ export function SurveyResults() {
     )
   }
 
-  const results = run.results || {}
   const totalResponses = Object.keys(results).length
 
   return (
@@ -505,8 +524,8 @@ export function SurveyResults() {
               selectedFilters={selectedFilters}
               onFiltersChange={(filters) => {
                 setSelectedFilters(filters)
-                if (survey && run) {
-                  calculateStats(survey, run.results, filters)
+                if (survey) {
+                  calculateStats(survey, results, filters)
                 }
               }}
               onTriggerFetch={fetchDemographics}

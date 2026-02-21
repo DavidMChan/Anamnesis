@@ -45,8 +45,8 @@ class TaskDispatcher:
         """
         Dispatch tasks for a survey run to RabbitMQ.
 
-        For 'pending' runs: dispatch all pending tasks.
-        For 'running' runs: dispatch pending tasks (retries) + stale queued tasks.
+        Only dispatches tasks with status='pending'. RabbitMQ handles
+        redelivery for crashed workers (heartbeat + unacked messages).
 
         Args:
             run: Survey run record
@@ -57,24 +57,9 @@ class TaskDispatcher:
         run_id = run["id"]
         run_status = run.get("status", "pending")
 
-        tasks = []
-
-        if run_status == "running":
-            # Get pending tasks (these are retries from failed attempts)
-            pending_tasks = self.db.get_pending_tasks_for_dispatch(run_id)
-            if pending_tasks:
-                logger.info(f"Found {len(pending_tasks)} pending tasks for run {run_id}")
-                tasks.extend(pending_tasks)
-
-            # Also get stale queued tasks (dispatched but never processed - lost messages)
-            stale_tasks = self.db.get_stale_queued_tasks(run_id, stale_minutes=5)
-            if stale_tasks:
-                logger.info(f"Found {len(stale_tasks)} stale queued tasks for run {run_id}, re-dispatching...")
-                tasks.extend(stale_tasks)
-        else:
-            # For pending runs, dispatch all tasks
-            logger.info(f"Dispatching tasks for new run {run_id}")
-            tasks = self.db.get_pending_tasks_for_dispatch(run_id)
+        tasks = self.db.get_pending_tasks_for_dispatch(run_id)
+        if tasks:
+            logger.info(f"Found {len(tasks)} pending tasks for run {run_id}")
 
         if not tasks:
             return 0
@@ -103,11 +88,11 @@ class TaskDispatcher:
     def poll_and_dispatch(self) -> int:
         """
         Poll for pending runs and dispatch their tasks.
+        Also checks if running runs are complete.
 
         Returns:
             Total number of tasks dispatched
         """
-        # Find runs that are 'pending' or 'running' but have undispatched tasks
         pending_runs = self.db.get_runs_needing_dispatch()
 
         total_dispatched = 0
@@ -115,37 +100,29 @@ class TaskDispatcher:
             try:
                 dispatched = self.dispatch_run(run)
                 total_dispatched += dispatched
+
+                # If running but no tasks to dispatch, check if run is complete
+                if dispatched == 0 and run.get("status") == "running":
+                    self.db.check_run_completion(run["id"])
             except Exception as e:
                 logger.error(f"Error dispatching run {run['id']}: {e}")
 
         return total_dispatched
 
     def start(self):
-        """Start the dispatcher loop with adaptive polling."""
+        """Start the dispatcher loop."""
         self.running = True
-        idle_interval = 10.0  # Poll every 10s when idle
-        active_interval = self.poll_interval  # Poll every 2s when active
-        current_interval = idle_interval
-        idle_count = 0
-
-        logger.info(f"Dispatcher started (idle: {idle_interval}s, active: {active_interval}s)")
+        logger.info(f"Dispatcher started (poll_interval={self.poll_interval}s)")
 
         while self.running:
             try:
                 dispatched = self.poll_and_dispatch()
                 if dispatched > 0:
                     logger.info(f"Dispatched {dispatched} tasks this cycle")
-                    current_interval = active_interval
-                    idle_count = 0
-                else:
-                    idle_count += 1
-                    # After 5 idle cycles, switch to slower polling
-                    if idle_count >= 5:
-                        current_interval = idle_interval
             except Exception as e:
                 logger.error(f"Error in dispatch cycle: {e}")
 
-            time.sleep(current_interval)
+            time.sleep(self.poll_interval)
 
     def stop(self):
         """Stop the dispatcher loop."""
