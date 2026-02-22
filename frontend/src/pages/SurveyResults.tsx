@@ -546,12 +546,12 @@ export function SurveyResults() {
         />
 
         {isRunning && run && (
-          <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/30 p-3">
-            <RefreshCw className="h-4 w-4 animate-spin text-blue-600 dark:text-blue-400" />
-            <span className="text-sm text-blue-800 dark:text-blue-300">
+          <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-3">
+            <RefreshCw className="h-4 w-4 animate-spin text-primary" />
+            <span className="text-sm text-foreground">
               Showing {totalResponses} / {run.total_tasks} completed responses — auto-refreshing
             </span>
-            <Badge variant="outline" className="ml-auto text-blue-600 dark:text-blue-400 border-blue-300 dark:border-blue-700">
+            <Badge variant="outline" className="ml-auto">
               Partial
             </Badge>
           </div>

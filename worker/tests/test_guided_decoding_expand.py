@@ -1,62 +1,72 @@
 """
-Tests for expanded vLLM guided decoding — multiple_select, ranking, and open_response.
+Tests for expanded guided decoding — multiple_select, ranking, and open_response.
 
 Covers:
 - Multiple select: regex guided decoding, dynamic options, parsing, deduplication
 - Ranking: regex guided decoding, exact count, permutation validation
-- Open response: no guided decoding, raw text, relaxed stop sequences
+- Open response: no guided decoding, raw text
 - Parser LLM extension for multiple_select and ranking
 - Integration flows: compliance retry, context accumulation, mixed types
 - MCQ regression: existing behavior unchanged
 """
+import json
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 
-from src.llm import VLLMClient, LLMResponse
+from src.llm import UnifiedLLMClient
+from src.response import LLMResponse
 from src.parser import ParserLLM, PARSER_PROMPT_MULTIPLE_SELECT, PARSER_PROMPT_RANKING
 from src.prompt import Question
 from src.worker import TaskProcessor
 
 
-# ---------------------------------------------------------------------------
-# Helpers (reused from test_guided_decoding.py)
-# ---------------------------------------------------------------------------
+# ─── Helpers ─────────────────────────────────────────────────────────────────
 
-def make_vllm_client(**kwargs) -> VLLMClient:
+
+def make_mock_chat_completion(content: str):
+    """Create a mock OpenAI ChatCompletion response (for ParserLLM tests)."""
+    choice = Mock()
+    choice.message = Mock()
+    choice.message.content = content
+    completion = Mock()
+    completion.choices = [choice]
+    return completion
+
+
+def make_vllm_client(**kwargs) -> UnifiedLLMClient:
     defaults = dict(
-        endpoint="http://localhost:8000/v1",
+        base_url="http://localhost:8000/v1",
+        api_key="test",
         model="meta-llama/Llama-3-70b",
+        provider="vllm",
         temperature=1.0,
         max_tokens=128,
     )
     defaults.update(kwargs)
-    return VLLMClient(**defaults)
+    with patch("src.llm.OpenAI"), patch("src.llm.AsyncOpenAI"):
+        client = UnifiedLLMClient(**defaults)
+    return client
 
 
-def mock_vllm_response(text: str):
-    """Create a mock httpx response for vLLM completions API."""
-    resp = Mock()
-    resp.status_code = 200
-    resp.json.return_value = {
-        "choices": [{"text": text, "finish_reason": "stop"}],
-    }
-    return resp
+def setup_sync_response(client, content):
+    """Set up sync mock responses for both /v1/completions and /v1/chat/completions."""
+    mock_sync = MagicMock()
+    # /v1/completions (default mode)
+    text_choice = Mock()
+    text_choice.text = content
+    mock_sync.completions.create.return_value = Mock(choices=[text_choice])
+    # /v1/chat/completions (chat template mode)
+    chat_choice = Mock()
+    chat_choice.message = Mock(content=content)
+    mock_sync.chat.completions.create.return_value = Mock(choices=[chat_choice])
+    client._sync_client = mock_sync
+    return mock_sync
 
 
-def mock_httpx_client(mock_response):
-    """Set up httpx.Client context manager mock returning mock_response."""
-    patcher = patch("httpx.Client")
-    mock_cls = patcher.start()
-    mock_client = MagicMock()
-    mock_cls.return_value.__enter__ = Mock(return_value=mock_client)
-    mock_cls.return_value.__exit__ = Mock(return_value=False)
-    mock_client.post.return_value = mock_response
-    return patcher, mock_client
-
-
-def get_payload(mock_client):
-    """Extract the JSON payload from the last mock_client.post call."""
-    return mock_client.post.call_args.kwargs["json"]
+def get_call_kwargs(mock, chat=False):
+    if chat:
+        return mock.chat.completions.create.call_args.kwargs
+    return mock.completions.create.call_args.kwargs
 
 
 # ===========================================================================
@@ -65,117 +75,93 @@ def get_payload(mock_client):
 
 
 class TestMultipleSelectGuidedDecoding:
-    """Tests for multiple_select: regex guided decoding WITH stop sequences."""
+    """Tests for multiple_select: JSON schema via response_format (vLLM supports both API modes)."""
 
-    def test_vllm_multiple_select_uses_guided_regex(self):
-        """Multiple select uses structured_outputs.regex."""
-        patcher, mock_client = mock_httpx_client(mock_vllm_response("A, C, D"))
-        try:
-            client = make_vllm_client()
-            question = Question(qkey="q1", type="multiple_select", text="Select all?",
-                                options=["Opt1", "Opt2", "Opt3", "Opt4"])
+    def test_vllm_multiple_select_uses_json_schema(self):
+        """Multiple select uses response_format with json_schema."""
+        client = make_vllm_client()
+        json_resp = '{"choice_A": true, "choice_B": false, "choice_C": true, "choice_D": true}'
+        mock = setup_sync_response(client, json_resp)
+        question = Question(qkey="q1", type="multiple_select", text="Select all?",
+                            options=["Opt1", "Opt2", "Opt3", "Opt4"])
 
-            client.complete("Test prompt", question=question)
+        client.complete("Test prompt", question=question)
 
-            payload = get_payload(mock_client)
-            assert "structured_outputs" in payload
-            assert payload["structured_outputs"]["regex"] == "[A-D](, [A-D])*"
-        finally:
-            patcher.stop()
+        kwargs = get_call_kwargs(mock)
+        assert "response_format" in kwargs
+        assert kwargs["response_format"]["type"] == "json_schema"
+        schema = kwargs["response_format"]["json_schema"]["schema"]
+        assert "choice_A" in schema["properties"]
+        assert "choice_D" in schema["properties"]
+        assert schema["properties"]["choice_A"]["type"] == "boolean"
 
-    def test_vllm_multiple_select_keeps_stop_sequences(self):
-        """Multiple select keeps stop sequences so model can naturally terminate."""
-        patcher, mock_client = mock_httpx_client(mock_vllm_response("A, C"))
-        try:
-            client = make_vllm_client()
-            question = Question(qkey="q1", type="multiple_select", text="Select?",
-                                options=["Opt1", "Opt2", "Opt3"])
+    def test_vllm_multiple_select_default_max_tokens(self):
+        """Multiple select uses default max_tokens (schema constrains output)."""
+        client = make_vllm_client()
+        json_resp = '{"choice_A": true, "choice_B": false, "choice_C": false, "choice_D": false, "choice_E": false}'
+        mock = setup_sync_response(client, json_resp)
+        question = Question(qkey="q1", type="multiple_select", text="Select?",
+                            options=["A", "B", "C", "D", "E"])
 
-            client.complete("Prompt", question=question)
+        client.complete("Prompt", question=question)
 
-            payload = get_payload(mock_client)
-            assert "stop" in payload
-            assert payload["stop"] == ["\n", ".", "Question:"]
-        finally:
-            patcher.stop()
-
-    def test_vllm_multiple_select_max_tokens(self):
-        """Multiple select max_tokens is 3 * num_options (upper bound)."""
-        patcher, mock_client = mock_httpx_client(mock_vllm_response("A, B"))
-        try:
-            client = make_vllm_client()
-            question = Question(qkey="q1", type="multiple_select", text="Select?",
-                                options=["A", "B", "C", "D", "E"])
-
-            client.complete("Prompt", question=question)
-
-            payload = get_payload(mock_client)
-            assert payload["max_tokens"] == 15  # 3 * 5
-        finally:
-            patcher.stop()
+        kwargs = get_call_kwargs(mock)
+        assert kwargs["max_tokens"] == 128  # default, not 3 * 5
 
     def test_vllm_multiple_select_dynamic_options(self):
-        """Regex pattern adjusts to option count."""
+        """JSON schema properties adjust to option count."""
         test_cases = [
-            (2, "[A-B](, [A-B])*"),
-            (3, "[A-C](, [A-C])*"),
-            (5, "[A-E](, [A-E])*"),
+            (2, ["choice_A", "choice_B"]),
+            (3, ["choice_A", "choice_B", "choice_C"]),
+            (5, ["choice_A", "choice_B", "choice_C", "choice_D", "choice_E"]),
         ]
-        for num_options, expected_regex in test_cases:
+        for num_options, expected_keys in test_cases:
             options = [f"Opt{i}" for i in range(num_options)]
-            patcher, mock_client = mock_httpx_client(mock_vllm_response("A"))
-            try:
-                client = make_vllm_client()
-                question = Question(qkey="q1", type="multiple_select", text="Select?", options=options)
-
-                client.complete("Prompt", question=question)
-
-                payload = get_payload(mock_client)
-                assert payload["structured_outputs"]["regex"] == expected_regex
-            finally:
-                patcher.stop()
-
-    def test_vllm_multiple_select_parses_comma_list(self):
-        """Response 'A, C, D' is parsed as 'A,C,D'."""
-        patcher, mock_client = mock_httpx_client(mock_vllm_response("A, C, D"))
-        try:
+            all_false = {f"choice_{chr(65+i)}": False for i in range(num_options)}
+            all_false["choice_A"] = True
+            json_resp = json.dumps(all_false)
             client = make_vllm_client()
-            question = Question(qkey="q1", type="multiple_select", text="Select?",
-                                options=["Opt1", "Opt2", "Opt3", "Opt4"])
+            mock = setup_sync_response(client, json_resp)
+            question = Question(qkey="q1", type="multiple_select", text="Select?", options=options)
 
-            result = client.complete("Prompt", question=question)
+            client.complete("Prompt", question=question)
 
-            assert result.answer == "A,C,D"
-        finally:
-            patcher.stop()
+            kwargs = get_call_kwargs(mock)
+            schema = kwargs["response_format"]["json_schema"]["schema"]
+            assert sorted(schema["properties"].keys()) == sorted(expected_keys)
 
-    def test_vllm_multiple_select_deduplicates(self):
-        """Response 'A, A, C' is deduplicated to 'A,C'."""
-        patcher, mock_client = mock_httpx_client(mock_vllm_response("A, A, C"))
-        try:
-            client = make_vllm_client()
-            question = Question(qkey="q1", type="multiple_select", text="Select?",
-                                options=["Opt1", "Opt2", "Opt3"])
+    def test_vllm_multiple_select_parses_boolean_map(self):
+        """Boolean map is parsed as 'A,C,D'."""
+        client = make_vllm_client()
+        json_resp = '{"choice_A": true, "choice_B": false, "choice_C": true, "choice_D": true}'
+        setup_sync_response(client, json_resp)
+        question = Question(qkey="q1", type="multiple_select", text="Select?",
+                            options=["Opt1", "Opt2", "Opt3", "Opt4"])
 
-            result = client.complete("Prompt", question=question)
+        result = client.complete("Prompt", question=question)
+        assert result.answer == "A,C,D"
 
-            assert result.answer == "A,C"
-        finally:
-            patcher.stop()
+    def test_vllm_multiple_select_all_false(self):
+        """All-false boolean map returns empty answer."""
+        client = make_vllm_client()
+        json_resp = '{"choice_A": false, "choice_B": false, "choice_C": false}'
+        setup_sync_response(client, json_resp)
+        question = Question(qkey="q1", type="multiple_select", text="Select?",
+                            options=["Opt1", "Opt2", "Opt3"])
 
-    def test_vllm_multiple_select_single_letter(self):
-        """Response 'B' is parsed as 'B' (single selection is valid)."""
-        patcher, mock_client = mock_httpx_client(mock_vllm_response("B"))
-        try:
-            client = make_vllm_client()
-            question = Question(qkey="q1", type="multiple_select", text="Select?",
-                                options=["Opt1", "Opt2", "Opt3"])
+        result = client.complete("Prompt", question=question)
+        assert result.answer == ""
 
-            result = client.complete("Prompt", question=question)
+    def test_vllm_multiple_select_single_true(self):
+        """Single true in boolean map is parsed correctly."""
+        client = make_vllm_client()
+        json_resp = '{"choice_A": false, "choice_B": true, "choice_C": false}'
+        setup_sync_response(client, json_resp)
+        question = Question(qkey="q1", type="multiple_select", text="Select?",
+                            options=["Opt1", "Opt2", "Opt3"])
 
-            assert result.answer == "B"
-        finally:
-            patcher.stop()
+        result = client.complete("Prompt", question=question)
+        assert result.answer == "B"
 
 
 # ===========================================================================
@@ -184,89 +170,80 @@ class TestMultipleSelectGuidedDecoding:
 
 
 class TestRankingGuidedDecoding:
-    """Tests for vLLM regex guided decoding with ranking questions."""
+    """Tests for vLLM JSON schema guided decoding with ranking questions."""
 
-    def test_vllm_ranking_uses_guided_regex(self):
-        """VLLMClient sends structured_outputs.regex with correct pattern for ranking."""
-        patcher, mock_client = mock_httpx_client(mock_vllm_response("B, A, C, D"))
-        try:
-            client = make_vllm_client()
-            question = Question(qkey="q1", type="ranking", text="Rank these?",
-                                options=["Opt1", "Opt2", "Opt3", "Opt4"])
+    def test_vllm_ranking_uses_json_schema(self):
+        """UnifiedLLMClient sends response_format with json_schema for ranking."""
+        client = make_vllm_client()
+        json_resp = '{"ranking": ["B", "A", "C", "D"]}'
+        mock = setup_sync_response(client, json_resp)
+        question = Question(qkey="q1", type="ranking", text="Rank these?",
+                            options=["Opt1", "Opt2", "Opt3", "Opt4"])
 
-            client.complete("Test prompt", question=question)
+        client.complete("Test prompt", question=question)
 
-            payload = get_payload(mock_client)
-            assert "structured_outputs" in payload
-            assert "regex" in payload["structured_outputs"]
-            assert payload["structured_outputs"]["regex"] == "[A-D](, [A-D]){3}"
-        finally:
-            patcher.stop()
+        kwargs = get_call_kwargs(mock)
+        assert "response_format" in kwargs
+        assert kwargs["response_format"]["type"] == "json_schema"
+        schema = kwargs["response_format"]["json_schema"]["schema"]
+        assert "ranking" in schema["properties"]
+        assert schema["properties"]["ranking"]["minItems"] == 4
+        assert schema["properties"]["ranking"]["maxItems"] == 4
 
-    def test_vllm_ranking_enforces_exact_count(self):
-        """Regex pattern requires exactly N letters."""
+    def test_vllm_ranking_enforces_exact_count_in_schema(self):
+        """JSON schema minItems/maxItems matches option count."""
         test_cases = [
-            (2, "[A-B](, [A-B]){1}"),
-            (3, "[A-C](, [A-C]){2}"),
-            (5, "[A-E](, [A-E]){4}"),
+            (2, 2),
+            (3, 3),
+            (5, 5),
         ]
-        for num_options, expected_regex in test_cases:
+        for num_options, expected_count in test_cases:
             options = [f"Opt{i}" for i in range(num_options)]
-            patcher, mock_client = mock_httpx_client(mock_vllm_response("A"))
-            try:
-                client = make_vllm_client()
-                question = Question(qkey="q1", type="ranking", text="Rank?", options=options)
+            letters = [chr(65 + i) for i in range(num_options)]
+            json_resp = json.dumps({"ranking": letters})
+            client = make_vllm_client()
+            mock = setup_sync_response(client, json_resp)
+            question = Question(qkey="q1", type="ranking", text="Rank?", options=options)
 
-                client.complete("Prompt", question=question)
+            client.complete("Prompt", question=question)
 
-                payload = get_payload(mock_client)
-                assert payload["structured_outputs"]["regex"] == expected_regex, \
-                    f"Expected {expected_regex} for {num_options} options"
-            finally:
-                patcher.stop()
+            kwargs = get_call_kwargs(mock)
+            schema = kwargs["response_format"]["json_schema"]["schema"]
+            assert schema["properties"]["ranking"]["minItems"] == expected_count
+            assert schema["properties"]["ranking"]["maxItems"] == expected_count
 
     def test_vllm_ranking_parses_complete_permutation(self):
-        """Response 'B, A, C, D' is parsed as 'B,A,C,D'."""
-        patcher, mock_client = mock_httpx_client(mock_vllm_response("B, A, C, D"))
-        try:
-            client = make_vllm_client()
-            question = Question(qkey="q1", type="ranking", text="Rank?",
-                                options=["Opt1", "Opt2", "Opt3", "Opt4"])
+        """Response '{"ranking": ["B","A","C","D"]}' is parsed as 'B,A,C,D'."""
+        client = make_vllm_client()
+        json_resp = '{"ranking": ["B", "A", "C", "D"]}'
+        setup_sync_response(client, json_resp)
+        question = Question(qkey="q1", type="ranking", text="Rank?",
+                            options=["Opt1", "Opt2", "Opt3", "Opt4"])
 
-            result = client.complete("Prompt", question=question)
-
-            assert result.answer == "B,A,C,D"
-        finally:
-            patcher.stop()
+        result = client.complete("Prompt", question=question)
+        assert result.answer == "B,A,C,D"
 
     def test_vllm_ranking_rejects_duplicates(self):
-        """Response 'A, A, C, D' returns empty answer (triggers compliance retry)."""
-        patcher, mock_client = mock_httpx_client(mock_vllm_response("A, A, C, D"))
-        try:
-            client = make_vllm_client()
-            question = Question(qkey="q1", type="ranking", text="Rank?",
-                                options=["Opt1", "Opt2", "Opt3", "Opt4"])
+        """Ranking with duplicates returns empty (triggers compliance retry)."""
+        client = make_vllm_client()
+        json_resp = '{"ranking": ["A", "A", "C", "D"]}'
+        setup_sync_response(client, json_resp)
+        question = Question(qkey="q1", type="ranking", text="Rank?",
+                            options=["Opt1", "Opt2", "Opt3", "Opt4"])
 
-            result = client.complete("Prompt", question=question)
-
-            # After dedup: A, C, D — missing B, so require_all fails → empty
-            assert result.answer == ""
-        finally:
-            patcher.stop()
+        result = client.complete("Prompt", question=question)
+        assert result.answer == ""
 
     def test_vllm_ranking_rejects_incomplete(self):
-        """Response 'A, B' (missing letters) returns empty answer."""
-        patcher, mock_client = mock_httpx_client(mock_vllm_response("A, B"))
-        try:
-            client = make_vllm_client()
-            question = Question(qkey="q1", type="ranking", text="Rank?",
-                                options=["Opt1", "Opt2", "Opt3", "Opt4"])
+        """Ranking with missing letters returns empty."""
+        client = make_vllm_client()
+        json_resp = '{"ranking": ["A", "B"]}'
+        setup_sync_response(client, json_resp)
+        question = Question(qkey="q1", type="ranking", text="Rank?",
+                            options=["Opt1", "Opt2", "Opt3", "Opt4"])
 
-            result = client.complete("Prompt", question=question)
-
-            assert result.answer == ""
-        finally:
-            patcher.stop()
+        result = client.complete("Prompt", question=question)
+        assert result.answer == ""
 
 
 # ===========================================================================
@@ -278,58 +255,32 @@ class TestOpenResponseHandling:
     """Tests for open response questions (no guided decoding)."""
 
     def test_vllm_open_response_no_guided_decoding(self):
-        """Open response questions do NOT use structured_outputs."""
-        patcher, mock_client = mock_httpx_client(
-            mock_vllm_response("I think climate change is a serious issue")
-        )
-        try:
-            client = make_vllm_client()
-            question = Question(qkey="q1", type="open_response", text="What do you think?")
+        """Open response questions do NOT use extra_body."""
+        client = make_vllm_client()
+        mock = setup_sync_response(client, "I think climate change is a serious issue")
+        question = Question(qkey="q1", type="open_response", text="What do you think?")
 
-            client.complete("Prompt", question=question)
+        client.complete("Prompt", question=question)
 
-            payload = get_payload(mock_client)
-            assert "structured_outputs" not in payload
-        finally:
-            patcher.stop()
+        kwargs = get_call_kwargs(mock)
+        assert "extra_body" not in kwargs
 
     def test_vllm_open_response_uses_raw_text(self):
         """Raw response text is used directly as the answer."""
         text = "I think climate change is a serious issue that requires immediate action"
-        patcher, mock_client = mock_httpx_client(mock_vllm_response(text))
-        try:
-            client = make_vllm_client()
-            question = Question(qkey="q1", type="open_response", text="What do you think?")
+        client = make_vllm_client()
+        setup_sync_response(client, text)
+        question = Question(qkey="q1", type="open_response", text="What do you think?")
 
-            result = client.complete("Prompt", question=question)
-
-            assert result.answer == text
-        finally:
-            patcher.stop()
-
-    def test_vllm_open_response_stop_sequences(self):
-        """Only 'Question:' is used as stop sequence (not '\\n' or '.')."""
-        patcher, mock_client = mock_httpx_client(
-            mock_vllm_response("Some response text")
-        )
-        try:
-            client = make_vllm_client()
-            question = Question(qkey="q1", type="open_response", text="Your thoughts?")
-
-            client.complete("Prompt", question=question)
-
-            payload = get_payload(mock_client)
-            assert payload["stop"] == ["Question:"]
-        finally:
-            patcher.stop()
+        result = client.complete("Prompt", question=question)
+        assert result.answer == text.strip()
 
     def test_vllm_open_response_no_compliance_retry(self):
         """Open response skips compliance forcing (any non-empty text is valid)."""
         mock_db = Mock()
-        mock_llm = Mock(spec=VLLMClient)
+        mock_llm = Mock(spec=UnifiedLLMClient)
         mock_llm.use_guided_decoding = True
 
-        # Single non-empty response — should accept immediately
         mock_llm.complete.return_value = LLMResponse(
             answer="This is my opinion on the topic",
             raw="This is my opinion on the topic",
@@ -341,15 +292,14 @@ class TestOpenResponseHandling:
         results = processor.process_questions_in_series("Backstory", questions)
 
         assert results["q1"] == "This is my opinion on the topic"
-        assert mock_llm.complete.call_count == 1  # No retries
+        assert mock_llm.complete.call_count == 1
 
     def test_vllm_open_response_empty_retries(self):
         """Empty response still triggers retry (model produced nothing)."""
         mock_db = Mock()
-        mock_llm = Mock(spec=VLLMClient)
+        mock_llm = Mock(spec=UnifiedLLMClient)
         mock_llm.use_guided_decoding = True
 
-        # First call: empty, second call: has content
         mock_llm.complete.side_effect = [
             LLMResponse(answer="", raw=""),
             LLMResponse(answer="Now I have something to say", raw="Now I have something to say"),
@@ -373,22 +323,17 @@ class TestMCQRegression:
     """Ensure MCQ guided decoding is unchanged."""
 
     def test_vllm_mcq_still_uses_choice(self):
-        """MCQ guided decoding unchanged (still uses structured_outputs.choice)."""
-        patcher, mock_client = mock_httpx_client(mock_vllm_response("B"))
-        try:
-            client = make_vllm_client()
-            question = Question(qkey="q1", type="mcq", text="Fav color?",
-                                options=["Red", "Blue", "Green", "Yellow"])
+        """MCQ guided decoding unchanged (uses extra_body with choice)."""
+        client = make_vllm_client()
+        mock = setup_sync_response(client, "B")
+        question = Question(qkey="q1", type="mcq", text="Fav color?",
+                            options=["Red", "Blue", "Green", "Yellow"])
 
-            client.complete("Prompt", question=question)
+        client.complete("Prompt", question=question)
 
-            payload = get_payload(mock_client)
-            assert "structured_outputs" in payload
-            assert "choice" in payload["structured_outputs"]
-            assert payload["structured_outputs"]["choice"] == ["A", "B", "C", "D"]
-            assert payload["max_tokens"] == 1
-        finally:
-            patcher.stop()
+        kwargs = get_call_kwargs(mock)  # completions mode by default
+        assert kwargs["extra_body"]["structured_outputs"]["choice"] == ["A", "B", "C", "D"]
+        assert kwargs["max_tokens"] == 1
 
 
 # ===========================================================================
@@ -401,89 +346,71 @@ class TestParserLLMExtension:
 
     def test_parser_llm_multiple_select(self):
         """Parser LLM extracts comma-separated letters for multiple_select."""
-        patcher, mock_client = mock_httpx_client(Mock(
-            status_code=200,
-            json=Mock(return_value={
-                "choices": [{"message": {"content": "A, C, D"}}]
-            }),
-        ))
-        try:
+        with patch("src.parser.OpenAI") as MockOpenAI, patch("src.parser.AsyncOpenAI"):
+            mock_sync = MagicMock()
+            mock_sync.chat.completions.create.return_value = make_mock_chat_completion("A, C, D")
+            MockOpenAI.return_value = mock_sync
+
             parser = ParserLLM(api_key="test-key", model="test-model")
             question = Question(qkey="q1", type="multiple_select", text="Select all?",
                                 options=["Opt1", "Opt2", "Opt3", "Opt4"])
 
             result = parser.parse("I prefer options one, three, and four", question)
-
             assert result == "A,C,D"
-        finally:
-            patcher.stop()
 
     def test_parser_llm_ranking(self):
-        """Parser LLM extracts ordered comma-separated letters for ranking."""
-        patcher, mock_client = mock_httpx_client(Mock(
-            status_code=200,
-            json=Mock(return_value={
-                "choices": [{"message": {"content": "B, A, C, D"}}]
-            }),
-        ))
-        try:
+        """Parser LLM extracts ordered letters for ranking."""
+        with patch("src.parser.OpenAI") as MockOpenAI, patch("src.parser.AsyncOpenAI"):
+            mock_sync = MagicMock()
+            mock_sync.chat.completions.create.return_value = make_mock_chat_completion("B, A, C, D")
+            MockOpenAI.return_value = mock_sync
+
             parser = ParserLLM(api_key="test-key", model="test-model")
             question = Question(qkey="q1", type="ranking", text="Rank these?",
                                 options=["Opt1", "Opt2", "Opt3", "Opt4"])
 
             result = parser.parse("I'd rank them second, first, third, fourth", question)
-
             assert result == "B,A,C,D"
-        finally:
-            patcher.stop()
 
     def test_parser_llm_prompt_format_multiple_select(self):
         """Parser prompt instructs 'Answer as comma-separated letters' for multiple_select."""
-        patcher, mock_client = mock_httpx_client(Mock(
-            status_code=200,
-            json=Mock(return_value={
-                "choices": [{"message": {"content": "A, C"}}]
-            }),
-        ))
-        try:
+        with patch("src.parser.OpenAI") as MockOpenAI, patch("src.parser.AsyncOpenAI"):
+            mock_sync = MagicMock()
+            mock_sync.chat.completions.create.return_value = make_mock_chat_completion("A, C")
+            MockOpenAI.return_value = mock_sync
+
             parser = ParserLLM(api_key="test-key", model="test-model")
             question = Question(qkey="q1", type="multiple_select", text="Which apply?",
                                 options=["Opt1", "Opt2", "Opt3"])
 
             parser.parse("Opts one and three", question)
 
-            payload = mock_client.post.call_args.kwargs["json"]
-            prompt_text = payload["messages"][0]["content"]
+            call_kwargs = mock_sync.chat.completions.create.call_args.kwargs
+            prompt_text = call_kwargs["messages"][0]["content"]
 
             assert "comma-separated uppercase letters" in prompt_text
             assert "Which apply?" in prompt_text
             assert "(A) Opt1" in prompt_text
-        finally:
-            patcher.stop()
 
     def test_parser_llm_prompt_format_ranking(self):
         """Parser prompt instructs 'Answer as ordered comma-separated letters' for ranking."""
-        patcher, mock_client = mock_httpx_client(Mock(
-            status_code=200,
-            json=Mock(return_value={
-                "choices": [{"message": {"content": "B, A, C"}}]
-            }),
-        ))
-        try:
+        with patch("src.parser.OpenAI") as MockOpenAI, patch("src.parser.AsyncOpenAI"):
+            mock_sync = MagicMock()
+            mock_sync.chat.completions.create.return_value = make_mock_chat_completion("B, A, C")
+            MockOpenAI.return_value = mock_sync
+
             parser = ParserLLM(api_key="test-key", model="test-model")
             question = Question(qkey="q1", type="ranking", text="Rank these?",
                                 options=["Opt1", "Opt2", "Opt3"])
 
             parser.parse("Second, first, third", question)
 
-            payload = mock_client.post.call_args.kwargs["json"]
-            prompt_text = payload["messages"][0]["content"]
+            call_kwargs = mock_sync.chat.completions.create.call_args.kwargs
+            prompt_text = call_kwargs["messages"][0]["content"]
 
             assert "ordered comma-separated uppercase letters" in prompt_text
             assert "most to least preferred" in prompt_text
             assert "Rank these?" in prompt_text
-        finally:
-            patcher.stop()
 
 
 # ===========================================================================
@@ -497,10 +424,9 @@ class TestIntegrationFlows:
     def test_compliance_retry_ranking_invalid_permutation(self):
         """When ranking response has duplicates, compliance loop retries."""
         mock_db = Mock()
-        mock_llm = Mock(spec=VLLMClient)
+        mock_llm = Mock(spec=UnifiedLLMClient)
         mock_llm.use_guided_decoding = True
 
-        # First: invalid (duplicates → empty), second: valid permutation
         mock_llm.complete.side_effect = [
             LLMResponse(answer="", raw="A, A, C, D"),
             LLMResponse(answer="B,A,C,D", raw="B, A, C, D"),
@@ -518,7 +444,7 @@ class TestIntegrationFlows:
     def test_context_accumulation_multiple_select(self):
         """Context includes full 'A, C, D' answer for subsequent questions."""
         mock_db = Mock()
-        mock_llm = Mock(spec=VLLMClient)
+        mock_llm = Mock(spec=UnifiedLLMClient)
         mock_llm.use_guided_decoding = True
 
         mock_llm.complete.side_effect = [
@@ -538,14 +464,13 @@ class TestIntegrationFlows:
         assert results["q1"] == "A,C,D"
         assert results["q2"] == "B"
 
-        # Second call's prompt should contain the raw answer from first question
         second_prompt = mock_llm.complete.call_args_list[1].args[0]
         assert "A, C, D" in second_prompt
 
     def test_context_accumulation_open_response(self):
         """Context includes full text response for subsequent questions."""
         mock_db = Mock()
-        mock_llm = Mock(spec=VLLMClient)
+        mock_llm = Mock(spec=UnifiedLLMClient)
         mock_llm.use_guided_decoding = True
 
         open_text = "I believe strongly in renewable energy"
@@ -565,21 +490,20 @@ class TestIntegrationFlows:
         assert results["q1"] == open_text
         assert results["q2"] == "A"
 
-        # Second call's prompt should contain the open response text
         second_prompt = mock_llm.complete.call_args_list[1].args[0]
         assert open_text in second_prompt
 
     def test_mixed_question_types_in_series(self):
         """Survey with MCQ + multiple_select + open_response + ranking processes all types."""
         mock_db = Mock()
-        mock_llm = Mock(spec=VLLMClient)
+        mock_llm = Mock(spec=UnifiedLLMClient)
         mock_llm.use_guided_decoding = True
 
         mock_llm.complete.side_effect = [
-            LLMResponse(answer="B", raw="B"),                              # MCQ
-            LLMResponse(answer="A,C", raw="A, C"),                         # multiple_select
-            LLMResponse(answer="I feel strongly about this", raw="I feel strongly about this"),  # open_response
-            LLMResponse(answer="C,A,B,D", raw="C, A, B, D"),             # ranking
+            LLMResponse(answer="B", raw="B"),
+            LLMResponse(answer="A,C", raw="A, C"),
+            LLMResponse(answer="I feel strongly about this", raw="I feel strongly about this"),
+            LLMResponse(answer="C,A,B,D", raw="C, A, B, D"),
         ]
 
         processor = TaskProcessor(db=mock_db, llm=mock_llm)
@@ -598,7 +522,7 @@ class TestIntegrationFlows:
         assert results["q2"] == "A,C"
         assert results["q3"] == "I feel strongly about this"
         assert results["q4"] == "C,A,B,D"
-        assert mock_llm.complete.call_count == 4  # One call per question, no retries
+        assert mock_llm.complete.call_count == 4
 
 
 # ===========================================================================
@@ -635,11 +559,11 @@ class TestFromCommaSeparated:
 
     def test_require_all_with_duplicates(self):
         result = LLMResponse.from_comma_separated("A, A, C, D", 4, require_all=True)
-        assert result.answer == ""  # Missing B after dedup
+        assert result.answer == ""
 
     def test_invalid_letters_filtered(self):
         result = LLMResponse.from_comma_separated("A, Z, C", 4)
-        assert result.answer == "A,C"  # Z is out of range
+        assert result.answer == "A,C"
 
     def test_empty_input(self):
         result = LLMResponse.from_comma_separated("", 4)
@@ -649,30 +573,23 @@ class TestFromCommaSeparated:
         result = LLMResponse.from_comma_separated("A", 1)
         assert result.answer == "A"
 
-    # --- Robust format handling ---
-
     def test_parenthesized_letters(self):
-        """'(A), (B), (D)' → 'A,B,D'"""
         result = LLMResponse.from_comma_separated("(A), (B), (D)", 5)
         assert result.answer == "A,B,D"
 
     def test_bracketed_letters(self):
-        """'[A], [C]' → 'A,C'"""
         result = LLMResponse.from_comma_separated("[A], [C]", 4)
         assert result.answer == "A,C"
 
     def test_mixed_format(self):
-        """'A, (C), [D]' → 'A,C,D'"""
         result = LLMResponse.from_comma_separated("A, (C), [D]", 4)
         assert result.answer == "A,C,D"
 
     def test_letters_with_trailing_period(self):
-        """'A, C, D.' → 'A,C,D'"""
         result = LLMResponse.from_comma_separated("A, C, D.", 4)
         assert result.answer == "A,C,D"
 
     def test_option_text_fallback(self):
-        """'Software engineer/ML, Data scientist' matched to options."""
         options = ["Software engineer/ML", "Data scientist", "Product manager", "Designer"]
         result = LLMResponse.from_comma_separated(
             "Software engineer/ML, Data scientist", 4, options=options
@@ -680,7 +597,6 @@ class TestFromCommaSeparated:
         assert result.answer == "A,B"
 
     def test_option_text_partial_match(self):
-        """Partial option text matches."""
         options = ["Very excited", "Somewhat excited", "Not excited"]
         result = LLMResponse.from_comma_separated(
             "Very excited, Not excited", 3, options=options
@@ -688,7 +604,6 @@ class TestFromCommaSeparated:
         assert result.answer == "A,C"
 
     def test_option_text_no_match_returns_empty(self):
-        """Completely unrelated text returns empty."""
         options = ["Red", "Blue", "Green"]
         result = LLMResponse.from_comma_separated(
             "I like chocolate", 3, options=options

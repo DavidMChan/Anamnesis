@@ -3,12 +3,13 @@ Tests for the async worker functionality.
 
 Covers:
 - Metrics tracker (p50/p95/p99, status detection)
-- Async LLM clients (OpenRouter, vLLM)
+- Async LLM client (UnifiedLLMClient)
 - Async worker (sequential questions, concurrent tasks)
 - Async queue consumer
 - Graceful shutdown
 - Error handling in async flow
 - Config (MAX_CONCURRENT_TASKS)
+- Strategy pattern (async fill)
 """
 import asyncio
 import json
@@ -19,13 +20,8 @@ from unittest.mock import Mock, MagicMock, AsyncMock, patch
 import pytest
 
 from src.config import WorkerConfig
-from src.llm import (
-    LLMResponse,
-    OpenRouterClient,
-    VLLMClient,
-    RetryableError,
-    NonRetryableError,
-)
+from src.llm import UnifiedLLMClient
+from src.response import LLMResponse, RetryableError, NonRetryableError
 from src.metrics import (
     LatencyTracker,
     MetricsLogger,
@@ -34,7 +30,7 @@ from src.metrics import (
     format_duration,
 )
 from src.prompt import Question
-from src.worker import TaskProcessor
+from src.worker import TaskProcessor, SeriesWithContext
 
 
 # ==================== Metrics Tests ====================
@@ -58,7 +54,6 @@ class TestLatencyTracker:
     def test_percentile_calculation(self):
         """p50/p95/p99 correctly calculated from recorded durations."""
         tracker = LatencyTracker(window_seconds=60)
-        # Record 100 values: 1ms, 2ms, ..., 100ms
         for i in range(1, 101):
             tracker.record(float(i))
 
@@ -116,9 +111,9 @@ class TestStatusDetection:
         assert classify_status(p99=100, baseline_p99=0) == "OK"
 
     def test_throughput_plateau_detection(self):
-        assert detect_throughput_plateau(10.0, 10.0) is True  # No increase
-        assert detect_throughput_plateau(10.5, 10.0) is True  # 5% < 10%
-        assert detect_throughput_plateau(12.0, 10.0) is False  # 20% increase
+        assert detect_throughput_plateau(10.0, 10.0) is True
+        assert detect_throughput_plateau(10.5, 10.0) is True
+        assert detect_throughput_plateau(12.0, 10.0) is False
 
     def test_throughput_plateau_zero_previous(self):
         assert detect_throughput_plateau(10.0, 0.0) is False
@@ -138,7 +133,7 @@ class TestMetricsLogger:
     def test_logs_at_interval(self):
         tracker = LatencyTracker(window_seconds=60)
         tracker.record(100.0)
-        logger = MetricsLogger(tracker, interval_seconds=0)  # Always log
+        logger = MetricsLogger(tracker, interval_seconds=0)
 
         result = logger.maybe_log(in_flight=5, max_concurrent=10)
         assert result is not None
@@ -149,9 +144,7 @@ class TestMetricsLogger:
         tracker.record(100.0)
         logger = MetricsLogger(tracker, interval_seconds=9999)
 
-        # First call logs
         logger.maybe_log()
-        # Second call should skip
         result = logger.maybe_log()
         assert result is None
 
@@ -159,134 +152,85 @@ class TestMetricsLogger:
 # ==================== Async LLM Tests ====================
 
 
-class TestAsyncOpenRouterClient:
-    """Tests for async OpenRouter LLM client."""
+class TestAsyncUnifiedLLMClient:
+    """Tests for async UnifiedLLMClient."""
 
     @pytest.mark.asyncio
-    async def test_async_complete_makes_correct_request(self):
-        """AsyncClient makes correct HTTP request and parses response."""
-        client = OpenRouterClient(
-            api_key="test-key",
-            model="test-model",
-            max_retries=1,
-        )
+    async def test_async_complete_openrouter(self):
+        """Async OpenRouter complete parses text response (default completions mode)."""
+        with patch("src.llm.OpenAI"), patch("src.llm.AsyncOpenAI"):
+            client = UnifiedLLMClient(
+                base_url="https://openrouter.ai/api/v1",
+                api_key="test-key",
+                model="test-model",
+                provider="openrouter",
+            )
 
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "choices": [{"message": {"content": '{"answer": "A"}'}}]
-        }
+        mock_completion = Mock()
+        mock_completion.choices = [Mock(text="(A)")]
 
-        with patch.object(client, "_get_async_client") as mock_get_client:
-            mock_async_client = AsyncMock()
-            mock_async_client.post.return_value = mock_response
-            mock_get_client.return_value = mock_async_client
+        mock_async = AsyncMock()
+        mock_async.completions.create.return_value = mock_completion
+        client._async_client = mock_async
 
-            result = await client.async_complete("Test prompt")
-
-            assert result.answer == "A"
-            mock_async_client.post.assert_called_once()
-            call_args = mock_async_client.post.call_args
-            assert call_args.args[0] == OpenRouterClient.BASE_URL
-            payload = call_args.kwargs["json"]
-            assert payload["model"] == "test-model"
+        result = await client.async_complete("Test prompt")
+        assert result.answer == "A"
+        mock_async.completions.create.assert_called_once()
 
         await client.close()
 
     @pytest.mark.asyncio
-    async def test_async_complete_retries_on_rate_limit(self):
-        """Async client retries on 429 with async sleep."""
-        client = OpenRouterClient(
-            api_key="test-key",
-            model="test-model",
-            max_retries=3,
-        )
+    async def test_async_complete_vllm_guided(self):
+        """Async vLLM complete sends extra_body with guided decoding via completions API."""
+        with patch("src.llm.OpenAI"), patch("src.llm.AsyncOpenAI"):
+            client = UnifiedLLMClient(
+                base_url="http://localhost:8000/v1",
+                api_key="test",
+                model="test-model",
+                provider="vllm",
+            )
 
-        fail_response = Mock()
-        fail_response.status_code = 429
-        fail_response.json.return_value = {"error": {"message": "Rate limited"}}
+        mock_completion = Mock()
+        mock_completion.choices = [Mock(text="A")]
 
-        success_response = Mock()
-        success_response.status_code = 200
-        success_response.json.return_value = {
-            "choices": [{"message": {"content": '{"answer": "B"}'}}]
-        }
-
-        with patch.object(client, "_get_async_client") as mock_get_client:
-            mock_async_client = AsyncMock()
-            mock_async_client.post.side_effect = [fail_response, success_response]
-            mock_get_client.return_value = mock_async_client
-
-            with patch("src.llm.asyncio.sleep", new_callable=AsyncMock):
-                result = await client.async_complete("Test")
-
-        assert result.answer == "B"
-        await client.close()
-
-
-class TestAsyncVLLMClient:
-    """Tests for async vLLM client."""
-
-    @pytest.mark.asyncio
-    async def test_async_complete_makes_correct_request(self):
-        """AsyncClient makes correct request with guided decoding params."""
-        client = VLLMClient(
-            endpoint="http://localhost:8000/v1",
-            model="test-model",
-            max_retries=1,
-        )
-
-        mock_response = Mock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "choices": [{"text": "A", "finish_reason": "stop"}]
-        }
+        mock_async = AsyncMock()
+        mock_async.completions.create.return_value = mock_completion
+        client._async_client = mock_async
 
         question = Question(qkey="q1", type="mcq", text="Test?", options=["Yes", "No"])
+        result = await client.async_complete("Test prompt", question=question)
 
-        with patch.object(client, "_get_async_client") as mock_get_client:
-            mock_async_client = AsyncMock()
-            mock_async_client.post.return_value = mock_response
-            mock_get_client.return_value = mock_async_client
-
-            result = await client.async_complete("Test prompt", question=question)
-
-            assert result.answer == "A"
-            call_args = mock_async_client.post.call_args
-            url = call_args.args[0]
-            assert "/completions" in url
-            payload = call_args.kwargs["json"]
-            assert "structured_outputs" in payload
+        assert result.answer == "A"
+        call_kwargs = mock_async.completions.create.call_args.kwargs
+        assert "extra_body" in call_kwargs
+        assert call_kwargs["extra_body"]["structured_outputs"]["choice"] == ["A", "B"]
 
         await client.close()
 
     @pytest.mark.asyncio
-    async def test_async_complete_retries_on_server_error(self):
-        """Async vLLM client retries on 500."""
-        client = VLLMClient(
-            endpoint="http://localhost:8000/v1",
-            model="test-model",
-            max_retries=3,
+    async def test_async_complete_retries_rate_limit(self):
+        """Async client raises RetryableError on rate limit (SDK already retried)."""
+        import openai as openai_module
+
+        with patch("src.llm.OpenAI"), patch("src.llm.AsyncOpenAI"):
+            client = UnifiedLLMClient(
+                base_url="https://openrouter.ai/api/v1",
+                api_key="test-key",
+                model="test-model",
+                provider="openrouter",
+            )
+
+        mock_async = AsyncMock()
+        mock_async.completions.create.side_effect = openai_module.RateLimitError(
+            message="Rate limited",
+            response=Mock(status_code=429),
+            body=None,
         )
+        client._async_client = mock_async
 
-        fail_response = Mock()
-        fail_response.status_code = 500
+        with pytest.raises(RetryableError, match="Rate limited"):
+            await client.async_complete("Test")
 
-        success_response = Mock()
-        success_response.status_code = 200
-        success_response.json.return_value = {
-            "choices": [{"text": "(B)", "finish_reason": "stop"}]
-        }
-
-        with patch.object(client, "_get_async_client") as mock_get_client:
-            mock_async_client = AsyncMock()
-            mock_async_client.post.side_effect = [fail_response, success_response]
-            mock_get_client.return_value = mock_async_client
-
-            with patch("src.llm.asyncio.sleep", new_callable=AsyncMock):
-                result = await client.async_complete("Test")
-
-        assert result.answer == "B"
         await client.close()
 
 
@@ -297,7 +241,7 @@ class TestAsyncVLLMClient:
 def mock_db():
     """Mock database client."""
     db = Mock()
-    db.start_task.return_value = 1  # Returns attempt count
+    db.start_task.return_value = 1
     db.complete_task.return_value = True
     db.fail_task.return_value = True
     db.get_task.return_value = {
@@ -324,6 +268,7 @@ def mock_async_llm():
     llm.async_complete.return_value = LLMResponse(answer="A", reasoning=None, raw='{"answer": "A"}')
     llm.complete.return_value = LLMResponse(answer="A", reasoning=None, raw='{"answer": "A"}')
     llm.close = AsyncMock()
+    llm.max_tokens = 512
     return llm
 
 
@@ -356,6 +301,28 @@ class TestAsyncProcessTask:
         assert result.success is True
         mock_db.complete_task.assert_called_once()
 
+    @pytest.mark.asyncio
+    async def test_async_process_uses_strategy(self, mock_db, mock_async_llm):
+        """Async process_task uses the filling strategy."""
+        mock_strategy = AsyncMock()
+        mock_strategy.fill.return_value = {"q1": "A"}
+
+        processor = TaskProcessor(
+            db=mock_db, llm=mock_async_llm, max_retries=3,
+            strategy=mock_strategy,
+        )
+
+        task = {
+            "id": str(uuid.uuid4()),
+            "survey_run_id": str(uuid.uuid4()),
+            "backstory_id": str(uuid.uuid4()),
+        }
+
+        result = await processor.async_process_task(task)
+
+        assert result.success is True
+        mock_strategy.fill.assert_called_once()
+
 
 class TestAsyncSequentialQuestions:
     """Tests for sequential question processing within a single task."""
@@ -380,12 +347,10 @@ class TestAsyncSequentialQuestions:
 
         results = await async_processor.async_process_questions_in_series(backstory, questions)
 
-        # All questions answered
         assert len(results) == 3
         assert results["q1"] == "A"
         assert results["q2"] == "A"
         assert results["q3"] == "A"
-        # Called sequentially (3 questions, 3 calls)
         assert mock_async_llm.async_complete.call_count == 3
         assert call_order == [0, 1, 2]
 
@@ -408,11 +373,9 @@ class TestAsyncSequentialQuestions:
 
         await async_processor.async_process_questions_in_series(backstory, questions)
 
-        # First prompt has backstory + Q1
         assert "Test backstory" in prompts_received[0]
         assert "Q1?" in prompts_received[0]
-        # Second prompt has Q1 answer + consistency prompt + Q2
-        assert "Q1?" in prompts_received[1]  # Previous question context
+        assert "Q1?" in prompts_received[1]
         assert "Q2?" in prompts_received[1]
         assert "previous answers" in prompts_received[1].lower()
 
@@ -432,13 +395,14 @@ class TestAsyncConcurrentTasks:
             async with lock:
                 concurrent_count += 1
                 max_concurrent = max(max_concurrent, concurrent_count)
-            await asyncio.sleep(0.05)  # Simulate LLM call
+            await asyncio.sleep(0.05)
             async with lock:
                 concurrent_count -= 1
             return LLMResponse(answer="A", raw='{"answer": "A"}')
 
         llm = AsyncMock()
         llm.async_complete.side_effect = slow_complete
+        llm.max_tokens = 512
 
         semaphore = asyncio.Semaphore(5)
         tasks = []
@@ -456,7 +420,6 @@ class TestAsyncConcurrentTasks:
                 "attempts": 1,
             }
 
-            # Each task gets its own mock DB with unique IDs
             task_db = Mock()
             task_db.complete_task.return_value = True
             task_db.get_backstory.return_value = {
@@ -476,20 +439,13 @@ class TestAsyncConcurrentTasks:
 
         results = await asyncio.gather(*tasks)
 
-        # All tasks completed
         assert all(r.success for r in results)
-        # Multiple ran concurrently (max > 1)
         assert max_concurrent > 1
-        # But not more than semaphore limit
         assert max_concurrent <= 5
 
 
 class TestAsyncErrorHandling:
-    """Tests for error handling in async flow.
-
-    async_process_task now lets errors propagate to handle_message,
-    which decides whether to nack (retry) or fail permanently.
-    """
+    """Tests for error handling in async flow."""
 
     @pytest.mark.asyncio
     async def test_retryable_error_propagates(self, async_processor, mock_db, mock_async_llm):
@@ -538,6 +494,37 @@ class TestAsyncErrorHandling:
 
         with pytest.raises(NonRetryableError, match="not found"):
             await async_processor.async_process_task(task)
+
+
+# ==================== Strategy Pattern Tests ====================
+
+
+class TestStrategyPattern:
+    """Tests for the FillingStrategy protocol."""
+
+    @pytest.mark.asyncio
+    async def test_custom_strategy_accepted(self):
+        """TaskProcessor accepts any FillingStrategy implementation."""
+        mock_strategy = AsyncMock()
+        mock_strategy.fill.return_value = {"q1": "custom"}
+
+        mock_llm = AsyncMock()
+        mock_llm.max_tokens = 512
+        processor = TaskProcessor(
+            db=Mock(), llm=mock_llm, strategy=mock_strategy,
+        )
+
+        questions = [Question(qkey="q1", type="mcq", text="Q?", options=["Yes", "No"])]
+        results = await processor.async_process_questions_in_series("Backstory", questions)
+
+        assert results == {"q1": "custom"}
+        mock_strategy.fill.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_default_strategy_is_series_with_context(self):
+        """Default strategy is SeriesWithContext."""
+        processor = TaskProcessor(db=Mock(), llm=AsyncMock())
+        assert isinstance(processor.strategy, SeriesWithContext)
 
 
 # ==================== Async Queue Consumer Tests ====================
@@ -589,7 +576,6 @@ class TestAsyncGracefulShutdown:
             t.add_done_callback(in_flight.discard)
             tasks.append(t)
 
-        # Wait for all tasks (simulating shutdown wait)
         await asyncio.wait(in_flight, timeout=5)
 
         assert len(completed) == 3
@@ -607,7 +593,6 @@ class TestConfigMaxConcurrent:
     def test_default_value(self):
         """Default MAX_CONCURRENT_TASKS is 10."""
         with patch.dict("os.environ", {}, clear=False):
-            # Remove the var if it exists
             import os
             env_copy = os.environ.copy()
             os.environ.pop("MAX_CONCURRENT_TASKS", None)

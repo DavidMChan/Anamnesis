@@ -7,7 +7,7 @@ from datetime import datetime
 import uuid
 
 from src.worker import TaskProcessor
-from src.llm import LLMResponse, RetryableError, NonRetryableError
+from src.response import LLMResponse, RetryableError, NonRetryableError
 from src.prompt import Question
 
 
