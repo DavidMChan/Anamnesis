@@ -44,8 +44,8 @@ services:
       - WASABI_ACCESS_KEY_ID=${WASABI_ACCESS_KEY_ID:-}
       - WASABI_SECRET_ACCESS_KEY=${WASABI_SECRET_ACCESS_KEY:-}
       - WASABI_BUCKET=${WASABI_BUCKET:-}
-      - WASABI_REGION=${WASABI_REGION:-us-east-1}
-      - WASABI_ENDPOINT=${WASABI_ENDPOINT:-https://s3.us-east-1.wasabisys.com}
+      - WASABI_REGION=${WASABI_REGION:-us-west-2}
+      - WASABI_ENDPOINT=${WASABI_ENDPOINT:-https://s3.us-west-2.wasabisys.com}
     deploy:
       # With async worker, one replica handles 50 concurrent tasks.
       # Scale only if you need more than MAX_CONCURRENT_TASKS total.
