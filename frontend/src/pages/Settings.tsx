@@ -6,6 +6,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Checkbox } from '@/components/ui/checkbox'
 import { User, Key, Check, X, Eye, EyeOff } from 'lucide-react'
 import type { LLMConfig } from '@/types/database'
 import type { ApiKeyType } from '@/hooks/useAuth'
@@ -379,6 +380,28 @@ export function Settings() {
                 </div>
               </div>
             )}
+
+            {/* Chat Template Toggle */}
+            <div className="flex items-start gap-3 rounded-lg border p-4">
+              <Checkbox
+                id="use_chat_template"
+                checked={llmConfig.use_chat_template === true}
+                onCheckedChange={(checked) =>
+                  setLlmConfig({ ...llmConfig, use_chat_template: checked === true })
+                }
+                className="mt-0.5"
+              />
+              <div className="space-y-1">
+                <Label htmlFor="use_chat_template" className="cursor-pointer">
+                  Use Chat Template
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Enable this if your model has a chat template (e.g., instruction-tuned models).
+                  When unchecked, the worker uses the text completions API (/v1/completions),
+                  which is better for base models without chat formatting.
+                </p>
+              </div>
+            </div>
 
             {/* Parser LLM */}
             <div className="space-y-2">

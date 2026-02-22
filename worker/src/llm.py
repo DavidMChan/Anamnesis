@@ -33,9 +33,13 @@ class UnifiedLLMClient:
     Both OpenRouter and vLLM expose OpenAI-compatible APIs.
     Uses openai.OpenAI/AsyncOpenAI(base_url=...) for both.
 
+    API modes:
+      - use_chat_template=False (default): /v1/completions (text completions)
+      - use_chat_template=True: /v1/chat/completions (chat format)
+
     Structured output:
-      - vLLM: extra_body={"structured_outputs": {"choice": [...]}} or {"regex": "..."}
-      - OpenRouter: response_format={"type": "json_schema", ...}
+      - vLLM MCQ: extra_body={"structured_outputs": {"choice": [...]}} (both modes)
+      - JSON schema: response_format={"type": "json_schema", ...} (chat mode only)
     """
 
     def __init__(
@@ -48,12 +52,14 @@ class UnifiedLLMClient:
         max_tokens: Optional[int] = 512,
         max_retries: int = 3,
         use_guided_decoding: bool = True,
+        use_chat_template: bool = False,
     ):
         self.model = model
         self.provider = provider
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.use_guided_decoding = use_guided_decoding
+        self.use_chat_template = use_chat_template
 
         self._sync_client = OpenAI(
             base_url=base_url, api_key=api_key, max_retries=max_retries,
@@ -64,21 +70,28 @@ class UnifiedLLMClient:
 
     def _build_create_params(self, question: "Optional[Question]") -> dict:
         """
-        Build extra kwargs for chat.completions.create() based on provider + question type.
+        Build extra kwargs for completions.create() or chat.completions.create().
 
-        For vLLM: returns extra_body with structured_outputs (choice/regex)
-        For OpenRouter: returns response_format with json_schema
+        For vLLM: extra_body with structured_outputs (MCQ choice) or
+                  response_format with json_schema (multiple_select/ranking).
+                  Both work in /v1/completions and /v1/chat/completions.
+        For OpenRouter: response_format with json_schema (chat mode only,
+                        not supported in /v1/completions).
         """
         if not self.use_guided_decoding or not question or not question.options:
             return {}
 
         letters = [chr(65 + i) for i in range(len(question.options))]
 
-        # vLLM MCQ: constrained sampling to a single letter (no JSON)
+        # vLLM MCQ: constrained sampling to a single letter (both API modes)
         if self.provider == "vllm" and question.type == "mcq":
             return {"extra_body": {"structured_outputs": {"choice": letters}}}
 
-        # Everything else (OpenRouter all types, vLLM multiple_select/ranking): json_schema
+        # OpenRouter: JSON schema only works in chat completions mode
+        if self.provider == "openrouter" and not self.use_chat_template:
+            return {}
+
+        # JSON schema (vLLM all modes, OpenRouter chat mode only)
         from .prompt import get_response_schema
         schema = get_response_schema(question)
         return {
@@ -139,12 +152,19 @@ class UnifiedLLMClient:
         if not content:
             return LLMResponse(answer="", raw="")
 
-        # JSON schema response (OpenRouter all types, vLLM multiple_select/ranking)
+        # JSON schema response — parse when structured output was actually sent.
+        # vLLM: response_format works in both completions and chat modes.
+        # OpenRouter: response_format only works in chat mode.
         if self.use_guided_decoding and question and question.options:
-            if question.type in ("multiple_select", "ranking"):
-                return self._parse_structured_response(content, question)
-            elif self.provider == "openrouter":
-                return self._parse_structured_response(content, question)
+            sent_json_schema = (
+                self.provider == "vllm"
+                or (self.provider == "openrouter" and self.use_chat_template)
+            )
+            if sent_json_schema:
+                if question.type in ("multiple_select", "ranking"):
+                    return self._parse_structured_response(content, question)
+                elif self.provider == "openrouter":
+                    return self._parse_structured_response(content, question)
 
         # vLLM MCQ with guided decoding (extra_body choice, not JSON)
         if self.provider == "vllm" and self.use_guided_decoding and question and question.options:
@@ -174,17 +194,27 @@ class UnifiedLLMClient:
     def complete(self, prompt: str, *, question: "Optional[Question]" = None) -> LLMResponse:
         """Get completion from LLM (sync)."""
         params = self._build_create_params(question)
-        messages = [{"role": "user", "content": prompt}]
 
         try:
-            response = self._sync_client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=self._effective_max_tokens(question),
-                **params,
-            )
-            content = response.choices[0].message.content or ""
+            if self.use_chat_template:
+                messages = [{"role": "user", "content": prompt}]
+                response = self._sync_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=self.temperature,
+                    max_tokens=self._effective_max_tokens(question),
+                    **params,
+                )
+                content = response.choices[0].message.content or ""
+            else:
+                response = self._sync_client.completions.create(
+                    model=self.model,
+                    prompt=prompt,
+                    temperature=self.temperature,
+                    max_tokens=self._effective_max_tokens(question),
+                    **params,
+                )
+                content = response.choices[0].text or ""
             return self._parse_response(content, question)
         except openai.BadRequestError as e:
             error_str = str(e).lower()
@@ -204,17 +234,26 @@ class UnifiedLLMClient:
             raise NonRetryableError(str(e))
 
     def _complete_text_fallback(self, prompt: str, question: "Optional[Question]") -> LLMResponse:
-        """Retry without structured output (text mode for OpenRouter)."""
+        """Retry without structured output (text mode)."""
         text_prompt = prompt + "\n\nRespond with ONLY the letter of your answer (A, B, C, D, etc.) and nothing else."
-        messages = [{"role": "user", "content": text_prompt}]
         try:
-            response = self._sync_client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=self._effective_max_tokens(question),
-            )
-            content = response.choices[0].message.content or ""
+            if self.use_chat_template:
+                messages = [{"role": "user", "content": text_prompt}]
+                response = self._sync_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=self.temperature,
+                    max_tokens=self._effective_max_tokens(question),
+                )
+                content = response.choices[0].message.content or ""
+            else:
+                response = self._sync_client.completions.create(
+                    model=self.model,
+                    prompt=text_prompt,
+                    temperature=self.temperature,
+                    max_tokens=self._effective_max_tokens(question),
+                )
+                content = response.choices[0].text or ""
             return LLMResponse.from_text(content)
         except Exception as e:
             raise NonRetryableError(f"Text fallback also failed: {e}")
@@ -222,17 +261,27 @@ class UnifiedLLMClient:
     async def async_complete(self, prompt: str, *, question: "Optional[Question]" = None) -> LLMResponse:
         """Get completion from LLM (async)."""
         params = self._build_create_params(question)
-        messages = [{"role": "user", "content": prompt}]
 
         try:
-            response = await self._async_client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=self._effective_max_tokens(question),
-                **params,
-            )
-            content = response.choices[0].message.content or ""
+            if self.use_chat_template:
+                messages = [{"role": "user", "content": prompt}]
+                response = await self._async_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=self.temperature,
+                    max_tokens=self._effective_max_tokens(question),
+                    **params,
+                )
+                content = response.choices[0].message.content or ""
+            else:
+                response = await self._async_client.completions.create(
+                    model=self.model,
+                    prompt=prompt,
+                    temperature=self.temperature,
+                    max_tokens=self._effective_max_tokens(question),
+                    **params,
+                )
+                content = response.choices[0].text or ""
             return self._parse_response(content, question)
         except openai.BadRequestError as e:
             error_str = str(e).lower()
@@ -252,17 +301,26 @@ class UnifiedLLMClient:
             raise NonRetryableError(str(e))
 
     async def _async_complete_text_fallback(self, prompt: str, question: "Optional[Question]") -> LLMResponse:
-        """Retry without structured output (text mode for OpenRouter, async)."""
+        """Retry without structured output (text mode, async)."""
         text_prompt = prompt + "\n\nRespond with ONLY the letter of your answer (A, B, C, D, etc.) and nothing else."
-        messages = [{"role": "user", "content": text_prompt}]
         try:
-            response = await self._async_client.chat.completions.create(
-                model=self.model,
-                messages=messages,
-                temperature=self.temperature,
-                max_tokens=self._effective_max_tokens(question),
-            )
-            content = response.choices[0].message.content or ""
+            if self.use_chat_template:
+                messages = [{"role": "user", "content": text_prompt}]
+                response = await self._async_client.chat.completions.create(
+                    model=self.model,
+                    messages=messages,
+                    temperature=self.temperature,
+                    max_tokens=self._effective_max_tokens(question),
+                )
+                content = response.choices[0].message.content or ""
+            else:
+                response = await self._async_client.completions.create(
+                    model=self.model,
+                    prompt=text_prompt,
+                    temperature=self.temperature,
+                    max_tokens=self._effective_max_tokens(question),
+                )
+                content = response.choices[0].text or ""
             return LLMResponse.from_text(content)
         except Exception as e:
             raise NonRetryableError(f"Text fallback also failed: {e}")

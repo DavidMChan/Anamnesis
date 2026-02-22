@@ -17,8 +17,8 @@ from src.worker import TaskProcessor
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def make_mock_completion(content: str):
-    """Create a mock OpenAI ChatCompletion response."""
+def make_mock_chat_completion(content: str):
+    """Create a mock OpenAI ChatCompletion response (for ParserLLM tests)."""
     choice = Mock()
     choice.message = Mock()
     choice.message.content = content
@@ -45,9 +45,16 @@ def make_vllm_client(**kwargs) -> UnifiedLLMClient:
 
 
 def setup_sync_response(client: UnifiedLLMClient, content: str):
-    """Set up a sync mock response on the client, return the mock."""
+    """Set up sync mock responses for both /v1/completions and /v1/chat/completions."""
     mock_sync = MagicMock()
-    mock_sync.chat.completions.create.return_value = make_mock_completion(content)
+    # /v1/completions (default mode)
+    text_choice = Mock()
+    text_choice.text = content
+    mock_sync.completions.create.return_value = Mock(choices=[text_choice])
+    # /v1/chat/completions (chat template mode)
+    chat_choice = Mock()
+    chat_choice.message = Mock(content=content)
+    mock_sync.chat.completions.create.return_value = Mock(choices=[chat_choice])
     client._sync_client = mock_sync
     return mock_sync
 
@@ -68,7 +75,7 @@ class TestVLLMGuidedDecoding:
 
         client.complete("Test prompt", question=question)
 
-        call_kwargs = mock.chat.completions.create.call_args.kwargs
+        call_kwargs = mock.completions.create.call_args.kwargs
         assert "extra_body" in call_kwargs
         assert call_kwargs["extra_body"]["structured_outputs"]["choice"] == ["A", "B", "C", "D"]
 
@@ -80,11 +87,11 @@ class TestVLLMGuidedDecoding:
 
         client.complete("Prompt", question=question)
 
-        call_kwargs = mock.chat.completions.create.call_args.kwargs
+        call_kwargs = mock.completions.create.call_args.kwargs
         assert call_kwargs["max_tokens"] == 1
 
     def test_vllm_non_mcq_no_guided_choice(self):
-        """open_response uses NO structured_outputs; multi-select/ranking use regex."""
+        """open_response uses NO structured_outputs; multi-select/ranking use json_schema."""
         # open_response: no structured_outputs
         client = make_vllm_client()
         mock = setup_sync_response(client, "Some text")
@@ -92,10 +99,10 @@ class TestVLLMGuidedDecoding:
 
         client.complete("Prompt", question=question)
 
-        call_kwargs = mock.chat.completions.create.call_args.kwargs
+        call_kwargs = mock.completions.create.call_args.kwargs
         assert "extra_body" not in call_kwargs
 
-        # multiple_select and ranking use response_format (json_schema), not extra_body
+        # vLLM multiple_select and ranking use response_format (json_schema) in both API modes
         for qtype in ["multiple_select", "ranking"]:
             client = make_vllm_client()
             if qtype == "multiple_select":
@@ -107,7 +114,7 @@ class TestVLLMGuidedDecoding:
 
             client.complete("Prompt", question=question)
 
-            call_kwargs = mock.chat.completions.create.call_args.kwargs
+            call_kwargs = mock.completions.create.call_args.kwargs
             assert "response_format" in call_kwargs, f"response_format should be in kwargs for {qtype}"
             assert call_kwargs["response_format"]["type"] == "json_schema"
 
@@ -130,7 +137,7 @@ class TestVLLMGuidedDecoding:
 
         client.complete("Prompt", question=question)
 
-        call_kwargs = mock.chat.completions.create.call_args.kwargs
+        call_kwargs = mock.completions.create.call_args.kwargs
         assert "extra_body" not in call_kwargs
         assert call_kwargs["max_tokens"] == 128  # default, not 1
 
@@ -148,7 +155,7 @@ class TestVLLMGuidedDecoding:
 
             client.complete("Prompt", question=question)
 
-            call_kwargs = mock.chat.completions.create.call_args.kwargs
+            call_kwargs = mock.completions.create.call_args.kwargs
             assert call_kwargs["extra_body"]["structured_outputs"]["choice"] == expected_choices, \
                 f"Expected {expected_choices} for {len(options)} options"
 
@@ -159,20 +166,31 @@ class TestVLLMGuidedDecoding:
 
         result = client.complete("Prompt")
 
-        call_kwargs = mock.chat.completions.create.call_args.kwargs
+        call_kwargs = mock.completions.create.call_args.kwargs
         assert "extra_body" not in call_kwargs
         assert result.answer == "B"
 
-    def test_vllm_uses_chat_completions_api(self):
-        """vLLM now uses chat.completions.create (not raw /v1/completions)."""
+    def test_vllm_default_uses_completions_api(self):
+        """Default mode uses /v1/completions."""
         client = make_vllm_client()
         mock = setup_sync_response(client, "A")
         question = Question(qkey="q1", type="mcq", text="Q?", options=["Yes", "No"])
 
         client.complete("Prompt", question=question)
 
-        # It calls chat.completions.create (not /v1/completions directly)
+        mock.completions.create.assert_called_once()
+        mock.chat.completions.create.assert_not_called()
+
+    def test_vllm_chat_mode_uses_chat_api(self):
+        """Chat template mode uses /v1/chat/completions."""
+        client = make_vllm_client(use_chat_template=True)
+        mock = setup_sync_response(client, "A")
+        question = Question(qkey="q1", type="mcq", text="Q?", options=["Yes", "No"])
+
+        client.complete("Prompt", question=question)
+
         mock.chat.completions.create.assert_called_once()
+        mock.completions.create.assert_not_called()
 
 
 # ===========================================================================
@@ -187,7 +205,7 @@ class TestParserLLM:
         """ParserLLM correctly extracts letter from verbose response."""
         with patch("src.parser.OpenAI") as MockOpenAI, patch("src.parser.AsyncOpenAI"):
             mock_sync = MagicMock()
-            mock_sync.chat.completions.create.return_value = make_mock_completion("Answer: B")
+            mock_sync.chat.completions.create.return_value = make_mock_chat_completion("Answer: B")
             MockOpenAI.return_value = mock_sync
 
             parser = ParserLLM(api_key="test-key", model="google/gemini-2.0-flash-001")
@@ -200,7 +218,7 @@ class TestParserLLM:
         """ParserLLM returns empty string when parser responds with 'X'."""
         with patch("src.parser.OpenAI") as MockOpenAI, patch("src.parser.AsyncOpenAI"):
             mock_sync = MagicMock()
-            mock_sync.chat.completions.create.return_value = make_mock_completion("Answer: X")
+            mock_sync.chat.completions.create.return_value = make_mock_chat_completion("Answer: X")
             MockOpenAI.return_value = mock_sync
 
             parser = ParserLLM(api_key="test-key", model="google/gemini-2.0-flash-001")
@@ -220,7 +238,7 @@ class TestParserLLM:
         """Parser prompt includes question text, options, and raw response."""
         with patch("src.parser.OpenAI") as MockOpenAI, patch("src.parser.AsyncOpenAI"):
             mock_sync = MagicMock()
-            mock_sync.chat.completions.create.return_value = make_mock_completion("Answer: A")
+            mock_sync.chat.completions.create.return_value = make_mock_chat_completion("Answer: A")
             MockOpenAI.return_value = mock_sync
 
             parser = ParserLLM(api_key="test-key", model="test-model")
@@ -243,7 +261,7 @@ class TestParserLLM:
         """Parser handles response without 'Answer:' prefix."""
         with patch("src.parser.OpenAI") as MockOpenAI, patch("src.parser.AsyncOpenAI"):
             mock_sync = MagicMock()
-            mock_sync.chat.completions.create.return_value = make_mock_completion("A")
+            mock_sync.chat.completions.create.return_value = make_mock_chat_completion("A")
             MockOpenAI.return_value = mock_sync
 
             parser = ParserLLM(api_key="test-key", model="test-model")

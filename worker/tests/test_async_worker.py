@@ -157,7 +157,7 @@ class TestAsyncUnifiedLLMClient:
 
     @pytest.mark.asyncio
     async def test_async_complete_openrouter(self):
-        """Async OpenRouter complete parses JSON response."""
+        """Async OpenRouter complete parses text response (default completions mode)."""
         with patch("src.llm.OpenAI"), patch("src.llm.AsyncOpenAI"):
             client = UnifiedLLMClient(
                 base_url="https://openrouter.ai/api/v1",
@@ -167,21 +167,21 @@ class TestAsyncUnifiedLLMClient:
             )
 
         mock_completion = Mock()
-        mock_completion.choices = [Mock(message=Mock(content='{"answer": "A"}'))]
+        mock_completion.choices = [Mock(text="(A)")]
 
         mock_async = AsyncMock()
-        mock_async.chat.completions.create.return_value = mock_completion
+        mock_async.completions.create.return_value = mock_completion
         client._async_client = mock_async
 
         result = await client.async_complete("Test prompt")
         assert result.answer == "A"
-        mock_async.chat.completions.create.assert_called_once()
+        mock_async.completions.create.assert_called_once()
 
         await client.close()
 
     @pytest.mark.asyncio
     async def test_async_complete_vllm_guided(self):
-        """Async vLLM complete sends extra_body with guided decoding."""
+        """Async vLLM complete sends extra_body with guided decoding via completions API."""
         with patch("src.llm.OpenAI"), patch("src.llm.AsyncOpenAI"):
             client = UnifiedLLMClient(
                 base_url="http://localhost:8000/v1",
@@ -191,17 +191,17 @@ class TestAsyncUnifiedLLMClient:
             )
 
         mock_completion = Mock()
-        mock_completion.choices = [Mock(message=Mock(content="A"))]
+        mock_completion.choices = [Mock(text="A")]
 
         mock_async = AsyncMock()
-        mock_async.chat.completions.create.return_value = mock_completion
+        mock_async.completions.create.return_value = mock_completion
         client._async_client = mock_async
 
         question = Question(qkey="q1", type="mcq", text="Test?", options=["Yes", "No"])
         result = await client.async_complete("Test prompt", question=question)
 
         assert result.answer == "A"
-        call_kwargs = mock_async.chat.completions.create.call_args.kwargs
+        call_kwargs = mock_async.completions.create.call_args.kwargs
         assert "extra_body" in call_kwargs
         assert call_kwargs["extra_body"]["structured_outputs"]["choice"] == ["A", "B"]
 
@@ -221,7 +221,7 @@ class TestAsyncUnifiedLLMClient:
             )
 
         mock_async = AsyncMock()
-        mock_async.chat.completions.create.side_effect = openai_module.RateLimitError(
+        mock_async.completions.create.side_effect = openai_module.RateLimitError(
             message="Rate limited",
             response=Mock(status_code=429),
             body=None,

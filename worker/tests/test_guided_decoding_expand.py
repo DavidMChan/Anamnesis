@@ -23,8 +23,8 @@ from src.worker import TaskProcessor
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def make_mock_completion(content: str):
-    """Create a mock OpenAI ChatCompletion response."""
+def make_mock_chat_completion(content: str):
+    """Create a mock OpenAI ChatCompletion response (for ParserLLM tests)."""
     choice = Mock()
     choice.message = Mock()
     choice.message.content = content
@@ -49,14 +49,24 @@ def make_vllm_client(**kwargs) -> UnifiedLLMClient:
 
 
 def setup_sync_response(client, content):
+    """Set up sync mock responses for both /v1/completions and /v1/chat/completions."""
     mock_sync = MagicMock()
-    mock_sync.chat.completions.create.return_value = make_mock_completion(content)
+    # /v1/completions (default mode)
+    text_choice = Mock()
+    text_choice.text = content
+    mock_sync.completions.create.return_value = Mock(choices=[text_choice])
+    # /v1/chat/completions (chat template mode)
+    chat_choice = Mock()
+    chat_choice.message = Mock(content=content)
+    mock_sync.chat.completions.create.return_value = Mock(choices=[chat_choice])
     client._sync_client = mock_sync
     return mock_sync
 
 
-def get_call_kwargs(mock):
-    return mock.chat.completions.create.call_args.kwargs
+def get_call_kwargs(mock, chat=False):
+    if chat:
+        return mock.chat.completions.create.call_args.kwargs
+    return mock.completions.create.call_args.kwargs
 
 
 # ===========================================================================
@@ -65,10 +75,10 @@ def get_call_kwargs(mock):
 
 
 class TestMultipleSelectGuidedDecoding:
-    """Tests for multiple_select: JSON schema via response_format."""
+    """Tests for multiple_select: JSON schema via response_format (vLLM supports both API modes)."""
 
     def test_vllm_multiple_select_uses_json_schema(self):
-        """Multiple select uses response_format with json_schema (boolean map)."""
+        """Multiple select uses response_format with json_schema."""
         client = make_vllm_client()
         json_resp = '{"choice_A": true, "choice_B": false, "choice_C": true, "choice_D": true}'
         mock = setup_sync_response(client, json_resp)
@@ -263,7 +273,7 @@ class TestOpenResponseHandling:
         question = Question(qkey="q1", type="open_response", text="What do you think?")
 
         result = client.complete("Prompt", question=question)
-        assert result.answer == text
+        assert result.answer == text.strip()
 
     def test_vllm_open_response_no_compliance_retry(self):
         """Open response skips compliance forcing (any non-empty text is valid)."""
@@ -321,7 +331,7 @@ class TestMCQRegression:
 
         client.complete("Prompt", question=question)
 
-        kwargs = get_call_kwargs(mock)
+        kwargs = get_call_kwargs(mock)  # completions mode by default
         assert kwargs["extra_body"]["structured_outputs"]["choice"] == ["A", "B", "C", "D"]
         assert kwargs["max_tokens"] == 1
 
@@ -338,7 +348,7 @@ class TestParserLLMExtension:
         """Parser LLM extracts comma-separated letters for multiple_select."""
         with patch("src.parser.OpenAI") as MockOpenAI, patch("src.parser.AsyncOpenAI"):
             mock_sync = MagicMock()
-            mock_sync.chat.completions.create.return_value = make_mock_completion("A, C, D")
+            mock_sync.chat.completions.create.return_value = make_mock_chat_completion("A, C, D")
             MockOpenAI.return_value = mock_sync
 
             parser = ParserLLM(api_key="test-key", model="test-model")
@@ -352,7 +362,7 @@ class TestParserLLMExtension:
         """Parser LLM extracts ordered letters for ranking."""
         with patch("src.parser.OpenAI") as MockOpenAI, patch("src.parser.AsyncOpenAI"):
             mock_sync = MagicMock()
-            mock_sync.chat.completions.create.return_value = make_mock_completion("B, A, C, D")
+            mock_sync.chat.completions.create.return_value = make_mock_chat_completion("B, A, C, D")
             MockOpenAI.return_value = mock_sync
 
             parser = ParserLLM(api_key="test-key", model="test-model")
@@ -366,7 +376,7 @@ class TestParserLLMExtension:
         """Parser prompt instructs 'Answer as comma-separated letters' for multiple_select."""
         with patch("src.parser.OpenAI") as MockOpenAI, patch("src.parser.AsyncOpenAI"):
             mock_sync = MagicMock()
-            mock_sync.chat.completions.create.return_value = make_mock_completion("A, C")
+            mock_sync.chat.completions.create.return_value = make_mock_chat_completion("A, C")
             MockOpenAI.return_value = mock_sync
 
             parser = ParserLLM(api_key="test-key", model="test-model")
@@ -386,7 +396,7 @@ class TestParserLLMExtension:
         """Parser prompt instructs 'Answer as ordered comma-separated letters' for ranking."""
         with patch("src.parser.OpenAI") as MockOpenAI, patch("src.parser.AsyncOpenAI"):
             mock_sync = MagicMock()
-            mock_sync.chat.completions.create.return_value = make_mock_completion("B, A, C")
+            mock_sync.chat.completions.create.return_value = make_mock_chat_completion("B, A, C")
             MockOpenAI.return_value = mock_sync
 
             parser = ParserLLM(api_key="test-key", model="test-model")

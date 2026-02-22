@@ -42,6 +42,7 @@ def create_llm_client(llm_config: LLMConfig) -> UnifiedLLMClient:
         temperature=llm_config.temperature,
         max_tokens=llm_config.max_tokens,
         use_guided_decoding=llm_config.use_guided_decoding,
+        use_chat_template=llm_config.use_chat_template,
     )
 
 
@@ -143,8 +144,9 @@ async def main():
 
         llm_cache[run_id] = llm
         parser_cache[run_id] = parser_llm
+        api_mode = "chat" if run_llm_config.use_chat_template else "completions"
         logger.info(f"Created LLM client for run {run_id}: {run_llm_config.provider} "
-                     f"(temp={run_llm_config.temperature}, max_tokens={run_llm_config.max_tokens})")
+                     f"(mode={api_mode}, temp={run_llm_config.temperature}, max_tokens={run_llm_config.max_tokens})")
         if parser_llm:
             logger.info(f"Parser LLM enabled for run {run_id}: {run_llm_config.parser_llm_model}")
 

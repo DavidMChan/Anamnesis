@@ -15,16 +15,6 @@ from src.prompt import Question
 # ─── Helpers ─────────────────────────────────────────────────────────────────
 
 
-def make_mock_completion(content: str):
-    """Create a mock OpenAI ChatCompletion response."""
-    choice = Mock()
-    choice.message = Mock()
-    choice.message.content = content
-    completion = Mock()
-    completion.choices = [choice]
-    return completion
-
-
 def make_client(provider="openrouter", **kwargs):
     """Create a UnifiedLLMClient with mocked internal clients."""
     defaults = dict(
@@ -41,9 +31,16 @@ def make_client(provider="openrouter", **kwargs):
 
 
 def setup_sync_mock(client, content: str):
-    """Set up a sync mock response on the client."""
+    """Set up sync mock responses for both /v1/completions and /v1/chat/completions."""
     mock_sync = MagicMock()
-    mock_sync.chat.completions.create.return_value = make_mock_completion(content)
+    # /v1/completions (default mode)
+    text_choice = Mock()
+    text_choice.text = content
+    mock_sync.completions.create.return_value = Mock(choices=[text_choice])
+    # /v1/chat/completions (chat template mode)
+    chat_choice = Mock()
+    chat_choice.message = Mock(content=content)
+    mock_sync.chat.completions.create.return_value = Mock(choices=[chat_choice])
     client._sync_client = mock_sync
     return mock_sync
 
@@ -85,7 +82,7 @@ class TestStructuredParams:
         assert params == {"extra_body": {"structured_outputs": {"choice": ["A", "B", "C", "D"]}}}
 
     def test_vllm_multiple_select_json_schema(self):
-        """vLLM multiple_select returns response_format with boolean map schema."""
+        """vLLM multiple_select returns response_format with boolean map schema (both API modes)."""
         client = make_client(provider="vllm")
         question = Question(qkey="q1", type="multiple_select", text="Q?", options=["X", "Y", "Z", "W"])
         params = client._build_create_params(question)
@@ -96,7 +93,7 @@ class TestStructuredParams:
         assert schema["properties"]["choice_A"]["type"] == "boolean"
 
     def test_vllm_ranking_json_schema(self):
-        """vLLM ranking returns response_format with ranking array schema."""
+        """vLLM ranking returns response_format with ranking array schema (both API modes)."""
         client = make_client(provider="vllm")
         question = Question(qkey="q1", type="ranking", text="Q?", options=["X", "Y", "Z"])
         params = client._build_create_params(question)
@@ -106,14 +103,21 @@ class TestStructuredParams:
         assert schema["properties"]["ranking"]["minItems"] == 3
         assert schema["properties"]["ranking"]["maxItems"] == 3
 
-    def test_openrouter_mcq_json_schema(self):
-        """OpenRouter MCQ returns response_format with json_schema."""
-        client = make_client(provider="openrouter")
+    def test_openrouter_mcq_json_schema_chat_mode(self):
+        """OpenRouter MCQ returns response_format with json_schema (chat mode only)."""
+        client = make_client(provider="openrouter", use_chat_template=True)
         question = Question(qkey="q1", type="mcq", text="Q?", options=["Yes", "No"])
         params = client._build_create_params(question)
         assert "response_format" in params
         assert params["response_format"]["type"] == "json_schema"
         assert params["response_format"]["json_schema"]["strict"] is True
+
+    def test_openrouter_mcq_no_schema_completions_mode(self):
+        """OpenRouter MCQ returns empty params in completions mode."""
+        client = make_client(provider="openrouter")
+        question = Question(qkey="q1", type="mcq", text="Q?", options=["Yes", "No"])
+        params = client._build_create_params(question)
+        assert params == {}
 
     def test_no_guided_for_open_response(self):
         """No structured params for open_response."""
@@ -171,16 +175,16 @@ class TestEffectiveMaxTokens:
 class TestSyncComplete:
     """Tests for sync complete()."""
 
-    def test_openrouter_parses_json_response(self):
-        """OpenRouter JSON response is parsed correctly."""
-        client = make_client(provider="openrouter")
+    def test_openrouter_parses_json_response_chat_mode(self):
+        """OpenRouter JSON response is parsed correctly in chat mode."""
+        client = make_client(provider="openrouter", use_chat_template=True)
         mock = setup_sync_mock(client, '{"answer": "C"}')
         result = client.complete("Test prompt")
         assert result.answer == "C"
 
-    def test_openrouter_sends_response_format(self):
-        """OpenRouter complete sends response_format in create call."""
-        client = make_client(provider="openrouter")
+    def test_openrouter_sends_response_format_chat_mode(self):
+        """OpenRouter complete sends response_format in chat mode."""
+        client = make_client(provider="openrouter", use_chat_template=True)
         mock = setup_sync_mock(client, '{"answer": "A"}')
         question = Question(qkey="q1", type="mcq", text="Q?", options=["Yes", "No"])
 
@@ -191,14 +195,14 @@ class TestSyncComplete:
         assert call_kwargs["response_format"]["type"] == "json_schema"
 
     def test_vllm_sends_extra_body(self):
-        """vLLM complete sends extra_body with structured_outputs."""
+        """vLLM complete sends extra_body with structured_outputs via completions API."""
         client = make_client(provider="vllm")
         mock = setup_sync_mock(client, "B")
         question = Question(qkey="q1", type="mcq", text="Q?", options=["Yes", "No"])
 
         client.complete("Test", question=question)
 
-        call_kwargs = mock.chat.completions.create.call_args.kwargs
+        call_kwargs = mock.completions.create.call_args.kwargs
         assert "extra_body" in call_kwargs
         assert call_kwargs["extra_body"]["structured_outputs"]["choice"] == ["A", "B"]
         assert call_kwargs["max_tokens"] == 1
@@ -226,6 +230,28 @@ class TestSyncComplete:
         result = client.complete("Test")
         assert result.answer == "B"
 
+    def test_default_uses_completions_api(self):
+        """Default mode uses /v1/completions (not chat)."""
+        client = make_client(provider="vllm")
+        mock = setup_sync_mock(client, "A")
+        question = Question(qkey="q1", type="mcq", text="Q?", options=["Yes", "No"])
+
+        client.complete("Test", question=question)
+
+        mock.completions.create.assert_called_once()
+        mock.chat.completions.create.assert_not_called()
+
+    def test_chat_mode_uses_chat_api(self):
+        """Chat template mode uses /v1/chat/completions."""
+        client = make_client(provider="vllm", use_chat_template=True)
+        mock = setup_sync_mock(client, "A")
+        question = Question(qkey="q1", type="mcq", text="Q?", options=["Yes", "No"])
+
+        client.complete("Test", question=question)
+
+        mock.chat.completions.create.assert_called_once()
+        mock.completions.create.assert_not_called()
+
 
 class TestErrorMapping:
     """Tests for OpenAI SDK exception mapping."""
@@ -234,7 +260,7 @@ class TestErrorMapping:
         """AuthenticationError → NonRetryableError."""
         client = make_client()
         client._sync_client = MagicMock()
-        client._sync_client.chat.completions.create.side_effect = openai.AuthenticationError(
+        client._sync_client.completions.create.side_effect = openai.AuthenticationError(
             message="Invalid API key",
             response=Mock(status_code=401),
             body=None,
@@ -246,7 +272,7 @@ class TestErrorMapping:
         """RateLimitError → RetryableError."""
         client = make_client()
         client._sync_client = MagicMock()
-        client._sync_client.chat.completions.create.side_effect = openai.RateLimitError(
+        client._sync_client.completions.create.side_effect = openai.RateLimitError(
             message="Rate limited",
             response=Mock(status_code=429),
             body=None,
@@ -258,7 +284,7 @@ class TestErrorMapping:
         """500+ APIStatusError → RetryableError."""
         client = make_client()
         client._sync_client = MagicMock()
-        client._sync_client.chat.completions.create.side_effect = openai.InternalServerError(
+        client._sync_client.completions.create.side_effect = openai.InternalServerError(
             message="Server error",
             response=Mock(status_code=500),
             body=None,
@@ -270,7 +296,7 @@ class TestErrorMapping:
         """BadRequestError (non-schema) → NonRetryableError."""
         client = make_client()
         client._sync_client = MagicMock()
-        client._sync_client.chat.completions.create.side_effect = openai.BadRequestError(
+        client._sync_client.completions.create.side_effect = openai.BadRequestError(
             message="Invalid model",
             response=Mock(status_code=400),
             body=None,
@@ -279,19 +305,22 @@ class TestErrorMapping:
             client.complete("Test")
 
     def test_structured_output_not_supported_openrouter_falls_back(self):
-        """OpenRouter schema error falls back to text mode."""
-        client = make_client(provider="openrouter")
+        """OpenRouter schema error in chat mode falls back to text mode."""
+        client = make_client(provider="openrouter", use_chat_template=True)
         mock = MagicMock()
 
         # First call raises BadRequestError with schema message
         # Second call (text fallback) succeeds
+        chat_choice = Mock()
+        chat_choice.message = Mock(content="A")
+        fallback_response = Mock(choices=[chat_choice])
         mock.chat.completions.create.side_effect = [
             openai.BadRequestError(
                 message="json_schema not supported",
                 response=Mock(status_code=400),
                 body=None,
             ),
-            make_mock_completion("A"),
+            fallback_response,
         ]
         client._sync_client = mock
 
@@ -303,7 +332,7 @@ class TestErrorMapping:
         """vLLM schema error raises StructuredOutputNotSupported."""
         client = make_client(provider="vllm")
         client._sync_client = MagicMock()
-        client._sync_client.chat.completions.create.side_effect = openai.BadRequestError(
+        client._sync_client.completions.create.side_effect = openai.BadRequestError(
             message="json schema not supported",
             response=Mock(status_code=400),
             body=None,

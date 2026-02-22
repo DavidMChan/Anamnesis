@@ -21,6 +21,8 @@ export interface LLMConfig {
   temperature?: number       // e.g., 0.0
   max_tokens?: number        // e.g., 512
 
+  // Inference mode
+  use_chat_template?: boolean    // Use /v1/chat/completions instead of /v1/completions
   // vLLM-specific inference settings
   use_guided_decoding?: boolean  // Enable vLLM guided decoding for MCQ parsing
 

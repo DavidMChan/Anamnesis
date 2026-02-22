@@ -37,6 +37,7 @@ class LLMConfig:
     temperature: float = 0.0
     max_tokens: Optional[int] = 512
     use_guided_decoding: bool = True
+    use_chat_template: bool = False  # False = /v1/completions (default), True = /v1/chat/completions
 
     # Parser LLM (Tier 2 fallback for MCQ parsing) — reuses OpenRouter API key
     parser_llm_model: str = "google/gemini-2.0-flash-001"
@@ -86,6 +87,7 @@ class LLMConfig:
             temperature=user_config.get("temperature") if user_config.get("temperature") is not None else 0.0,
             max_tokens=user_config.get("max_tokens") if user_config.get("max_tokens") is not None else 512,
             use_guided_decoding=user_config.get("use_guided_decoding") if user_config.get("use_guided_decoding") is not None else True,
+            use_chat_template=user_config.get("use_chat_template") if user_config.get("use_chat_template") is not None else False,
             parser_llm_model=user_config.get("parser_llm_model") or "google/gemini-2.0-flash-001",
         )
 
