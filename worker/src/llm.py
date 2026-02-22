@@ -123,9 +123,13 @@ class UnifiedLLMClient:
         try:
             data = json.loads(content)
         except json.JSONDecodeError:
-            raise TruncationError(
-                f"Response appears truncated. Raw: {content[:200]}"
-            )
+            # Truncated JSON (max_tokens hit mid-generation, often due to
+            # base models wasting tokens on whitespace).  Return empty answer
+            # so the compliance retry loop handles it per-question, rather
+            # than blowing up the entire task.
+            logger.warning(f"Structured output truncated (len={len(content)}). "
+                           f"Raw: {content[:200]!r}")
+            return LLMResponse(answer="", raw=content)
 
         if question.type == "mcq":
             return LLMResponse(answer=data.get("answer", ""), raw=content)
