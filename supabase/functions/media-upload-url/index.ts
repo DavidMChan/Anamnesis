@@ -50,22 +50,27 @@ serve(async (req: Request) => {
     const uuid = crypto.randomUUID();
     const key = `media/${uuid}/${filename}`;
 
-    // Create S3 client for Wasabi
+    // Wasabi S3 client — per official docs:
+    // https://docs.wasabi.com/docs/how-do-i-use-aws-sdk-for-javascript-v3-with-wasabi
+    // region and endpoint must match (e.g. us-west-2 + s3.us-west-2.wasabisys.com)
+    const wasabiRegion = Deno.env.get("WASABI_REGION") || "us-west-2";
+    const wasabiEndpoint = Deno.env.get("WASABI_ENDPOINT") || `https://s3.${wasabiRegion}.wasabisys.com`;
+
     const s3 = new S3Client({
-      region: Deno.env.get("WASABI_REGION") || "us-west-2",
-      endpoint: Deno.env.get("WASABI_ENDPOINT") || "https://s3.wasabisys.com",
+      region: wasabiRegion,
+      endpoint: wasabiEndpoint,
       credentials: {
         accessKeyId: Deno.env.get("WASABI_ACCESS_KEY_ID")!,
         secretAccessKey: Deno.env.get("WASABI_SECRET_ACCESS_KEY")!,
       },
-      forcePathStyle: true,
+      requestChecksumCalculation: "WHEN_REQUIRED",
+      responseChecksumValidation: "WHEN_REQUIRED",
     });
 
     // Generate presigned PUT URL (5-minute expiry)
     const command = new PutObjectCommand({
       Bucket: Deno.env.get("WASABI_BUCKET")!,
       Key: key,
-      ContentType: contentType,
     });
 
     const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
