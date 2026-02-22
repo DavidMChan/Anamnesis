@@ -48,21 +48,20 @@ serve(async (req: Request) => {
 
     // Wasabi S3 client — per official docs:
     // https://docs.wasabi.com/docs/how-do-i-use-aws-sdk-for-javascript-v3-with-wasabi
-    const wasabiRegion = Deno.env.get("WASABI_REGION") || "us-west-2";
-    const wasabiEndpoint = Deno.env.get("WASABI_ENDPOINT") || `https://s3.${wasabiRegion}.wasabisys.com`;
+    const region = Deno.env.get("WASABI_REGION") || "us-west-2";
+    const endpoint = `https://s3.${region}.wasabisys.com`;
 
     const s3 = new S3Client({
-      region: wasabiRegion,
-      endpoint: wasabiEndpoint,
       credentials: {
         accessKeyId: Deno.env.get("WASABI_ACCESS_KEY_ID")!,
         secretAccessKey: Deno.env.get("WASABI_SECRET_ACCESS_KEY")!,
       },
-      requestChecksumCalculation: "WHEN_REQUIRED",
-      responseChecksumValidation: "WHEN_REQUIRED",
+      region,
+      endpoint,
     });
 
     // Generate presigned GET URL (1-hour expiry)
+    // GET URLs are used in <img src> / <audio src> — no CORS needed
     const command = new GetObjectCommand({
       Bucket: Deno.env.get("WASABI_BUCKET")!,
       Key: key,

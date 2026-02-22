@@ -48,8 +48,8 @@ export function MediaUpload({ value, onChange, compact = false }: MediaUploadPro
       return
     }
 
-    if (file.size > 25 * 1024 * 1024) {
-      setError(`File too large (${formatFileSize(file.size)}). Max 25 MB.`)
+    if (file.size > 500 * 1024 * 1024) {
+      setError(`File too large (${formatFileSize(file.size)}). Max 500 MB.`)
       return
     }
 

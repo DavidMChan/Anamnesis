@@ -1,7 +1,7 @@
 import { supabase } from './supabase'
 import type { MediaAttachment } from '@/types/database'
 
-const MAX_FILE_SIZE = 25 * 1024 * 1024 // 25 MB
+const MAX_FILE_SIZE = 500 * 1024 * 1024 // 500 MB
 
 const ACCEPTABLE_TYPES = ['image/', 'audio/']
 
@@ -22,12 +22,14 @@ export function formatFileSize(bytes: number): string {
 }
 
 /**
- * Upload a file to Wasabi via Edge Function presigned URL.
+ * Upload a file to Wasabi via presigned POST.
  *
  * Flow:
- * 1. Call Edge Function to get presigned PUT URL + object key
- * 2. PUT file directly to Wasabi
+ * 1. Call Edge Function to get presigned POST URL + form fields
+ * 2. POST file as FormData directly to Wasabi (no CORS config needed — Wasabi auto-handles it)
  * 3. Return MediaAttachment with key, type, name
+ *
+ * Uses the same mechanism as boto3's generate_presigned_post.
  */
 export async function uploadMedia(file: File): Promise<MediaAttachment> {
   // Validate file size
@@ -40,7 +42,7 @@ export async function uploadMedia(file: File): Promise<MediaAttachment> {
     throw new Error(`Unsupported file type: ${file.type}. Only images and audio files are accepted.`)
   }
 
-  // Get presigned upload URL from Edge Function
+  // Get presigned POST URL + fields from Edge Function
   const { data, error } = await supabase.functions.invoke('media-upload-url', {
     body: { filename: file.name, contentType: file.type },
   })
@@ -49,19 +51,24 @@ export async function uploadMedia(file: File): Promise<MediaAttachment> {
     throw new Error(`Failed to get upload URL: ${error.message}`)
   }
 
-  const { uploadUrl, key } = data as { uploadUrl: string; key: string }
+  const { url, fields, key } = data as { url: string; fields: Record<string, string>; key: string }
 
-  // Upload file directly to Wasabi via presigned URL
-  const uploadResponse = await fetch(uploadUrl, {
-    method: 'PUT',
-    body: file,
-    headers: {
-      'Content-Type': file.type,
-    },
+  // Build FormData with policy fields + file (file MUST be last)
+  const formData = new FormData()
+  for (const [k, v] of Object.entries(fields)) {
+    formData.append(k, v)
+  }
+  formData.append('file', file)
+
+  // POST directly to Wasabi
+  const uploadResponse = await fetch(url, {
+    method: 'POST',
+    body: formData,
   })
 
   if (!uploadResponse.ok) {
-    throw new Error(`Upload failed: ${uploadResponse.statusText}`)
+    const text = await uploadResponse.text().catch(() => '')
+    throw new Error(`Upload failed (${uploadResponse.status}): ${text}`)
   }
 
   return {

@@ -1,6 +1,6 @@
 import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
-import { S3Client, PutObjectCommand } from "npm:@aws-sdk/client-s3";
-import { getSignedUrl } from "npm:@aws-sdk/s3-request-presigner";
+import { S3Client } from "npm:@aws-sdk/client-s3";
+import { createPresignedPost } from "npm:@aws-sdk/s3-presigned-post";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
 
 const corsHeaders = {
@@ -52,35 +52,39 @@ serve(async (req: Request) => {
 
     // Wasabi S3 client — per official docs:
     // https://docs.wasabi.com/docs/how-do-i-use-aws-sdk-for-javascript-v3-with-wasabi
-    // region and endpoint must match (e.g. us-west-2 + s3.us-west-2.wasabisys.com)
-    const wasabiRegion = Deno.env.get("WASABI_REGION") || "us-west-2";
-    const wasabiEndpoint = Deno.env.get("WASABI_ENDPOINT") || `https://s3.${wasabiRegion}.wasabisys.com`;
+    const region = Deno.env.get("WASABI_REGION") || "us-west-2";
+    const endpoint = `https://s3.${region}.wasabisys.com`;
 
     const s3 = new S3Client({
-      region: wasabiRegion,
-      endpoint: wasabiEndpoint,
       credentials: {
         accessKeyId: Deno.env.get("WASABI_ACCESS_KEY_ID")!,
         secretAccessKey: Deno.env.get("WASABI_SECRET_ACCESS_KEY")!,
       },
-      requestChecksumCalculation: "WHEN_REQUIRED",
-      responseChecksumValidation: "WHEN_REQUIRED",
+      region,
+      endpoint,
     });
 
-    // Generate presigned PUT URL (5-minute expiry)
-    const command = new PutObjectCommand({
+    // Generate presigned POST (same mechanism as boto3 generate_presigned_post)
+    // Wasabi auto-handles CORS, so browser POST works without bucket CORS config
+    const { url, fields } = await createPresignedPost(s3, {
       Bucket: Deno.env.get("WASABI_BUCKET")!,
       Key: key,
+      Conditions: [
+        ["content-length-range", 1, 500 * 1024 * 1024], // 1 byte to 500 MB
+        ["eq", "$Content-Type", contentType],
+      ],
+      Expires: 300, // 5 minutes
+      Fields: {
+        "Content-Type": contentType,
+      },
     });
 
-    const uploadUrl = await getSignedUrl(s3, command, { expiresIn: 300 });
-
-    return new Response(JSON.stringify({ uploadUrl, key }), {
+    return new Response(JSON.stringify({ url, fields, key }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
   } catch (err) {
     console.error("Error generating upload URL:", err);
-    return new Response(JSON.stringify({ error: "Internal server error" }), {
+    return new Response(JSON.stringify({ error: "Internal server error", detail: String(err) }), {
       status: 500,
       headers: { ...corsHeaders, "Content-Type": "application/json" },
     });
