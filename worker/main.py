@@ -59,30 +59,28 @@ def create_parser_llm(llm_config: LLMConfig) -> Optional[ParserLLM]:
     return None
 
 
-def get_llm_config_for_user(db: DatabaseClient, user_id: str) -> LLMConfig:
+def get_llm_config_for_run(db: DatabaseClient, run_id: str) -> LLMConfig:
     """
-    Get LLM config for a user. Raises ValueError if not configured.
+    Get LLM config from a survey run's snapshot. Raises ValueError if missing.
 
-    Args:
-        db: Database client
-        user_id: UUID of the user
-
-    Returns:
-        LLMConfig from user's database settings
-
-    Raises:
-        ValueError: If user has no LLM config or it is incomplete
+    The snapshot (survey_runs.llm_config) was created at run time and includes
+    per-survey overrides for temperature/max_tokens already merged in.
+    API keys are fetched from Vault via the owning user.
     """
-    user_config = db.get_user_llm_config(user_id)
+    ctx = db.get_run_llm_context(run_id)
+    if not ctx:
+        raise ValueError(f"Survey run {run_id} not found")
 
-    if not user_config or not user_config.get("provider"):
-        raise ValueError(
-            f"User {user_id} has no LLM configuration. "
-            "Please configure LLM settings in the Settings page."
-        )
+    run_config = ctx.get("llm_config")
+    user_id = ctx.get("user_id")
 
-    # Fetch API key based on provider
-    provider = user_config["provider"]
+    if not run_config or not run_config.get("provider"):
+        raise ValueError(f"Survey run {run_id} has no LLM configuration snapshot")
+    if not user_id:
+        raise ValueError(f"Survey run {run_id} has no associated user")
+
+    # Fetch API key from Vault (not stored in snapshot)
+    provider = run_config["provider"]
     api_key = None
 
     if provider == "openrouter":
@@ -94,9 +92,8 @@ def get_llm_config_for_user(db: DatabaseClient, user_id: str) -> LLMConfig:
             )
     elif provider == "vllm":
         api_key = db.get_user_api_key(user_id, "vllm")
-        # vLLM key is optional — some deployments don't need auth
 
-    return LLMConfig.from_user_config(user_config, api_key=api_key)
+    return LLMConfig.from_user_config(run_config, api_key=api_key)
 
 
 async def main():
@@ -109,7 +106,8 @@ async def main():
     # Database client (sync — calls wrapped in to_thread)
     db = DatabaseClient(config.supabase)
 
-    # Cache for LLM clients and parser LLMs per user
+    # Cache for LLM clients and parser LLMs per survey run
+    # (each run snapshots its own temperature/max_tokens)
     llm_cache: Dict[str, UnifiedLLMClient] = {}
     parser_cache: Dict[str, Optional[ParserLLM]] = {}
 
@@ -124,34 +122,31 @@ async def main():
 
     async def get_llm_for_task(task: Dict[str, Any]) -> tuple[UnifiedLLMClient, Optional[ParserLLM]]:
         """
-        Get or create LLM client + parser for a task based on the survey run's user.
+        Get or create LLM client + parser for a task's survey run.
 
-        Accepts the task dict directly (no extra DB fetch).
-        Raises ValueError if the run/user chain is broken or user has no config.
+        Uses the llm_config snapshot stored on survey_runs (includes
+        per-survey temperature/max_tokens overrides).
         """
         run_id = task.get("survey_run_id")
         if not run_id:
             raise ValueError(f"Task {task['id']} has no associated survey run")
 
-        user_id = await asyncio.to_thread(db.get_survey_run_user_id, run_id)
-        if not user_id:
-            raise ValueError(f"Survey run {run_id} has no associated user")
+        if run_id in llm_cache:
+            return llm_cache[run_id], parser_cache.get(run_id)
 
-        if user_id in llm_cache:
-            return llm_cache[user_id], parser_cache.get(user_id)
-
-        # Get user's LLM config and create client
-        user_llm_config = await asyncio.to_thread(
-            get_llm_config_for_user, db, user_id
+        # Get run's LLM config snapshot + API key from owning user
+        run_llm_config = await asyncio.to_thread(
+            get_llm_config_for_run, db, run_id
         )
-        llm = create_llm_client(user_llm_config)
-        parser_llm = create_parser_llm(user_llm_config)
+        llm = create_llm_client(run_llm_config)
+        parser_llm = create_parser_llm(run_llm_config)
 
-        llm_cache[user_id] = llm
-        parser_cache[user_id] = parser_llm
-        logger.info(f"Created LLM client for user {user_id}: {user_llm_config.provider}")
+        llm_cache[run_id] = llm
+        parser_cache[run_id] = parser_llm
+        logger.info(f"Created LLM client for run {run_id}: {run_llm_config.provider} "
+                     f"(temp={run_llm_config.temperature}, max_tokens={run_llm_config.max_tokens})")
         if parser_llm:
-            logger.info(f"Parser LLM enabled for user {user_id}: {user_llm_config.parser_llm_model}")
+            logger.info(f"Parser LLM enabled for run {run_id}: {run_llm_config.parser_llm_model}")
 
         return llm, parser_llm
 
