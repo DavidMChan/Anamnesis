@@ -8,7 +8,7 @@ Key design principles (from anthology):
 4. Consistency prompt added for follow-up questions
 """
 from dataclasses import dataclass
-from typing import Optional, List, Tuple
+from typing import Optional, List
 
 
 # Consistency prompt for follow-up questions (from anthology)
@@ -214,89 +214,54 @@ def build_followup_prompt(context: str, question: Question, max_words: Optional[
     return f"{context}\n\n{CONSISTENCY_PROMPT}\n{formatted_q}"
 
 
-def build_single_question_prompt(
-    backstory: Optional[str],
-    question: Question,
-) -> str:
-    """
-    Build a prompt for a single question (no context accumulation).
-
-    For backwards compatibility or single-question surveys.
-
-    Args:
-        backstory: The backstory text
-        question: Single Question object
-
-    Returns:
-        Prompt string for one question
-    """
-    return build_initial_prompt(backstory, question)
+# ─── JSON schemas for structured outputs ─────────────────────────────────────
 
 
-# Response schema for structured outputs (strict mode compatible)
 def get_response_schema(question: Question) -> dict:
-    """
-    Get the appropriate response schema for a question type.
+    """Return a JSON schema dict for the question type."""
+    num_options = len(question.options) if question.options else 4
+    letters = [chr(65 + i) for i in range(num_options)]
 
-    Note: For strict mode, all properties must be in required,
-    so we only include the answer field.
-    """
     if question.type == "mcq":
-        # Generate enum based on number of options
-        num_options = len(question.options) if question.options else 4
-        letters = [chr(65 + i) for i in range(num_options)]
         return {
             "type": "object",
             "properties": {
-                "answer": {
-                    "type": "string",
-                    "enum": letters,
-                    "description": "The selected answer letter"
-                }
+                "answer": {"type": "string", "enum": letters},
             },
             "required": ["answer"],
-            "additionalProperties": False
+            "additionalProperties": False,
         }
+
     elif question.type == "multiple_select":
-        num_options = len(question.options) if question.options else 4
-        letters = [chr(65 + i) for i in range(num_options)]
+        props = {f"choice_{l}": {"type": "boolean"} for l in letters}
         return {
             "type": "object",
-            "properties": {
-                "answers": {
-                    "type": "array",
-                    "items": {"type": "string", "enum": letters},
-                    "description": "Array of selected answer letters"
-                }
-            },
-            "required": ["answers"],
-            "additionalProperties": False
+            "properties": props,
+            "required": [f"choice_{l}" for l in letters],
+            "additionalProperties": False,
         }
+
     elif question.type == "ranking":
-        num_options = len(question.options) if question.options else 4
-        letters = [chr(65 + i) for i in range(num_options)]
         return {
             "type": "object",
             "properties": {
                 "ranking": {
                     "type": "array",
                     "items": {"type": "string", "enum": letters},
-                    "description": "Array of answer letters in ranked order (first = highest)"
-                }
+                    "minItems": num_options,
+                    "maxItems": num_options,
+                },
             },
             "required": ["ranking"],
-            "additionalProperties": False
+            "additionalProperties": False,
         }
+
     else:
-        # Open response
         return {
             "type": "object",
             "properties": {
-                "answer": {
-                    "type": "string",
-                    "description": "Free-form text response"
-                }
+                "answer": {"type": "string"},
             },
             "required": ["answer"],
-            "additionalProperties": False
+            "additionalProperties": False,
         }

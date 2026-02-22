@@ -1,283 +1,504 @@
-# Feature: Async Worker + LLM Benchmark
+# Feature: Worker Prompt & LLM Refactor
 
 ## Status
 - [ ] Planning complete
 - [ ] Ready for implementation
 
 ## Description
+Refactor the worker's LLM layer and question-filling pipeline to be dramatically simpler and more extensible. Replace two separate LLM clients (OpenRouter + vLLM, 900+ LOC) with a single unified client using the standard OpenAI Python SDK. Replace hand-rolled HTTP requests and guided decoding with vLLM's native `structured_outputs` via `extra_body`. Drop Tier 3 parsing (regex text matching). Introduce a strategy pattern for filling algorithms so new approaches can be plugged in trivially.
 
-Convert the synchronous worker to async so a single worker process can handle many concurrent tasks (different backstories). Currently each worker blocks on one LLM call at a time — with async, one worker can have dozens of LLM requests in flight simultaneously. Also add a standalone benchmark script to determine the optimal concurrency level for a given LLM backend.
-
-### Why
-- Server has only 2GB/1GB RAM → can run 3-4 worker processes max
-- Processing tens of thousands of backstories is too slow with 3-4 sequential workers
-- LLM calls are I/O-bound (500ms–30s wait) → perfect for async concurrency
-- One async worker with concurrency=30 ≈ 30 sync workers in throughput
-
-### Constraint
-Questions within a single task (backstory) MUST remain sequential due to context accumulation — Q2 needs Q1's answer. Only different tasks can run in parallel.
+## Current Pain Points
+1. **Two near-identical LLM clients** (`OpenRouterClient`: 315 LOC, `VLLMClient`: 342 LOC) with duplicated retry, error handling, and response parsing
+2. **Hand-rolled HTTP requests** via `httpx` instead of using the `openai` SDK
+3. **Guided decoding implemented manually** in the HTTP payload instead of using vLLM's built-in `extra_body={"structured_outputs": {"choice": [...]}}`
+4. **Three-tier parsing** (guided -> parser LLM -> regex matching) is overengineered; Tier 3 (`match_option_text`) is rarely needed
+5. **No strategy pattern** -- can't easily swap filling algorithms (e.g., series-with-context vs. parallel-independent)
+6. **vLLM uses legacy Completions API** (`/v1/completions`) instead of Chat Completions API
 
 ## Technical Approach
 
-### Architecture Change
+### Architecture: Before -> After
 
 ```
-BEFORE (sync):                    AFTER (async):
-Worker 1: [task] → [task] → ...  Worker 1: [task1] ─┐
-Worker 2: [task] → [task] → ...           [task2] ─┼─ up to N concurrent
-Worker 3: [task] → [task] → ...           [task3] ─┤
-                                           ...     ─┘
-= 3 concurrent LLM calls         = N concurrent LLM calls (N=10..100)
+BEFORE (953 LOC in llm.py):
+  OpenRouterClient (httpx, manual json_schema)         -- 315 LOC
+  VLLMClient (httpx, /v1/completions, hand-rolled guided decoding) -- 342 LOC
+  LLMClient factory
+  LLMResponse with 4 parsing classmethods              -- ~160 LOC
+
+AFTER (~300 LOC in llm.py):
+  UnifiedLLMClient (openai SDK, works for both providers)
+  LLMResponse (simplified, keep from_json + from_text)
 ```
 
-### Core Changes
+```
+BEFORE (438 LOC in worker.py):
+  TaskProcessor with hardcoded series-with-context + 3-tier parsing
 
-**1. RabbitMQ consumer: pika → aio-pika** (`queue.py`)
-- Replace `pika.BlockingConnection` with `aio_pika.connect_robust()`
-- Async message iterator instead of blocking callback
-- Set `prefetch_count = MAX_CONCURRENT_TASKS` so RabbitMQ delivers enough messages
-- Manual async ack/nack
+AFTER:
+  FillingStrategy protocol
+  SeriesWithContextStrategy (default -- current behavior, minus Tier 3)
+  TaskProcessor delegates to strategy
+```
 
-**2. LLM clients: sync → async** (`llm.py`)
-- Add `async complete()` methods to `OpenRouterClient` and `VLLMClient`
-- Replace `httpx.Client` with `httpx.AsyncClient` (shared session per client for connection pooling)
-- Keep the same retry/backoff logic, just async
-- Parser LLM (`parser.py`) also needs async
+### Key Design Decisions
 
-**3. Worker: sync → async** (`worker.py`)
-- `process_task()` → `async def process_task()`
-- `process_questions_in_series()` → `async def process_questions_in_series()`
-- Internal question loop stays sequential (await each LLM call before next)
+1. **Unified OpenAI SDK client**: Both OpenRouter and vLLM expose OpenAI-compatible APIs. Use `openai.AsyncOpenAI(base_url=..., api_key=...)` for both. This eliminates all hand-rolled HTTP code.
 
-**4. Main loop: blocking → asyncio** (`main.py`)
-- `asyncio.run(main())` entry point
-- `asyncio.Semaphore(MAX_CONCURRENT_TASKS)` to limit concurrency
-- Each consumed message spawns an `asyncio.Task` (gated by semaphore)
-- Graceful shutdown: wait for in-flight tasks to complete on SIGINT/SIGTERM
+2. **vLLM guided decoding via `extra_body`**: Instead of manually constructing `structured_outputs` in the HTTP payload, use the SDK's `extra_body` param:
+   ```python
+   # MCQ: constrain to single letter
+   client.chat.completions.create(
+       ...,
+       extra_body={"structured_outputs": {"choice": ["A", "B", "C", "D"]}},
+   )
+   # Multiple select / ranking: regex constraint
+   client.chat.completions.create(
+       ...,
+       extra_body={"structured_outputs": {"regex": "[A-D](, [A-D])*"}},
+   )
+   ```
 
-**5. DB calls: use `asyncio.to_thread()`** (`worker.py`)
-- Supabase client remains sync (calls are fast, 10-50ms)
-- Wrap in `asyncio.to_thread()` to avoid blocking the event loop
-- No need to rewrite the entire DB layer
+3. **OpenRouter structured output via `response_format`**: Same SDK, different param:
+   ```python
+   client.chat.completions.create(
+       ...,
+       response_format={"type": "json_schema", "json_schema": {...}},
+   )
+   ```
 
-**6. Latency metrics** (`metrics.py` — new)
-- Simple in-memory tracker: records each LLM call duration
-- Calculates p50, p95, p99 over a sliding window
-- Logs summary every N seconds (configurable)
-- Used by benchmark script AND by worker at runtime
+4. **Drop Tier 3** (regex text matching in `match_option_text`): Keep Tier 1 (structured output) + Tier 2 (parser LLM fallback). Tier 3 adds complexity for marginal benefit.
 
-### Files to Create
-- `worker/scripts/benchmark.py` — Standalone benchmark script
-- `worker/src/metrics.py` — Latency tracking utility
+5. **Strategy pattern for filling**: Define a `FillingStrategy` protocol with `async def fill(backstory, questions, llm, parser) -> Dict[str, str]`. The default `SeriesWithContext` implements the current anthology approach.
+
+6. **vLLM switches to Chat Completions API**: Since we're using instruct/chat models with guided decoding, use `/v1/chat/completions` instead of `/v1/completions`.
 
 ### Files to Modify
-- `worker/src/queue.py` — pika → aio-pika (consumer only; publisher stays sync for dispatcher)
-- `worker/src/llm.py` — Add async `complete()` to both clients
-- `worker/src/parser.py` — Async parse method
-- `worker/src/worker.py` — Async `process_task()` and `process_questions_in_series()`
-- `worker/main.py` — Async main loop with semaphore-gated task spawning
-- `worker/src/config.py` — Add `MAX_CONCURRENT_TASKS` env var
-- `worker/requirements.txt` — Add `aio-pika`, keep `pika` (still used by publisher/dispatcher)
 
-### Files NOT Modified
-- `worker/src/dispatcher.py` — Stays sync (runs as separate process, uses QueuePublisher which stays sync)
-- `worker/src/db.py` — Stays sync (wrapped with `to_thread` at call sites)
-- `worker/src/prompt.py` — Pure functions, no I/O
-- Frontend — No changes
+- **`worker/src/llm.py`** -- Replace `OpenRouterClient` + `VLLMClient` with single `UnifiedLLMClient` using `openai` SDK. Keep error classes. Simplify `LLMResponse`.
+- **`worker/src/worker.py`** -- Extract filling logic into `FillingStrategy` protocol. Keep `TaskProcessor` as orchestrator. Remove `match_option_text` (Tier 3).
+- **`worker/src/prompt.py`** -- Keep formatting functions as-is. Keep `get_response_schema()` (still needed for OpenRouter json_schema).
+- **`worker/src/parser.py`** -- Simplify: use `openai` SDK instead of raw `httpx`.
+- **`worker/src/config.py`** -- Simplify `LLMConfig`: remove provider-split fields, unify into `base_url`, `api_key`, `model`.
+- **`worker/main.py`** -- Update `create_llm_client()` and `create_parser_llm()` for new unified client.
 
-### Key Decisions
-- **aio-pika over threaded pika**: pika channels are not thread-safe; aio-pika is the official async RabbitMQ client for Python
-- **httpx.AsyncClient over aiohttp**: Already using httpx sync, minimal API change
-- **to_thread for DB**: Supabase calls are fast and infrequent compared to LLM calls; full async DB migration is not worth the complexity
-- **Keep publisher sync**: Dispatcher is a separate process and doesn't need async
-- **Fixed concurrency with env var**: Simple, deterministic, easy to tune after benchmarking
+### Files to Update (tests)
 
-## Part 1: Benchmark Script
+- **`worker/tests/test_llm.py`** -- Update for unified client
+- **`worker/tests/test_guided_decoding.py`** -- Update for `extra_body` approach
+- **`worker/tests/test_guided_decoding_expand.py`** -- Update or merge into test_guided_decoding
+- **`worker/tests/test_worker.py`** -- Update for strategy pattern
+- **`worker/tests/test_async_worker.py`** -- Update for strategy pattern
 
-### `worker/scripts/benchmark.py`
+### Dependencies
 
-Standalone script that measures LLM backend capacity at different concurrency levels.
+- **Add**: `openai>=1.0` to `requirements.txt`
+- **Keep**: `httpx` (used internally by openai SDK; parser.py may also still use it)
 
-**Usage:**
-```bash
-# Benchmark vLLM
-python scripts/benchmark.py \
-  --provider vllm \
-  --endpoint http://gpu-server:8000/v1 \
-  --model meta-llama/Llama-3-70b \
-  --concurrency 1,5,10,20,50,100 \
-  --requests-per-level 50
+## Detailed Design
 
-# Benchmark OpenRouter
-python scripts/benchmark.py \
-  --provider openrouter \
-  --api-key $OPENROUTER_API_KEY \
-  --model anthropic/claude-3-haiku \
-  --concurrency 1,5,10,20,50 \
-  --requests-per-level 30
-```
-
-**What it does:**
-1. For each concurrency level:
-   - Fire N concurrent requests (using a realistic short prompt + MCQ question)
-   - Record individual latencies
-   - Calculate: throughput (req/s), p50, p95, p99
-2. Output a table + recommendation:
-```
-Concurrency | Throughput | p50    | p95    | p99    | Status
------------ | ---------- | ------ | ------ | ------ | ------
-1           | 1.2 req/s  | 820ms  | 850ms  | 860ms  | OK
-5           | 5.8 req/s  | 840ms  | 920ms  | 980ms  | OK
-10          | 11.1 req/s | 870ms  | 1.1s   | 1.3s   | OK
-20          | 19.5 req/s | 950ms  | 1.8s   | 2.5s   | OK
-50          | 38.2 req/s | 1.2s   | 3.5s   | 5.2s   | WARN ← p99 > 2x baseline
-100         | 42.1 req/s | 2.1s   | 8.3s   | 15s    | OVERLOAD ← throughput plateaued
-
-Recommendation: MAX_CONCURRENT_TASKS=20 (best throughput before degradation)
-```
-
-**Detection logic:**
-- `OK`: p99 < 2x baseline p99
-- `WARN`: p99 >= 2x baseline p99 (degrading)
-- `OVERLOAD`: throughput stopped increasing OR p99 >= 5x baseline
-
-**Prompt used for benchmark:**
-- Short backstory (~200 tokens) + 1 MCQ question with 4 options
-- For vLLM: uses Completions API with guided decoding (matches real workload)
-- For OpenRouter: uses Chat API with structured output (matches real workload)
-
-## Part 2: Async Worker
-
-### Config Changes
-
-New env var in `worker/src/config.py`:
-```
-MAX_CONCURRENT_TASKS=10    # Default: 10 (conservative, tune with benchmark)
-```
-
-### main.py Async Loop
+### 1. Unified LLM Client (`llm.py`)
 
 ```python
-async def main():
-    config = get_config()
-    semaphore = asyncio.Semaphore(config.worker.max_concurrent_tasks)
-    tasks: set[asyncio.Task] = set()
+from openai import AsyncOpenAI, OpenAI
 
-    async def handle_message(message: aio_pika.IncomingMessage):
-        async with semaphore:
-            # ... process task (async)
-            await message.ack()
+class UnifiedLLMClient:
+    """Single LLM client for both OpenRouter and vLLM via OpenAI SDK."""
 
-    async for message in queue:
-        task = asyncio.create_task(handle_message(message))
-        tasks.add(task)
-        task.add_done_callback(tasks.discard)
-```
+    def __init__(
+        self,
+        base_url: str,          # "https://openrouter.ai/api/v1" or "http://gpu:8000/v1"
+        api_key: str,
+        model: str,
+        provider: str,          # "openrouter" or "vllm" -- affects structured output method
+        temperature: float = 0.0,
+        max_tokens: int | None = 512,
+        max_retries: int = 3,
+        use_guided_decoding: bool = True,
+    ):
+        self.model = model
+        self.provider = provider
+        self.temperature = temperature
+        self.max_tokens = max_tokens
+        self.use_guided_decoding = use_guided_decoding
 
-### Graceful Shutdown
+        self._sync_client = OpenAI(
+            base_url=base_url, api_key=api_key, max_retries=max_retries
+        )
+        self._async_client = AsyncOpenAI(
+            base_url=base_url, api_key=api_key, max_retries=max_retries
+        )
 
-On SIGINT/SIGTERM:
-1. Stop accepting new messages from RabbitMQ
-2. Wait for all in-flight tasks to complete (with timeout)
-3. Nack any unfinished tasks (they'll be redelivered)
-4. Exit
+    def _build_create_params(self, question: Question | None) -> dict:
+        """
+        Build the kwargs for chat.completions.create() based on provider + question type.
 
-### LLM Async Pattern
+        For vLLM: returns extra_body with structured_outputs (choice/regex)
+        For OpenRouter: returns response_format with json_schema
+        """
+        if not self.use_guided_decoding or not question or not question.options:
+            return {}
 
-```python
-class OpenRouterClient(BaseLLMClient):
-    def __init__(self, ...):
-        # Shared async client for connection pooling
-        self._async_client: Optional[httpx.AsyncClient] = None
+        n = len(question.options)
+        letters = [chr(65 + i) for i in range(n)]
+        last = letters[-1]
 
-    async def async_complete(self, prompt, ...) -> LLMResponse:
-        if not self._async_client:
-            self._async_client = httpx.AsyncClient(timeout=self.timeout)
-        # Same logic as sync, but with await
-        response = await self._async_client.post(...)
-        ...
+        if self.provider == "vllm":
+            if question.type == "mcq":
+                return {"extra_body": {"structured_outputs": {"choice": letters}}}
+            elif question.type == "multiple_select":
+                return {"extra_body": {"structured_outputs": {"regex": f"[A-{last}](, [A-{last}])*"}}}
+            elif question.type == "ranking":
+                return {"extra_body": {"structured_outputs": {"regex": f"[A-{last}](, [A-{last}]){{{n-1}}}"}}}
+        elif self.provider == "openrouter":
+            schema = get_response_schema(question)
+            return {
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {"name": "answer", "strict": True, "schema": schema}
+                }
+            }
+        return {}
+
+    def _effective_max_tokens(self, question: Question | None) -> int | None:
+        """Determine max_tokens based on question type and guided decoding."""
+        if not question:
+            return self.max_tokens
+        if self.provider == "vllm" and self.use_guided_decoding and question.options:
+            if question.type == "mcq":
+                return 1
+            elif question.type in ("multiple_select", "ranking"):
+                return 3 * len(question.options)
+        return self.max_tokens
+
+    def _parse_response(self, content: str, question: Question | None) -> LLMResponse:
+        """Parse response based on provider and question type."""
+        if not content:
+            return LLMResponse(answer="", raw="")
+
+        # OpenRouter with json_schema returns JSON
+        if self.provider == "openrouter" and self.use_guided_decoding and question and question.options:
+            return LLMResponse.from_json(content)
+
+        # vLLM with choice constraint returns single letter
+        if self.provider == "vllm" and self.use_guided_decoding and question and question.options:
+            if question.type == "mcq":
+                letter = content.strip().upper()
+                valid = {chr(65 + i) for i in range(len(question.options))}
+                if letter in valid:
+                    return LLMResponse(answer=letter, raw=content)
+            elif question.type in ("multiple_select", "ranking"):
+                require_all = question.type == "ranking"
+                return LLMResponse.from_comma_separated(
+                    content, len(question.options),
+                    require_all=require_all, options=question.options
+                )
+
+        # Open response or fallback
+        if question and question.type == "open_response":
+            return LLMResponse(answer=content.strip(), raw=content)
+
+        return LLMResponse.from_text(content)
+
+    async def async_complete(self, prompt: str, *, question: Question | None = None) -> LLMResponse:
+        """Get completion from LLM (async)."""
+        params = self._build_create_params(question)
+        messages = [{"role": "user", "content": prompt}]
+
+        try:
+            response = await self._async_client.chat.completions.create(
+                model=self.model,
+                messages=messages,
+                temperature=self.temperature,
+                max_tokens=self._effective_max_tokens(question),
+                **params,
+            )
+            content = response.choices[0].message.content or ""
+            return self._parse_response(content, question)
+        except openai.BadRequestError as e:
+            # Check if structured output not supported
+            if "json" in str(e).lower() or "schema" in str(e).lower():
+                raise StructuredOutputNotSupported(str(e))
+            raise NonRetryableError(str(e))
+        except openai.AuthenticationError as e:
+            raise NonRetryableError(str(e))
+        except openai.RateLimitError as e:
+            raise RetryableError(str(e))
+        except openai.APIStatusError as e:
+            if e.status_code >= 500:
+                raise RetryableError(str(e))
+            raise NonRetryableError(str(e))
+
+    def complete(self, prompt: str, *, question: Question | None = None) -> LLMResponse:
+        """Get completion from LLM (sync)."""
+        # Same as async_complete but using sync client
+        params = self._build_create_params(question)
+        messages = [{"role": "user", "content": prompt}]
+
+        response = self._sync_client.chat.completions.create(
+            model=self.model,
+            messages=messages,
+            temperature=self.temperature,
+            max_tokens=self._effective_max_tokens(question),
+            **params,
+        )
+        content = response.choices[0].message.content or ""
+        return self._parse_response(content, question)
 
     async def close(self):
-        if self._async_client:
-            await self._async_client.aclose()
+        await self._async_client.close()
 ```
 
-### Runtime Metrics Logging
+### 2. Filling Strategy (`worker.py`)
 
-Every 30 seconds (configurable), log:
-```
-[metrics] window=30s | processed=45 | throughput=1.5/s | p50=820ms | p95=1.3s | p99=2.1s | in_flight=10/20
+```python
+from typing import Protocol
+
+class FillingStrategy(Protocol):
+    """Protocol for survey filling algorithms."""
+    async def fill(
+        self,
+        backstory: str,
+        questions: list[Question],
+        llm: UnifiedLLMClient,
+        parser_llm: ParserLLM | None = None,
+    ) -> dict[str, str]:
+        """Fill all questions and return qkey -> answer mapping."""
+        ...
+
+
+class SeriesWithContext:
+    """
+    Anthology-style: questions asked sequentially with context accumulation.
+    LLM sees its previous answers when answering follow-up questions.
+    Two-tier parsing: structured output (Tier 1) + parser LLM fallback (Tier 2).
+    """
+
+    def __init__(self, max_compliance_retries: int = 10):
+        self.max_compliance_retries = max_compliance_retries
+
+    async def fill(
+        self,
+        backstory: str,
+        questions: list[Question],
+        llm: UnifiedLLMClient,
+        parser_llm: ParserLLM | None = None,
+    ) -> dict[str, str]:
+        results = {}
+        context = ""
+
+        for i, question in enumerate(questions):
+            if i == 0:
+                prompt = build_initial_prompt(backstory, question)
+            else:
+                prompt = build_followup_prompt(context, question)
+
+            answer, raw = await self._ask_with_retry(prompt, question, llm, parser_llm)
+            results[question.qkey] = answer
+            context = append_answer_to_context(prompt, raw)
+
+        return results
+
+    async def _ask_with_retry(self, prompt, question, llm, parser_llm) -> tuple[str, str]:
+        """Ask question with compliance retries + Tier 1/2 parsing."""
+        raw = ""
+        for retry in range(self.max_compliance_retries):
+            response = await llm.async_complete(prompt, question=question)
+            raw = response.raw or ""
+            answer = response.answer
+
+            # Tier 1 success
+            if answer:
+                return answer, raw
+
+            # Open response: any non-empty text is valid
+            if question.type == "open_response":
+                continue  # retry if empty
+
+            # Tier 2: parser LLM fallback (MCQ, multiple_select, ranking)
+            if question.type in ("mcq", "multiple_select", "ranking") and parser_llm and raw:
+                answer = await parser_llm.async_parse(raw, question)
+                if answer:
+                    return answer, raw
+
+        return "", raw
+
+
+class TaskProcessor:
+    """Processes survey tasks using a pluggable filling strategy."""
+
+    def __init__(
+        self,
+        db,
+        llm: UnifiedLLMClient,
+        max_retries: int = 3,
+        parser_llm: ParserLLM | None = None,
+        strategy: FillingStrategy | None = None,
+    ):
+        self.db = db
+        self.llm = llm
+        self.max_retries = max_retries
+        self.parser_llm = parser_llm
+        self.strategy = strategy or SeriesWithContext()
+
+    async def async_process_task(self, task):
+        # ... fetch backstory, questions ...
+        results = await self.strategy.fill(backstory, questions, self.llm, self.parser_llm)
+        # ... store results ...
 ```
 
-This gives observability without the complexity of adaptive concurrency.
+### 3. Simplified Config (`config.py`)
+
+```python
+@dataclass
+class LLMConfig:
+    """Unified LLM configuration."""
+    provider: str = ""           # "openrouter" or "vllm"
+    base_url: str = ""           # Full API base URL
+    api_key: str = ""            # API key (required for openrouter, optional for vllm)
+    model: str = ""              # Model identifier
+    temperature: float = 0.0
+    max_tokens: int | None = 512
+    use_guided_decoding: bool = True
+    parser_llm_model: str = "google/gemini-2.0-flash-001"
+
+    @classmethod
+    def from_user_config(cls, user_config: dict, api_key: str | None = None) -> "LLMConfig":
+        provider = user_config.get("provider", "")
+
+        if provider == "openrouter":
+            base_url = "https://openrouter.ai/api/v1"
+            model = user_config.get("openrouter_model", "")
+        elif provider == "vllm":
+            endpoint = user_config.get("vllm_endpoint", "").rstrip("/")
+            base_url = f"{endpoint}/v1" if not endpoint.endswith("/v1") else endpoint
+            model = user_config.get("vllm_model", "")
+        else:
+            raise ValueError(f"Unknown provider: {provider}")
+
+        return cls(
+            provider=provider,
+            base_url=base_url,
+            api_key=api_key or "",
+            model=model,
+            temperature=user_config.get("temperature", 0.0),
+            max_tokens=user_config.get("max_tokens", 512),
+            use_guided_decoding=user_config.get("use_guided_decoding", True),
+            parser_llm_model=user_config.get("parser_llm_model", "google/gemini-2.0-flash-001"),
+        )
+```
+
+### 4. Simplified `main.py` Client Creation
+
+```python
+def create_llm_client(llm_config: LLMConfig) -> UnifiedLLMClient:
+    return UnifiedLLMClient(
+        base_url=llm_config.base_url,
+        api_key=llm_config.api_key,
+        model=llm_config.model,
+        provider=llm_config.provider,
+        temperature=llm_config.temperature,
+        max_tokens=llm_config.max_tokens,
+        use_guided_decoding=llm_config.use_guided_decoding,
+    )
+```
 
 ## Pass Criteria
 
 ### Unit Tests
 
-- [ ] `test_benchmark_latency_tracker`: LatencyTracker correctly calculates p50/p95/p99 from recorded durations
-- [ ] `test_benchmark_status_detection`: Correctly classifies OK/WARN/OVERLOAD based on baseline p99
-- [ ] `test_async_queue_consumer`: aio-pika consumer calls handler for each message, respects prefetch
-- [ ] `test_async_llm_openrouter`: AsyncClient makes correct HTTP request, parses response
-- [ ] `test_async_llm_vllm`: AsyncClient makes correct request with guided decoding params
-- [ ] `test_async_worker_process_task`: Async process_task follows claim→process→complete flow
-- [ ] `test_async_worker_sequential_questions`: Questions within a task are processed sequentially (not parallel)
-- [ ] `test_async_worker_concurrent_tasks`: Multiple tasks run concurrently (semaphore-gated)
-- [ ] `test_async_graceful_shutdown`: In-flight tasks complete before shutdown; pending messages are nacked
-- [ ] `test_async_error_handling`: RetryableError/NonRetryableError still handled correctly in async flow
-- [ ] `test_metrics_logging`: Metrics summary logged at configured interval with correct values
-- [ ] `test_config_max_concurrent`: MAX_CONCURRENT_TASKS loaded from env with default=10
-
-### E2E Tests (Manual / Integration)
-
-- [ ] Worker starts, connects to RabbitMQ, and begins consuming
-- [ ] Dispatching 50 tasks results in N concurrent LLM calls (not 1 at a time)
-- [ ] All tasks complete correctly with valid results stored in DB
-- [ ] Graceful shutdown on Ctrl+C: in-flight tasks finish, unprocessed tasks stay in queue
-- [ ] Worker with vLLM backend processes tasks correctly
-- [ ] Worker with OpenRouter backend processes tasks correctly
-- [ ] Benchmark script runs against vLLM and produces a table with recommendation
+- [ ] **UnifiedLLMClient creation**: Can create client for both `openrouter` and `vllm` providers with correct `base_url`
+- [ ] **Structured params for vLLM MCQ**: `_build_create_params` returns `{"extra_body": {"structured_outputs": {"choice": ["A","B","C","D"]}}}` for 4-option MCQ
+- [ ] **Structured params for vLLM regex**: Returns correct regex extra_body for multiple_select and ranking
+- [ ] **Structured params for OpenRouter**: Returns `response_format` with `json_schema` for MCQ
+- [ ] **Response parsing (JSON)**: `LLMResponse.from_json` handles `answer`, `answers`, `ranking` fields
+- [ ] **Response parsing (text)**: `LLMResponse.from_text` extracts letters from plain text responses
+- [ ] **SeriesWithContext strategy**: Processes questions sequentially, accumulates context
+- [ ] **SeriesWithContext tier 1+2**: Falls back to parser LLM when structured output fails to parse
+- [ ] **SeriesWithContext no tier 3**: Does NOT call `match_option_text` (removed)
+- [ ] **Strategy pattern**: `TaskProcessor` accepts any `FillingStrategy` and delegates correctly
+- [ ] **Parser LLM**: Still works for MCQ/multiple_select/ranking parsing
+- [ ] **Config from_user_config**: Builds correct `base_url` for both providers
+- [ ] **Error mapping**: OpenAI SDK exceptions mapped to `RetryableError`/`NonRetryableError`
 
 ### Acceptance Criteria
 
-- [ ] Single worker process handles MAX_CONCURRENT_TASKS tasks simultaneously
-- [ ] Questions within each task are still processed sequentially (context accumulation preserved)
-- [ ] Existing atomic task claiming (PR #7) still prevents duplicate processing
-- [ ] Task error handling (retry/fail) works the same as sync version
-- [ ] Benchmark script can test both vLLM and OpenRouter backends
-- [ ] Benchmark outputs a clear table with throughput + p50/p95/p99 per concurrency level
-- [ ] Runtime metrics are logged periodically (throughput, p50, p95, p99, in-flight count)
-- [ ] Dispatcher (`dispatcher.py`) continues to work unchanged
-- [ ] No breaking changes to DB schema or RPC functions
+- [ ] `llm.py` is under 400 LOC (down from 953)
+- [ ] No direct `httpx` imports in `llm.py` (uses `openai` SDK exclusively)
+- [ ] Single `UnifiedLLMClient` class replaces `OpenRouterClient` + `VLLMClient`
+- [ ] `openai` package added to `requirements.txt`
+- [ ] All existing tests pass (updated for new interfaces)
+- [ ] `worker.py` uses strategy pattern -- `TaskProcessor.__init__` accepts a `FillingStrategy`
+- [ ] `match_option_text` function is removed from `worker.py`
+- [ ] `get_response_schema` kept in `prompt.py` (still needed for OpenRouter json_schema)
+- [ ] vLLM guided decoding uses `extra_body={"structured_outputs": ...}` via OpenAI SDK
+- [ ] OpenRouter structured output uses `response_format={"type": "json_schema", ...}` via OpenAI SDK
+- [ ] vLLM now uses Chat Completions API (not legacy Completions API)
+- [ ] Parser LLM (Tier 2) still works as fallback
+- [ ] Error classes (`RetryableError`, `NonRetryableError`, etc.) preserved
+- [ ] OpenAI SDK's built-in `max_retries` handles transport-level retries; manual retry only for compliance (re-asking same question on parse failure)
+- [ ] `StructuredOutputNotSupported` fallback to text mode still works for OpenRouter models that don't support json_schema
 
 ## Implementation Notes
 
 ### For the Implementing Agent
 
-- Start with Part 1 (benchmark script + metrics.py) — it's standalone and useful immediately
-- For Part 2, convert bottom-up: llm.py → parser.py → worker.py → queue.py → main.py
-- Run existing unit tests after each file conversion to catch regressions
-- The `BaseLLMClient` abstract class needs an `async_complete` abstract method added
-- Keep the sync `complete()` method too — dispatcher's publisher still uses sync pika
-- `httpx.AsyncClient` should be a shared instance (connection pooling), not created per request
-- For DB calls, wrap each call: `result = await asyncio.to_thread(self.db.some_method, args)`
-- aio-pika uses `async with message.process():` for auto ack/nack — but we want manual control since we ack only after task completion
-- Prefetch count should equal MAX_CONCURRENT_TASKS (so RabbitMQ sends enough work)
+1. **Start with `llm.py`** -- this is the biggest change. Replace `OpenRouterClient` + `VLLMClient` with `UnifiedLLMClient`. Keep the error classes and `LLMResponse` dataclass.
+2. **Then update `worker.py`** -- extract `SeriesWithContext` strategy, remove `match_option_text`, update `TaskProcessor` to accept strategy.
+3. **Update `config.py`** -- simplify `LLMConfig` to use unified `base_url`/`api_key`/`model`. Keep `from_user_config()` but simplify it.
+4. **Update `main.py`** -- simplify `create_llm_client()` to one-liner.
+5. **Update `parser.py`** -- optionally switch to `openai` SDK (low priority, httpx is fine here too).
+6. **Update tests last** -- after all source changes are stable.
 
-### Dependencies to Add
-```
-aio-pika>=9.0.0    # Async RabbitMQ client
-```
-Keep `pika` — still needed by `QueuePublisher` in `dispatcher.py`.
+### Key vLLM API Reference (from official docs)
 
-### Test Data
-- Benchmark script includes a built-in test prompt (short backstory + 1 MCQ)
-- Unit tests use mocked async HTTP responses
-- For integration testing, use the existing test_run.py pattern
+vLLM's OpenAI-compatible server supports structured outputs natively:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(base_url="http://localhost:8000/v1", api_key="-")
+
+# MCQ: choice constraint
+completion = client.chat.completions.create(
+    model=model,
+    messages=[{"role": "user", "content": "Classify this sentiment: vLLM is wonderful!"}],
+    extra_body={"structured_outputs": {"choice": ["positive", "negative"]}},
+)
+
+# Regex constraint
+completion = client.chat.completions.create(
+    model=model,
+    messages=[{"role": "user", "content": prompt}],
+    extra_body={"structured_outputs": {"regex": r"\w+@\w+\.com\n"}},
+)
+
+# JSON schema (alternative)
+completion = client.chat.completions.create(
+    model=model,
+    messages=[{"role": "user", "content": prompt}],
+    response_format={"type": "json_schema", "json_schema": {"name": "car", "schema": schema}},
+)
+```
+
+The deprecated fields `guided_json`, `guided_regex`, `guided_choice` have been replaced with `structured_outputs.json`, `structured_outputs.regex`, `structured_outputs.choice`.
+
+### OpenRouter base_url
+```python
+client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
+```
+
+### What NOT to change
+- `prompt.py` formatting functions (they're clean and correct)
+- `db.py` (separate concern)
+- `queue.py` (separate concern)
+- `metrics.py` (separate concern)
+- `dispatcher.py` (separate concern)
 
 ## Out of Scope
-- Adaptive concurrency (auto-adjust based on runtime p99) — future enhancement
-- Async DB client (supabase async) — not needed, calls are fast
-- Async dispatcher — separate process, stays sync
-- Frontend changes — none needed
-- DB schema changes — none needed
+- Adding new filling strategies beyond `SeriesWithContext` (just establish the pattern)
+- Changing prompt formatting (`prompt.py` is fine)
+- Database schema changes
+- Frontend changes
+- Queue/dispatcher changes
+- Removing `httpx` from parser.py (optional cleanup)

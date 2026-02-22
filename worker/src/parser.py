@@ -1,20 +1,20 @@
 """
 Parser LLM module — Tier 2 fallback for MCQ response parsing.
 
-Uses a cheap instruction-tuned model (e.g. Gemini Flash) to extract
-the answer letter from verbose/ambiguous base model responses.
+Uses a cheap instruction-tuned model (e.g. Gemini Flash) via OpenRouter
+to extract the answer letter from verbose/ambiguous base model responses.
 
-Follows Alterity's approach: send the question + raw response to a
-parser model with strict instructions to output only a single letter.
+Uses the OpenAI SDK (OpenRouter is OpenAI-compatible).
 
 Provides both sync (parse) and async (async_parse) interfaces.
 """
 import logging
 from typing import Optional
 
-import httpx
+from openai import OpenAI, AsyncOpenAI
 
 from .prompt import Question
+from .response import LLMResponse
 
 logger = logging.getLogger(__name__)
 
@@ -61,14 +61,14 @@ Response: {raw_response}
 
 Answer:"""
 
+BASE_URL = "https://openrouter.ai/api/v1"
+
 
 class ParserLLM:
     """
     Tier 2 parser that uses an instruction-tuned LLM to extract
     MCQ answer letters from verbose base model responses.
     """
-
-    BASE_URL = "https://openrouter.ai/api/v1/chat/completions"
 
     def __init__(
         self,
@@ -82,8 +82,17 @@ class ParserLLM:
         self.model = model
         self.max_tokens = max_tokens
         self.temperature = temperature
-        self.timeout = timeout
-        self._async_client: Optional[httpx.AsyncClient] = None
+
+        if api_key:
+            self._sync_client = OpenAI(
+                base_url=BASE_URL, api_key=api_key, timeout=timeout, max_retries=2,
+            )
+            self._async_client = AsyncOpenAI(
+                base_url=BASE_URL, api_key=api_key, timeout=timeout, max_retries=2,
+            )
+        else:
+            self._sync_client = None
+            self._async_client = None
 
     @property
     def is_configured(self) -> bool:
@@ -105,72 +114,70 @@ class ParserLLM:
             raw_response=raw_response,
         )
 
+    def _effective_max_tokens(self, question: Question) -> int:
+        if question.type in ("multiple_select", "ranking") and question.options:
+            return 3 * len(question.options)
+        return self.max_tokens
+
+    def _extract_answer(self, content: str, question: Question) -> str:
+        """Extract and validate answer from parser response."""
+        # Extract content after "Answer:" if present
+        if "Answer:" in content:
+            content = content.split("Answer:")[1].strip().upper()
+        else:
+            content = content.strip().upper()
+
+        # "X" means no match
+        if content == "X":
+            return ""
+
+        if question.type in ("multiple_select", "ranking"):
+            return self._parse_comma_separated(content, question)
+        else:
+            return self._parse_single_letter(content, question)
+
     def parse(self, raw_response: str, question: Question) -> str:
         """
-        Parse a verbose LLM response into an answer.
+        Parse a verbose LLM response into an answer (sync).
 
         For MCQ: returns single letter (A, B, C, ...)
         For multiple_select: returns comma-separated letters (A,C,D)
         For ranking: returns comma-separated letters in order (B,A,C,D)
-
-        Args:
-            raw_response: The raw text output from the base model
-            question: The question being answered
-
-        Returns:
-            Parsed answer string, or empty string on failure
         """
         if not self.is_configured:
             return ""
 
         prompt = self._build_prompt(raw_response, question)
 
-        # Adjust max_tokens for multi-letter responses
-        effective_max_tokens = self.max_tokens
-        if question.type in ("multiple_select", "ranking") and question.options:
-            effective_max_tokens = 3 * len(question.options)
+        try:
+            response = self._sync_client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=self.temperature,
+                max_tokens=self._effective_max_tokens(question),
+            )
+            content = response.choices[0].message.content or ""
+            return self._extract_answer(content, question)
+        except Exception as e:
+            logger.warning(f"Parser LLM error: {e}")
+            return ""
+
+    async def async_parse(self, raw_response: str, question: Question) -> str:
+        """Async version of parse()."""
+        if not self.is_configured:
+            return ""
+
+        prompt = self._build_prompt(raw_response, question)
 
         try:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": self.temperature,
-                "max_tokens": effective_max_tokens,
-            }
-
-            with httpx.Client(timeout=self.timeout) as client:
-                response = client.post(self.BASE_URL, headers=headers, json=payload)
-
-            if response.status_code != 200:
-                logger.warning(f"Parser LLM request failed: {response.status_code}")
-                return ""
-
-            data = response.json()
-            if "choices" not in data or not data["choices"]:
-                return ""
-
-            content = data["choices"][0]["message"]["content"].strip()
-
-            # Extract content after "Answer:" if present
-            if "Answer:" in content:
-                content = content.split("Answer:")[1].strip().upper()
-            else:
-                content = content.strip().upper()
-
-            # "X" means no match — return empty
-            if content == "X":
-                return ""
-
-            # Dispatch parsing based on question type
-            if question.type in ("multiple_select", "ranking"):
-                return self._parse_comma_separated(content, question)
-            else:
-                return self._parse_single_letter(content, question)
-
+            response = await self._async_client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=self.temperature,
+                max_tokens=self._effective_max_tokens(question),
+            )
+            content = response.choices[0].message.content or ""
+            return self._extract_answer(content, question)
         except Exception as e:
             logger.warning(f"Parser LLM error: {e}")
             return ""
@@ -183,77 +190,12 @@ class ParserLLM:
 
     def _parse_comma_separated(self, content: str, question: Question) -> str:
         """Parse comma-separated letters for multiple_select/ranking."""
-        from .llm import LLMResponse
         num_options = len(question.options or [])
         require_all = question.type == "ranking"
         result = LLMResponse.from_comma_separated(content, num_options, require_all=require_all)
         return result.answer
 
-    def _get_async_client(self) -> httpx.AsyncClient:
-        """Get or create shared async HTTP client."""
-        if self._async_client is None or self._async_client.is_closed:
-            self._async_client = httpx.AsyncClient(timeout=self.timeout)
-        return self._async_client
-
-    async def async_parse(self, raw_response: str, question: Question) -> str:
-        """
-        Async version of parse().
-
-        Same interface but uses async HTTP client.
-        """
-        if not self.is_configured:
-            return ""
-
-        prompt = self._build_prompt(raw_response, question)
-
-        effective_max_tokens = self.max_tokens
-        if question.type in ("multiple_select", "ranking") and question.options:
-            effective_max_tokens = 3 * len(question.options)
-
-        try:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            }
-            payload = {
-                "model": self.model,
-                "messages": [{"role": "user", "content": prompt}],
-                "temperature": self.temperature,
-                "max_tokens": effective_max_tokens,
-            }
-
-            client = self._get_async_client()
-            response = await client.post(self.BASE_URL, headers=headers, json=payload)
-
-            if response.status_code != 200:
-                logger.warning(f"Parser LLM request failed: {response.status_code}")
-                return ""
-
-            data = response.json()
-            if "choices" not in data or not data["choices"]:
-                return ""
-
-            content = data["choices"][0]["message"]["content"].strip()
-
-            if "Answer:" in content:
-                content = content.split("Answer:")[1].strip().upper()
-            else:
-                content = content.strip().upper()
-
-            if content == "X":
-                return ""
-
-            if question.type in ("multiple_select", "ranking"):
-                return self._parse_comma_separated(content, question)
-            else:
-                return self._parse_single_letter(content, question)
-
-        except Exception as e:
-            logger.warning(f"Parser LLM error: {e}")
-            return ""
-
     async def close(self) -> None:
-        """Close the shared async HTTP client."""
-        if self._async_client and not self._async_client.is_closed:
-            await self._async_client.aclose()
-            self._async_client = None
+        """Close the async client."""
+        if self._async_client:
+            await self._async_client.close()

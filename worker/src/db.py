@@ -478,20 +478,15 @@ class DatabaseClient:
 
         return result.data if result.data else None
 
-    def get_survey_run_user_id(self, run_id: str) -> Optional[str]:
+    def get_run_llm_context(self, run_id: str) -> Optional[Dict[str, Any]]:
         """
-        Get the user_id for a survey run.
+        Get llm_config snapshot and owning user_id for a survey run.
 
-        Args:
-            run_id: UUID of the survey run
-
-        Returns:
-            User ID or None if not found
+        Returns {"llm_config": {...}, "user_id": "..."} or None.
         """
-        # Get the survey run, then get the survey, then get the user_id
         data = self._safe_single_execute(
             self.client.table("survey_runs")
-            .select("surveys(user_id)")
+            .select("llm_config, surveys(user_id)")
             .eq("id", run_id)
         )
 
@@ -499,7 +494,7 @@ class DatabaseClient:
             return None
 
         surveys_data = data.get("surveys")
-        if not surveys_data:
-            return None
-
-        return surveys_data.get("user_id")
+        return {
+            "llm_config": data.get("llm_config"),
+            "user_id": surveys_data.get("user_id") if surveys_data else None,
+        }
