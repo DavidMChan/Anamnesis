@@ -82,7 +82,13 @@ class SeriesWithContext:
 
             # Download media and build multimodal prompt if needed
             question_media = None
-            if question.has_media and media_client:
+            if question.has_media:
+                if not media_client:
+                    raise NonRetryableError(
+                        f"Question '{question.qkey}' has media attachments but Wasabi storage "
+                        "is not configured. Add WASABI_ACCESS_KEY_ID, WASABI_SECRET_ACCESS_KEY, "
+                        "and WASABI_BUCKET to .env."
+                    )
                 question_media = await asyncio.to_thread(
                     media_client.download_media_for_question, question
                 )

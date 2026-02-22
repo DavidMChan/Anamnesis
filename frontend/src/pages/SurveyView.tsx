@@ -8,9 +8,29 @@ import { supabase } from '@/lib/supabase'
 import { useSurveyRun, useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
 import { useAuthContext } from '@/contexts/AuthContext'
-import type { Survey, SurveyRun } from '@/types/database'
+import type { Survey, SurveyRun, MediaAttachment } from '@/types/database'
 import { MediaPreview } from '@/components/surveys/MediaPreview'
+import { getMediaUrl } from '@/lib/media'
 import { ArrowLeft, Edit, Play, History, Settings } from 'lucide-react'
+
+/** Standalone audio player that loads its own URL from a media key */
+function AudioPlayer({ media }: { media: MediaAttachment }) {
+  const [url, setUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getMediaUrl(media.key)
+      .then((u) => { if (!cancelled) setUrl(u) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [media.key])
+
+  if (!url) {
+    return <span className="text-xs text-muted-foreground italic">Loading audio...</span>
+  }
+
+  return <audio controls src={url} className="w-full" />
+}
 
 /**
  * Check if a model supports multimodal input via the OpenRouter models API.
@@ -52,6 +72,7 @@ export function SurveyView() {
   const [showHistory, setShowHistory] = useState(false)
   const [selectedRun, setSelectedRun] = useState<SurveyRun | null>(null)
   const [configError, setConfigError] = useState<string | null>(null)
+  const [expandedAudio, setExpandedAudio] = useState<{ qkey: string; optIndex: number } | null>(null)
 
   // Fetch survey run data
   const { run: latestRun, runs, isRunning, refresh: refreshRuns } = useSurveyRun({
@@ -267,17 +288,35 @@ export function SurveyView() {
                   )}
                   {question.options && question.options.length > 0 && (
                     <ul className="text-sm text-muted-foreground space-y-1 ml-4">
-                      {question.options.map((option, optIndex) => (
-                        <li key={optIndex} className="flex items-center gap-2">
-                          <span>
-                            {question.type === 'ranking' ? `${optIndex + 1}. ` : '• '}
-                            {option}
-                          </span>
-                          {question.option_media?.[optIndex] && (
-                            <MediaPreview media={question.option_media[optIndex]!} compact />
-                          )}
-                        </li>
-                      ))}
+                      {question.options.map((option, optIndex) => {
+                        const optMedia = question.option_media?.[optIndex]
+                        const isAudioOpt = optMedia && !optMedia.type.startsWith('image/')
+                        const isThisExpanded = expandedAudio?.qkey === question.qkey && expandedAudio?.optIndex === optIndex
+
+                        return (
+                          <li key={optIndex} className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span>
+                                {question.type === 'ranking' ? `${optIndex + 1}. ` : '• '}
+                                {option}
+                              </span>
+                              {optMedia && (
+                                <MediaPreview
+                                  media={optMedia}
+                                  compact
+                                  isAudioExpanded={isThisExpanded}
+                                  onAudioToggle={isAudioOpt ? (expanded) => setExpandedAudio(expanded ? { qkey: question.qkey, optIndex } : null) : undefined}
+                                />
+                              )}
+                            </div>
+                            {isThisExpanded && isAudioOpt && optMedia && (
+                              <div className="ml-4">
+                                <AudioPlayer media={optMedia} />
+                              </div>
+                            )}
+                          </li>
+                        )
+                      })}
                     </ul>
                   )}
                 </div>

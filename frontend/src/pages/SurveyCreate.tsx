@@ -180,14 +180,14 @@ export function SurveyCreate() {
     }
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i]
-      if (!q.text.trim()) {
-        return `Question ${i + 1} is missing text`
+      if (!q.text.trim() && !q.media) {
+        return `Question ${i + 1} needs text or media`
       }
       if (q.type !== 'open_response' && (!q.options || q.options.length < 2)) {
         return `Question ${i + 1} needs at least 2 options`
       }
-      if (q.options?.some((opt) => !opt.trim())) {
-        return `Question ${i + 1} has empty options`
+      if (q.options?.some((opt, j) => !opt.trim() && !q.option_media?.[j])) {
+        return `Question ${i + 1} has empty options (add text or media)`
       }
     }
     return null
