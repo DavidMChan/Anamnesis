@@ -13,7 +13,8 @@ import json
 import pytest
 from unittest.mock import Mock, patch, MagicMock
 
-from src.llm import UnifiedLLMClient, LLMResponse
+from src.llm import UnifiedLLMClient
+from src.response import LLMResponse
 from src.parser import ParserLLM, PARSER_PROMPT_MULTIPLE_SELECT, PARSER_PROMPT_RANKING
 from src.prompt import Question
 from src.worker import TaskProcessor

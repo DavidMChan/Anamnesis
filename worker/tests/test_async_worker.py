@@ -20,12 +20,8 @@ from unittest.mock import Mock, MagicMock, AsyncMock, patch
 import pytest
 
 from src.config import WorkerConfig
-from src.llm import (
-    LLMResponse,
-    UnifiedLLMClient,
-    RetryableError,
-    NonRetryableError,
-)
+from src.llm import UnifiedLLMClient
+from src.response import LLMResponse, RetryableError, NonRetryableError
 from src.metrics import (
     LatencyTracker,
     MetricsLogger,

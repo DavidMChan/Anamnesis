@@ -17,7 +17,8 @@ from typing import Optional, Dict, Any
 
 from src.config import get_config, LLMConfig
 from src.db import DatabaseClient
-from src.llm import UnifiedLLMClient, NonRetryableError
+from src.llm import UnifiedLLMClient
+from src.response import NonRetryableError
 from src.metrics import LatencyTracker, MetricsLogger
 from src.parser import ParserLLM
 from src.queue import AsyncQueueConsumer

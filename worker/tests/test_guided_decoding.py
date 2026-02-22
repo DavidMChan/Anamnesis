@@ -7,7 +7,8 @@ Tier 2: Parser LLM (cheap instruction-tuned model) extracts answer from verbose 
 import pytest
 from unittest.mock import Mock, patch, MagicMock, AsyncMock
 
-from src.llm import UnifiedLLMClient, LLMResponse
+from src.llm import UnifiedLLMClient
+from src.response import LLMResponse
 from src.parser import ParserLLM
 from src.prompt import Question
 from src.worker import TaskProcessor

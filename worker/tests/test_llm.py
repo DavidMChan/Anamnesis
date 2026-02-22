@@ -7,14 +7,8 @@ from unittest.mock import Mock, patch, MagicMock, AsyncMock
 
 import openai
 
-from src.llm import (
-    UnifiedLLMClient,
-    LLMResponse,
-    LLMError,
-    RetryableError,
-    NonRetryableError,
-    StructuredOutputNotSupported,
-)
+from src.llm import UnifiedLLMClient, StructuredOutputNotSupported
+from src.response import LLMResponse, LLMError, RetryableError, NonRetryableError
 from src.prompt import Question
 
 

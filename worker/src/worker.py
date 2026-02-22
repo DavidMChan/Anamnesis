@@ -20,7 +20,8 @@ from .prompt import (
     build_followup_prompt,
     append_answer_to_context,
 )
-from .llm import UnifiedLLMClient, LLMResponse, RetryableError, NonRetryableError, LLMError
+from .llm import UnifiedLLMClient
+from .response import LLMResponse, RetryableError, NonRetryableError, LLMError
 from .parser import ParserLLM
 
 logger = logging.getLogger(__name__)

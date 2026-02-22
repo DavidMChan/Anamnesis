@@ -14,6 +14,7 @@ from typing import Optional
 from openai import OpenAI, AsyncOpenAI
 
 from .prompt import Question
+from .response import LLMResponse
 
 logger = logging.getLogger(__name__)
 
@@ -189,7 +190,6 @@ class ParserLLM:
 
     def _parse_comma_separated(self, content: str, question: Question) -> str:
         """Parse comma-separated letters for multiple_select/ranking."""
-        from .llm import LLMResponse
         num_options = len(question.options or [])
         require_all = question.type == "ranking"
         result = LLMResponse.from_comma_separated(content, num_options, require_all=require_all)

@@ -2,136 +2,26 @@
 Unified OpenAI SDK client for both OpenRouter and vLLM.
 Provides both sync (complete) and async (async_complete) interfaces.
 """
+import json
 import logging
-import re
-from dataclasses import dataclass
-from typing import Optional, List, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from .prompt import Question
 
 import openai
 from openai import AsyncOpenAI, OpenAI
-from pydantic import ValidationError
+
+from .response import (
+    LLMResponse,
+    LLMError,
+    RetryableError,
+    NonRetryableError,
+    TruncationError,
+    StructuredOutputNotSupported,
+)
 
 logger = logging.getLogger(__name__)
-
-
-# ─── Error classes ───────────────────────────────────────────────────────────
-
-class LLMError(Exception):
-    """Base exception for LLM errors."""
-
-class RetryableError(LLMError):
-    """Error that can be retried (rate limits, server errors)."""
-
-class NonRetryableError(LLMError):
-    """Error that should not be retried (auth, bad request)."""
-
-class TruncationError(LLMError):
-    """Response was truncated (likely exceeded max_tokens)."""
-
-class StructuredOutputNotSupported(LLMError):
-    """Model doesn't support structured output (json_schema)."""
-
-
-# ─── LLMResponse ─────────────────────────────────────────────────────────────
-
-@dataclass
-class LLMResponse:
-    """Parsed LLM response."""
-    answer: str
-    reasoning: Optional[str] = None
-    raw: Optional[str] = None
-
-    @classmethod
-    def from_comma_separated(
-        cls,
-        text: str,
-        num_options: int,
-        require_all: bool = False,
-        options: Optional[List[str]] = None,
-    ) -> "LLMResponse":
-        """
-        Parse comma-separated letters from various formats.
-
-        Handles: "A, C, D", "(A), (B), (D)", "[A], [B]", mixed formats,
-        and option text fallback.
-
-        Args:
-            text: Raw response text
-            num_options: Number of valid options (determines valid letter range)
-            require_all: If True, all letters must be present (for ranking)
-            options: Optional list of option texts for text-matching fallback
-        """
-        valid = {chr(65 + i) for i in range(num_options)}
-
-        segments = [s.strip() for s in text.split(",")]
-        letters = []
-        for seg in segments:
-            cleaned = re.sub(r'^[\(\[\"\' ]+|[\)\]\"\' .]+$', '', seg).strip().upper()
-            if cleaned in valid:
-                letters.append(cleaned)
-
-        # Deduplicate while preserving order
-        seen = set()
-        result = []
-        for letter in letters:
-            if letter not in seen:
-                seen.add(letter)
-                result.append(letter)
-
-        # If no letters found, try matching option text
-        if not result and options:
-            for seg in segments:
-                seg_lower = seg.strip().lower()
-                for idx, opt in enumerate(options):
-                    if opt.lower() in seg_lower or seg_lower in opt.lower():
-                        letter = chr(65 + idx)
-                        if letter not in seen:
-                            seen.add(letter)
-                            result.append(letter)
-                        break
-
-        if require_all and set(result) != valid:
-            return cls(answer="", raw=text)
-        if result:
-            return cls(answer=",".join(result), raw=text)
-        return cls(answer="", raw=text)
-
-    @classmethod
-    def from_text(cls, text: str) -> "LLMResponse":
-        """
-        Parse LLM response from plain text (anthology style).
-        Extracts the first letter (A, B, C, D, etc.) from the response.
-        """
-        text = text.strip()
-
-        # Try to find answer letter at the start
-        patterns = [
-            r'^[\(\[]([A-Za-z])[\)\]]',  # (A) or [A] at start
-            r'^([A-Za-z])[\.\:\)]',  # A. A: A) at start
-            r'[Aa]nswer[:\s]+[\(\[]?([A-Za-z])[\)\]]?',  # "Answer: A" or "Answer: (A)"
-            r'[\(\[]([A-Za-z])[\)\]]',  # (A) or [A] anywhere
-        ]
-
-        for pattern in patterns:
-            match = re.search(pattern, text)
-            if match:
-                answer = match.group(1).upper()
-                if answer in 'ABCDEFGHIJ':
-                    return cls(answer=answer, raw=text)
-
-        # Stricter fallback: anthology-style pattern
-        anthology_pattern = r"(?:^|[\[\(\"\' ])([A-Z])(?=$|[\]\)\"., ])(?!'m)(?!'d)(?!'ll)(?!'ve)(?!'re)(?! think)(?! am)(?! have)(?! would)(?! was)(?! great)(?! lot)(?! little)(?! good)(?! bad)(?! don)"
-        match = re.search(anthology_pattern, text)
-        if match:
-            answer = match.group(1).upper()
-            if answer in 'ABCDEFGH':
-                return cls(answer=answer, raw=text)
-
-        logger.warning(f"Failed to parse MCQ answer from: {repr(text[:100])}")
-        return cls(answer="", raw=text)
 
 
 # ─── UnifiedLLMClient ────────────────────────────────────────────────────────
@@ -228,27 +118,23 @@ class UnifiedLLMClient:
         return self.max_tokens
 
     def _parse_structured_response(self, content: str, question: "Question") -> LLMResponse:
-        """Parse a JSON structured output response using the Pydantic model."""
-        from .prompt import get_response_model
+        """Parse a JSON structured output response.
 
-        model = get_response_model(question)
+        The server already enforces the json_schema, so we just json.loads()
+        and extract the fields. Only thing that can go wrong is truncation
+        (max_tokens hit mid-JSON).
+        """
         try:
-            parsed = model.model_validate_json(content)
-        except ValidationError as e:
-            errors = e.errors()
-            if any(err["type"] == "json_invalid" for err in errors):
-                raise TruncationError(
-                    f"Response appears truncated: {e}. Raw: {content[:200]}"
-                )
-            raise NonRetryableError(
-                f"Invalid structured response: {e}. Raw: {content[:200]}"
+            data = json.loads(content)
+        except json.JSONDecodeError:
+            raise TruncationError(
+                f"Response appears truncated. Raw: {content[:200]}"
             )
 
         if question.type == "mcq":
-            return LLMResponse(answer=parsed.answer, raw=content)
+            return LLMResponse(answer=data.get("answer", ""), raw=content)
 
         elif question.type == "multiple_select":
-            data = parsed.model_dump()
             selected = sorted(
                 k.split("_", 1)[1]
                 for k, v in data.items()
@@ -257,15 +143,15 @@ class UnifiedLLMClient:
             return LLMResponse(answer=",".join(selected), raw=content)
 
         elif question.type == "ranking":
-            # Validate complete permutation (no duplicates, all letters present)
+            ranking = data.get("ranking", [])
             num_options = len(question.options)
             expected = {chr(65 + i) for i in range(num_options)}
-            if set(parsed.ranking) != expected or len(parsed.ranking) != num_options:
+            if set(ranking) != expected or len(ranking) != num_options:
                 return LLMResponse(answer="", raw=content)
-            return LLMResponse(answer=",".join(parsed.ranking), raw=content)
+            return LLMResponse(answer=",".join(ranking), raw=content)
 
         else:
-            return LLMResponse(answer=parsed.answer, raw=content)
+            return LLMResponse(answer=data.get("answer", ""), raw=content)
 
     def _parse_response(self, content: str, question: "Optional[Question]") -> LLMResponse:
         """Parse response based on provider and question type."""
