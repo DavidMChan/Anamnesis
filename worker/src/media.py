@@ -23,16 +23,17 @@ class WasabiMediaClient:
         access_key: str,
         secret_key: str,
         bucket: str,
-        endpoint: str = "https://s3.wasabisys.com",
-        **_kwargs,
+        region: str = "us-west-2",
     ):
         self.bucket = bucket
-        # Wasabi docs: don't pass region_name, just endpoint_url
+        # Wasabi requires region-specific endpoint (matching Edge Functions)
+        endpoint = f"https://s3.{region}.wasabisys.com"
         self.s3 = boto3.client(
             "s3",
             endpoint_url=endpoint,
             aws_access_key_id=access_key,
             aws_secret_access_key=secret_key,
+            region_name=region,
         )
 
     def download_and_encode(self, key: str, mime_type: str) -> Tuple[str, str]:
