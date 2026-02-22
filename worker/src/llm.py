@@ -14,7 +14,6 @@ from openai import AsyncOpenAI, OpenAI
 
 from .response import (
     LLMResponse,
-    LLMError,
     RetryableError,
     NonRetryableError,
     TruncationError,
@@ -73,39 +72,21 @@ class UnifiedLLMClient:
         if not self.use_guided_decoding or not question or not question.options:
             return {}
 
-        n = len(question.options)
-        letters = [chr(65 + i) for i in range(n)]
-        last = letters[-1]
+        letters = [chr(65 + i) for i in range(len(question.options))]
 
-        if self.provider == "vllm":
-            if question.type == "mcq":
-                return {"extra_body": {"structured_outputs": {"choice": letters}}}
-            elif question.type in ("multiple_select", "ranking"):
-                # Use JSON schema via response_format (same as OpenRouter)
-                from .prompt import get_response_schema
-                schema = get_response_schema(question)
-                return {
-                    "response_format": {
-                        "type": "json_schema",
-                        "json_schema": {"name": "answer", "strict": True, "schema": schema}
-                    }
-                }
-            # OLD: regex guided decoding for multiple_select/ranking
-            # elif question.type == "multiple_select":
-            #     return {"extra_body": {"structured_outputs": {"regex": f"[A-{last}](, [A-{last}])*"}}}
-            # elif question.type == "ranking":
-            #     return {"extra_body": {"structured_outputs": {"regex": f"[A-{last}](, [A-{last}]){{{n-1}}}"}}}
-        elif self.provider == "openrouter":
-            from .prompt import get_response_schema
-            schema = get_response_schema(question)
-            return {
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {"name": "answer", "strict": True, "schema": schema}
-                }
+        # vLLM MCQ: constrained sampling to a single letter (no JSON)
+        if self.provider == "vllm" and question.type == "mcq":
+            return {"extra_body": {"structured_outputs": {"choice": letters}}}
+
+        # Everything else (OpenRouter all types, vLLM multiple_select/ranking): json_schema
+        from .prompt import get_response_schema
+        schema = get_response_schema(question)
+        return {
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "answer", "strict": True, "schema": schema}
             }
-
-        return {}
+        }
 
     def _effective_max_tokens(self, question: "Optional[Question]") -> Optional[int]:
         """Determine max_tokens based on question type and guided decoding."""

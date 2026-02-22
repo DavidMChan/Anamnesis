@@ -214,25 +214,6 @@ def build_followup_prompt(context: str, question: Question, max_words: Optional[
     return f"{context}\n\n{CONSISTENCY_PROMPT}\n{formatted_q}"
 
 
-def build_single_question_prompt(
-    backstory: Optional[str],
-    question: Question,
-) -> str:
-    """
-    Build a prompt for a single question (no context accumulation).
-
-    For backwards compatibility or single-question surveys.
-
-    Args:
-        backstory: The backstory text
-        question: Single Question object
-
-    Returns:
-        Prompt string for one question
-    """
-    return build_initial_prompt(backstory, question)
-
-
 # ─── JSON schemas for structured outputs ─────────────────────────────────────
 
 

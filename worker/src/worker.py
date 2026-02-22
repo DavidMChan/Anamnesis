@@ -21,7 +21,7 @@ from .prompt import (
     append_answer_to_context,
 )
 from .llm import UnifiedLLMClient
-from .response import LLMResponse, RetryableError, NonRetryableError, LLMError
+from .response import LLMResponse, RetryableError, NonRetryableError
 from .parser import ParserLLM
 
 logger = logging.getLogger(__name__)
