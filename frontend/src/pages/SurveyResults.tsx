@@ -1,13 +1,14 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { useParams, useNavigate, useSearchParams } from 'react-router-dom'
 import { Layout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { supabase } from '@/lib/supabase'
+import { useSurveyRun } from '@/hooks/useSurveyRun'
 import type { Survey, SurveyRun, Question, SurveyResults as SurveyResultsType } from '@/types/database'
-import { BarChart2, Table, ImageDown } from 'lucide-react'
-import { useRef, useCallback } from 'react'
+import { BarChart2, Table, ImageDown, RefreshCw } from 'lucide-react'
 import { ResultsHero } from '@/components/results/ResultsHero'
 import { OpenResponseList } from '@/components/results/OpenResponseList'
 import { DistributionChart } from '@/components/results/DistributionChart'
@@ -57,6 +58,13 @@ export function SurveyResults() {
   const [results, setResults] = useState<SurveyResultsType>({})
   const [loading, setLoading] = useState(true)
 
+  // Track run status for auto-polling
+  const { run: trackedRun, isRunning } = useSurveyRun({
+    runId: runId || undefined,
+    autoPoll: true,
+    pollInterval: 3000,
+  })
+
   // Demographic filtering state
   const [backstories, setBackstories] = useState<Backstory[] | null>(null)
   const [demographicKeys, setDemographicKeys] = useState<DemographicKey[] | null>(null)
@@ -73,6 +81,20 @@ export function SurveyResults() {
   useEffect(() => {
     fetchData()
   }, [id, runId])
+
+  // Auto-refresh task results while run is in progress
+  useEffect(() => {
+    if (!isRunning || !run) return
+    const interval = setInterval(() => refetchTaskResults(), 5000)
+    return () => clearInterval(interval)
+  }, [isRunning, run?.id])
+
+  // Update run status from tracked run
+  useEffect(() => {
+    if (trackedRun) {
+      setRun(trackedRun)
+    }
+  }, [trackedRun])
 
   const fetchData = async () => {
     if (!id) return
@@ -151,6 +173,27 @@ export function SurveyResults() {
     calculateStats(survey, taskResults, [])
 
     setLoading(false)
+  }
+
+  const refetchTaskResults = async () => {
+    if (!run || !survey) return
+
+    const { data: tasksData, error: tasksError } = await supabase
+      .from('survey_tasks')
+      .select('backstory_id, result')
+      .eq('survey_run_id', run.id)
+      .eq('status', 'completed')
+
+    if (tasksError) return
+
+    const taskResults: SurveyResultsType = {}
+    for (const task of tasksData || []) {
+      if (task.result) {
+        taskResults[task.backstory_id] = task.result
+      }
+    }
+    setResults(taskResults)
+    calculateStats(survey, taskResults, selectedFilters)
   }
 
   const fetchDemographics = async () => {
@@ -501,6 +544,18 @@ export function SurveyResults() {
           onBack={() => navigate(`/surveys/${survey.id}`)}
           onDownloadCSV={downloadCSV}
         />
+
+        {isRunning && run && (
+          <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 dark:border-blue-900 dark:bg-blue-950/30 p-3">
+            <RefreshCw className="h-4 w-4 animate-spin text-blue-600 dark:text-blue-400" />
+            <span className="text-sm text-blue-800 dark:text-blue-300">
+              Showing {totalResponses} / {run.total_tasks} completed responses — auto-refreshing
+            </span>
+            <Badge variant="outline" className="ml-auto text-blue-600 dark:text-blue-400 border-blue-300 dark:border-blue-700">
+              Partial
+            </Badge>
+          </div>
+        )}
 
         <Tabs defaultValue="charts">
           <TabsList>
