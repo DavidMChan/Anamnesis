@@ -115,6 +115,7 @@ async def main():
             access_key=config.wasabi.access_key_id,
             secret_key=config.wasabi.secret_access_key,
             bucket=config.wasabi.bucket,
+            region=config.wasabi.region,
             endpoint=config.wasabi.endpoint,
         )
         logger.info(f"Wasabi media client initialized (bucket={config.wasabi.bucket})")

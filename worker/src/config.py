@@ -98,6 +98,7 @@ class WasabiConfig:
     access_key_id: str = field(default_factory=lambda: os.environ.get("WASABI_ACCESS_KEY_ID", ""))
     secret_access_key: str = field(default_factory=lambda: os.environ.get("WASABI_SECRET_ACCESS_KEY", ""))
     bucket: str = field(default_factory=lambda: os.environ.get("WASABI_BUCKET", ""))
+    region: str = field(default_factory=lambda: os.environ.get("WASABI_REGION", "us-west-2"))
     endpoint: str = field(default_factory=lambda: os.environ.get("WASABI_ENDPOINT", "https://s3.wasabisys.com"))
 
     @property
