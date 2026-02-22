@@ -47,8 +47,8 @@ serve(async (req: Request) => {
 
     // Create S3 client for Wasabi
     const s3 = new S3Client({
-      region: Deno.env.get("WASABI_REGION") || "us-west-2",
-      endpoint: Deno.env.get("WASABI_ENDPOINT") || "https://s3.us-west-2.wasabisys.com",
+      region: "us-east-1",
+      endpoint: Deno.env.get("WASABI_ENDPOINT") || "https://s3.wasabisys.com",
       credentials: {
         accessKeyId: Deno.env.get("WASABI_ACCESS_KEY_ID")!,
         secretAccessKey: Deno.env.get("WASABI_SECRET_ACCESS_KEY")!,
