@@ -30,6 +30,30 @@ import type { Question, DemographicFilter as DemographicFilterType, Survey } fro
 import { toast } from '@/hooks/use-toast'
 import { Plus, Save, Play, ArrowLeft, ChevronDown, Settings } from 'lucide-react'
 
+/**
+ * Check if a model supports multimodal input via the OpenRouter models API.
+ * Returns true if the model supports vision/multimodal, or if we can't determine (allow proceeding).
+ */
+async function checkMultimodalSupport(modelId: string): Promise<boolean> {
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/models')
+    if (!response.ok) return true // Can't check — allow proceeding
+
+    const data = await response.json()
+    const models = data?.data as Array<{ id: string; architecture?: { modality?: string } }> | undefined
+    if (!models) return true
+
+    const model = models.find((m) => m.id === modelId)
+    if (!model) return true // Unknown model — allow proceeding
+
+    // Check modality field (e.g., "text->text", "text+image->text")
+    const modality = model.architecture?.modality || ''
+    return modality.includes('image') || modality.includes('multimodal') || modality.includes('audio')
+  } catch {
+    return true // Network error — allow proceeding
+  }
+}
+
 export function SurveyCreate() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -263,6 +287,26 @@ export function SurveyCreate() {
       }
       if (!llmConfig.vllm_model) {
         setError('vLLM model is not set. Please configure it in the Settings page.')
+        return
+      }
+    }
+
+    // Check if survey has media attachments
+    const hasMedia = questions.some(
+      (q) => q.media || q.option_media?.some((m) => m != null)
+    )
+
+    if (hasMedia) {
+      // Validate multimodal model support
+      const modelId = llmConfig.provider === 'openrouter' ? llmConfig.openrouter_model : llmConfig.vllm_model
+      const isMultimodal = await checkMultimodalSupport(modelId || '')
+
+      if (!isMultimodal) {
+        setError(
+          `Your model (${modelId}) may not support multimodal input. This survey has questions with media attachments. ` +
+          'Please use a multimodal model (e.g., google/gemini-2.0-flash, anthropic/claude-sonnet-4, openai/gpt-4o) ' +
+          'or remove media from your questions.'
+        )
         return
       }
     }

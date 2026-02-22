@@ -7,7 +7,8 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
-import type { Question, QuestionType } from '@/types/database'
+import type { Question, QuestionType, MediaAttachment } from '@/types/database'
+import { MediaUpload } from '@/components/surveys/MediaUpload'
 import { Trash2, GripVertical, Plus, X, Copy } from 'lucide-react'
 
 interface QuestionEditorProps {
@@ -55,12 +56,28 @@ export function QuestionEditor({ question, index, onChange, onDelete, onDuplicat
   }
 
   const addOption = () => {
-    onChange({ ...question, options: [...(question.options || []), ''] })
+    const newOptionMedia = question.option_media ? [...question.option_media, null] : undefined
+    onChange({ ...question, options: [...(question.options || []), ''], ...(newOptionMedia && { option_media: newOptionMedia }) })
   }
 
   const removeOption = (optionIndex: number) => {
     const newOptions = (question.options || []).filter((_, i) => i !== optionIndex)
-    onChange({ ...question, options: newOptions })
+    const newOptionMedia = question.option_media?.filter((_, i) => i !== optionIndex)
+    onChange({ ...question, options: newOptions, option_media: newOptionMedia?.length ? newOptionMedia : undefined })
+  }
+
+  const handleQuestionMedia = (media: MediaAttachment | null) => {
+    onChange({ ...question, media: media ?? undefined })
+  }
+
+  const handleOptionMedia = (optionIndex: number, media: MediaAttachment | null) => {
+    const newOptionMedia = question.option_media
+      ? [...question.option_media]
+      : new Array(question.options?.length || 0).fill(null)
+    newOptionMedia[optionIndex] = media
+    // Clear option_media entirely if all null
+    const hasAny = newOptionMedia.some((m) => m !== null)
+    onChange({ ...question, option_media: hasAny ? newOptionMedia : undefined })
   }
 
   return (
@@ -107,6 +124,7 @@ export function QuestionEditor({ question, index, onChange, onDelete, onDuplicat
             placeholder="Enter your question..."
             rows={2}
           />
+          <MediaUpload value={question.media} onChange={handleQuestionMedia} />
         </div>
 
         {showOptions && (
@@ -122,6 +140,11 @@ export function QuestionEditor({ question, index, onChange, onDelete, onDuplicat
                     value={option}
                     onChange={(e) => handleOptionChange(optionIndex, e.target.value)}
                     placeholder={`Option ${optionIndex + 1}`}
+                  />
+                  <MediaUpload
+                    compact
+                    value={question.option_media?.[optionIndex] ?? null}
+                    onChange={(media) => handleOptionMedia(optionIndex, media)}
                   />
                   {(question.options?.length || 0) > 2 && (
                     <Button

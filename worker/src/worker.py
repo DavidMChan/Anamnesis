@@ -16,11 +16,14 @@ import logging
 
 from .prompt import (
     Question,
+    Prompt,
     build_initial_prompt,
     build_followup_prompt,
     append_answer_to_context,
+    build_multimodal_prompt,
 )
 from .llm import UnifiedLLMClient
+from .media import WasabiMediaClient
 from .response import LLMResponse, RetryableError, NonRetryableError
 from .parser import ParserLLM
 
@@ -40,6 +43,7 @@ class FillingStrategy(Protocol):
         questions: List[Question],
         llm: UnifiedLLMClient,
         parser_llm: Optional[ParserLLM] = None,
+        media_client: Optional[WasabiMediaClient] = None,
     ) -> Dict[str, str]:
         """Fill all questions and return qkey -> answer mapping."""
         ...
@@ -61,6 +65,7 @@ class SeriesWithContext:
         questions: List[Question],
         llm: UnifiedLLMClient,
         parser_llm: Optional[ParserLLM] = None,
+        media_client: Optional[WasabiMediaClient] = None,
     ) -> Dict[str, str]:
         results: Dict[str, str] = {}
         context = ""
@@ -71,19 +76,29 @@ class SeriesWithContext:
         for i, question in enumerate(questions):
             max_words = open_response_max_words if question.type == "open_response" else None
             if i == 0:
-                prompt = build_initial_prompt(backstory, question, max_words=max_words)
+                text_prompt = build_initial_prompt(backstory, question, max_words=max_words)
             else:
-                prompt = build_followup_prompt(context, question, max_words=max_words)
+                text_prompt = build_followup_prompt(context, question, max_words=max_words)
+
+            # Download media and build multimodal prompt if needed
+            question_media = None
+            if question.has_media and media_client:
+                question_media = await asyncio.to_thread(
+                    media_client.download_media_for_question, question
+                )
+
+            prompt: Prompt = build_multimodal_prompt(text_prompt, question_media)
 
             answer, raw = await self._ask_with_retry(prompt, question, llm, parser_llm)
             results[question.qkey] = answer
-            context = append_answer_to_context(prompt, raw)
+            # Context accumulation stays text-only (no re-sending images)
+            context = append_answer_to_context(text_prompt, raw)
 
         return results
 
     async def _ask_with_retry(
         self,
-        prompt: str,
+        prompt: Prompt,
         question: Question,
         llm: UnifiedLLMClient,
         parser_llm: Optional[ParserLLM],
@@ -159,12 +174,14 @@ class TaskProcessor:
         max_retries: int = 3,
         parser_llm: Optional[ParserLLM] = None,
         strategy: Optional[FillingStrategy] = None,
+        media_client: Optional[WasabiMediaClient] = None,
     ):
         self.db = db
         self.llm = llm
         self.max_retries = max_retries
         self.parser_llm = parser_llm
         self.strategy = strategy or SeriesWithContext()
+        self.media_client = media_client
 
     def fetch_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Fetch task details from database."""
@@ -195,9 +212,16 @@ class TaskProcessor:
         for i, question in enumerate(questions):
             max_words = open_response_max_words if question.type == "open_response" else None
             if i == 0:
-                prompt = build_initial_prompt(backstory, question, max_words=max_words)
+                text_prompt = build_initial_prompt(backstory, question, max_words=max_words)
             else:
-                prompt = build_followup_prompt(context, question, max_words=max_words)
+                text_prompt = build_followup_prompt(context, question, max_words=max_words)
+
+            # Download media and build multimodal prompt if needed
+            question_media = None
+            if question.has_media and self.media_client:
+                question_media = self.media_client.download_media_for_question(question)
+
+            prompt: Prompt = build_multimodal_prompt(text_prompt, question_media)
 
             # Compliance forcing: retry until we get a parseable answer
             max_compliance_retries = 10
@@ -249,7 +273,8 @@ class TaskProcessor:
             results[question.qkey] = answer
             logger.info(f"Parsed answer for {question.qkey}: {answer} (raw: {repr(raw_answer[:100]) if raw_answer else 'None'})")
 
-            context = append_answer_to_context(prompt, raw_answer)
+            # Context accumulation stays text-only (no re-sending images)
+            context = append_answer_to_context(text_prompt, raw_answer)
 
         return results
 
@@ -349,7 +374,7 @@ class TaskProcessor:
         Questions are still processed sequentially (context accumulation),
         but LLM calls use async I/O to avoid blocking the event loop.
         """
-        return await self.strategy.fill(backstory, questions, self.llm, self.parser_llm)
+        return await self.strategy.fill(backstory, questions, self.llm, self.parser_llm, self.media_client)
 
     async def async_process_task(self, task: Dict[str, Any]) -> TaskProcessorResult:
         """

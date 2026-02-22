@@ -18,7 +18,8 @@ from typing import Optional, Dict, Any
 from src.config import get_config, LLMConfig
 from src.db import DatabaseClient
 from src.llm import UnifiedLLMClient
-from src.response import NonRetryableError
+from src.media import WasabiMediaClient
+from src.response import NonRetryableError, MultimodalNotSupportedError
 from src.metrics import LatencyTracker, MetricsLogger
 from src.parser import ParserLLM
 from src.queue import AsyncQueueConsumer
@@ -106,6 +107,20 @@ async def main():
 
     # Database client (sync — calls wrapped in to_thread)
     db = DatabaseClient(config.supabase)
+
+    # Media client (optional — only if Wasabi is configured)
+    media_client = None
+    if config.wasabi.is_configured:
+        media_client = WasabiMediaClient(
+            access_key=config.wasabi.access_key_id,
+            secret_key=config.wasabi.secret_access_key,
+            bucket=config.wasabi.bucket,
+            region=config.wasabi.region,
+            endpoint=config.wasabi.endpoint,
+        )
+        logger.info(f"Wasabi media client initialized (bucket={config.wasabi.bucket})")
+    else:
+        logger.info("Wasabi not configured — multimodal media will be skipped")
 
     # Cache for LLM clients and parser LLMs per survey run
     # (each run snapshots its own temperature/max_tokens)
@@ -212,6 +227,7 @@ async def main():
                 llm=llm,
                 max_retries=config.worker.max_retries,
                 parser_llm=parser_llm,
+                media_client=media_client,
             )
 
             start = time.monotonic()
@@ -226,6 +242,16 @@ async def main():
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON message: {e}")
             await message.nack(requeue=False)
+        except MultimodalNotSupportedError as e:
+            # Multimodal not supported → fail entire run, not just this task
+            logger.error(f"Task {task_id} multimodal not supported: {e}")
+            if task_id:
+                await asyncio.to_thread(
+                    db.fail_task, task_id,
+                    "This model does not support multimodal input (images/audio). "
+                    "Please use a vision-capable model."
+                )
+            await message.ack()
         except NonRetryableError as e:
             # 8. Non-retryable → fail permanently + ACK
             logger.error(f"Task {task_id} non-retryable error: {e}")
