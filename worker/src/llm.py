@@ -87,19 +87,21 @@ class UnifiedLLMClient:
         if self.provider == "vllm" and question.type == "mcq":
             return {"extra_body": {"structured_outputs": {"choice": letters}}}
 
-        # OpenRouter: JSON schema only works in chat completions mode
-        if self.provider == "openrouter" and not self.use_chat_template:
-            return {}
-
-        # JSON schema (vLLM all modes, OpenRouter chat mode only)
+        # JSON schema for non-MCQ structured output
         from .prompt import get_response_schema
         schema = get_response_schema(question)
-        return {
-            "response_format": {
-                "type": "json_schema",
-                "json_schema": {"name": "answer", "strict": True, "schema": schema}
-            }
+        rf = {
+            "type": "json_schema",
+            "json_schema": {"name": "answer", "strict": True, "schema": schema}
         }
+
+        if self.use_chat_template:
+            # Chat Completions API accepts response_format as a top-level param
+            return {"response_format": rf}
+
+        # Legacy Completions API: the OpenAI SDK rejects response_format as a
+        # top-level kwarg, so pass it via extra_body instead.
+        return {"extra_body": {"response_format": rf}}
 
     def _effective_max_tokens(self, question: "Optional[Question]") -> Optional[int]:
         """Determine max_tokens based on question type and guided decoding."""
