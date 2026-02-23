@@ -18,6 +18,7 @@ from .response import (
     NonRetryableError,
     TruncationError,
     StructuredOutputNotSupported,
+    MultimodalNotSupportedError,
 )
 
 logger = logging.getLogger(__name__)
@@ -197,12 +198,19 @@ class UnifiedLLMClient:
         # Fallback: text parsing
         return LLMResponse.from_text(content)
 
-    def complete(self, prompt: str, *, question: "Optional[Question]" = None) -> LLMResponse:
-        """Get completion from LLM (sync)."""
+    @staticmethod
+    def _is_multimodal_error(error_str: str) -> bool:
+        """Check if an error is about unsupported multimodal content."""
+        keywords = ("content type", "image", "multimodal", "vision", "audio", "media")
+        return any(kw in error_str for kw in keywords)
+
+    def complete(self, prompt, *, question: "Optional[Question]" = None) -> LLMResponse:
+        """Get completion from LLM (sync). Prompt can be str or list of content parts."""
         params = self._build_create_params(question)
+        is_multimodal = isinstance(prompt, list)
 
         try:
-            if self.use_chat_template:
+            if self.use_chat_template or is_multimodal:
                 messages = [{"role": "user", "content": prompt}]
                 response = self._sync_client.chat.completions.create(
                     model=self.model,
@@ -224,6 +232,8 @@ class UnifiedLLMClient:
             return self._parse_response(content, question)
         except openai.BadRequestError as e:
             error_str = str(e).lower()
+            if is_multimodal and self._is_multimodal_error(error_str):
+                raise MultimodalNotSupportedError(str(e))
             if "json" in error_str or "schema" in error_str or "chat_template" in error_str:
                 if self.provider == "openrouter":
                     logger.warning(f"Structured output not supported, falling back to text mode: {e}")
@@ -264,12 +274,13 @@ class UnifiedLLMClient:
         except Exception as e:
             raise NonRetryableError(f"Text fallback also failed: {e}")
 
-    async def async_complete(self, prompt: str, *, question: "Optional[Question]" = None) -> LLMResponse:
-        """Get completion from LLM (async)."""
+    async def async_complete(self, prompt, *, question: "Optional[Question]" = None) -> LLMResponse:
+        """Get completion from LLM (async). Prompt can be str or list of content parts."""
         params = self._build_create_params(question)
+        is_multimodal = isinstance(prompt, list)
 
         try:
-            if self.use_chat_template:
+            if self.use_chat_template or is_multimodal:
                 messages = [{"role": "user", "content": prompt}]
                 response = await self._async_client.chat.completions.create(
                     model=self.model,
@@ -291,6 +302,8 @@ class UnifiedLLMClient:
             return self._parse_response(content, question)
         except openai.BadRequestError as e:
             error_str = str(e).lower()
+            if is_multimodal and self._is_multimodal_error(error_str):
+                raise MultimodalNotSupportedError(str(e))
             if "json" in error_str or "schema" in error_str or "chat_template" in error_str:
                 if self.provider == "openrouter":
                     logger.warning(f"Structured output not supported, falling back to text mode: {e}")

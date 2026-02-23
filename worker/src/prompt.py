@@ -8,11 +8,44 @@ Key design principles (from anthology):
 4. Consistency prompt added for follow-up questions
 """
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Tuple, Union
 
 
 # Consistency prompt for follow-up questions (from anthology)
 CONSISTENCY_PROMPT = "Please answer the following question keeping in mind your previous answers."
+
+
+@dataclass
+class MediaAttachment:
+    """Media file attached to a question or option."""
+    key: str    # Wasabi object key (e.g., "media/abc123.png")
+    type: str   # MIME type (e.g., "image/png", "audio/wav")
+    name: str   # Original filename for display
+
+    @classmethod
+    def from_dict(cls, data: Optional[dict]) -> Optional["MediaAttachment"]:
+        """Create MediaAttachment from a dictionary, or None if data is None."""
+        if not data:
+            return None
+        return cls(
+            key=data.get("key", ""),
+            type=data.get("type", ""),
+            name=data.get("name", ""),
+        )
+
+
+# Content part for multimodal messages (OpenAI format)
+ContentPart = dict  # {"type": "text", "text": "..."} or {"type": "image_url", "image_url": {...}}
+
+# Prompt can be text-only (str) or multimodal (list of content parts)
+Prompt = Union[str, List[ContentPart]]
+
+
+@dataclass
+class QuestionMedia:
+    """Pre-downloaded media for a question, ready for LLM."""
+    question_media: Optional[Tuple[str, str]] = None  # (base64_data, mime_type)
+    option_media: Optional[List[Optional[Tuple[str, str]]]] = None  # parallel to options[]
 
 
 @dataclass
@@ -22,16 +55,34 @@ class Question:
     type: str  # 'mcq', 'multiple_select', 'open_response', 'ranking'
     text: str
     options: Optional[List[str]] = None
+    media: Optional[MediaAttachment] = None
+    option_media: Optional[List[Optional[MediaAttachment]]] = None
 
     @classmethod
     def from_dict(cls, data: dict) -> "Question":
         """Create Question from a dictionary."""
+        raw_option_media = data.get("option_media")
+        option_media = None
+        if raw_option_media and isinstance(raw_option_media, list):
+            option_media = [MediaAttachment.from_dict(m) if m else None for m in raw_option_media]
+
         return cls(
             qkey=data.get("qkey", ""),
             type=data.get("type", "mcq"),
             text=data.get("text", ""),
             options=data.get("options"),
+            media=MediaAttachment.from_dict(data.get("media")),
+            option_media=option_media,
         )
+
+    @property
+    def has_media(self) -> bool:
+        """Check if this question has any media attachments."""
+        if self.media:
+            return True
+        if self.option_media:
+            return any(m is not None for m in self.option_media)
+        return False
 
 
 def format_mcq_question(question: Question) -> str:
@@ -265,3 +316,57 @@ def get_response_schema(question: Question) -> dict:
             "required": ["answer"],
             "additionalProperties": False,
         }
+
+
+# ─── Multimodal prompt building ──────────────────────────────────────────────
+
+
+def build_multimodal_prompt(
+    text_prompt: str,
+    question_media: Optional[QuestionMedia] = None,
+) -> Prompt:
+    """
+    Wrap a text prompt with media content parts for multimodal LLMs.
+
+    If no media is provided, returns the text prompt as-is (str).
+    If media is present, returns a list of OpenAI-format content parts.
+
+    Media is inserted between the text and the "Answer:" line so the LLM
+    sees the images/audio in context with the question.
+    """
+    if not question_media:
+        return text_prompt
+
+    parts: List[ContentPart] = [{"type": "text", "text": text_prompt}]
+
+    # Add question-level media
+    if question_media.question_media:
+        b64_data, mime_type = question_media.question_media
+        if mime_type.startswith("image/"):
+            parts.append({
+                "type": "image_url",
+                "image_url": {"url": f"data:{mime_type};base64,{b64_data}"},
+            })
+        elif mime_type.startswith("audio/"):
+            parts.append({
+                "type": "input_audio",
+                "input_audio": {"data": b64_data, "format": mime_type.split("/")[-1]},
+            })
+
+    # Add per-option media
+    if question_media.option_media:
+        for opt_media in question_media.option_media:
+            if opt_media:
+                b64_data, mime_type = opt_media
+                if mime_type.startswith("image/"):
+                    parts.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime_type};base64,{b64_data}"},
+                    })
+                elif mime_type.startswith("audio/"):
+                    parts.append({
+                        "type": "input_audio",
+                        "input_audio": {"data": b64_data, "format": mime_type.split("/")[-1]},
+                    })
+
+    return parts

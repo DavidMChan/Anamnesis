@@ -1,0 +1,82 @@
+import { serve } from "https://deno.land/std@0.177.0/http/server.ts";
+import { S3Client, GetObjectCommand } from "npm:@aws-sdk/client-s3";
+import { getSignedUrl } from "npm:@aws-sdk/s3-request-presigner";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.0";
+
+const corsHeaders = {
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+};
+
+serve(async (req: Request) => {
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
+  }
+
+  try {
+    // Verify auth
+    const authHeader = req.headers.get("Authorization");
+    if (!authHeader) {
+      return new Response(JSON.stringify({ error: "Missing authorization" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const supabase = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_ANON_KEY")!,
+      { global: { headers: { Authorization: authHeader } } }
+    );
+
+    const token = authHeader.replace("Bearer ", "");
+    const { data: { user }, error: authError } = await supabase.auth.getUser(token);
+    if (authError || !user) {
+      return new Response(JSON.stringify({ error: "Unauthorized" }), {
+        status: 401,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    const { key } = await req.json();
+    if (!key) {
+      return new Response(JSON.stringify({ error: "key is required" }), {
+        status: 400,
+        headers: { ...corsHeaders, "Content-Type": "application/json" },
+      });
+    }
+
+    // Wasabi S3 client — per official docs:
+    // https://docs.wasabi.com/docs/how-do-i-use-aws-sdk-for-javascript-v3-with-wasabi
+    const region = Deno.env.get("WASABI_REGION") || "us-west-2";
+    const endpoint = `https://s3.${region}.wasabisys.com`;
+
+    const s3 = new S3Client({
+      credentials: {
+        accessKeyId: Deno.env.get("WASABI_ACCESS_KEY_ID")!,
+        secretAccessKey: Deno.env.get("WASABI_SECRET_ACCESS_KEY")!,
+      },
+      region,
+      endpoint,
+    });
+
+    // Generate presigned GET URL (1-hour expiry)
+    // GET URLs are used in <img src> / <audio src> — no CORS needed
+    const command = new GetObjectCommand({
+      Bucket: Deno.env.get("WASABI_BUCKET")!,
+      Key: key,
+    });
+
+    const url = await getSignedUrl(s3, command, { expiresIn: 3600 });
+
+    return new Response(JSON.stringify({ url }), {
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  } catch (err) {
+    console.error("Error generating get URL:", err);
+    return new Response(JSON.stringify({ error: "Internal server error" }), {
+      status: 500,
+      headers: { ...corsHeaders, "Content-Type": "application/json" },
+    });
+  }
+});

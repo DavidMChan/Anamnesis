@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import {
   DndContext,
@@ -28,7 +28,43 @@ import { useAuthContext } from '@/contexts/AuthContext'
 import { useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import type { Question, DemographicFilter as DemographicFilterType, Survey } from '@/types/database'
 import { toast } from '@/hooks/use-toast'
+import { deleteMedia, copyMedia } from '@/lib/media'
+import type { MediaAttachment } from '@/types/database'
 import { Plus, Save, Play, ArrowLeft, ChevronDown, Settings } from 'lucide-react'
+
+/**
+ * Check if a model supports multimodal input via the OpenRouter models API.
+ * Returns true if the model supports vision/multimodal, or if we can't determine (allow proceeding).
+ */
+async function checkMultimodalSupport(modelId: string): Promise<boolean> {
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/models')
+    if (!response.ok) return true // Can't check — allow proceeding
+
+    const data = await response.json()
+    const models = data?.data as Array<{ id: string; architecture?: { modality?: string } }> | undefined
+    if (!models) return true
+
+    const model = models.find((m) => m.id === modelId)
+    if (!model) return true // Unknown model — allow proceeding
+
+    // Check modality field (e.g., "text->text", "text+image->text")
+    const modality = model.architecture?.modality || ''
+    return modality.includes('image') || modality.includes('multimodal') || modality.includes('audio')
+  } catch {
+    return true // Network error — allow proceeding
+  }
+}
+
+/** Collect all Wasabi media keys referenced by a list of questions. */
+function collectMediaKeys(qs: Question[]): Set<string> {
+  const keys = new Set<string>()
+  for (const q of qs) {
+    if (q.media?.key) keys.add(q.media.key)
+    q.option_media?.forEach((m) => { if (m?.key) keys.add(m.key) })
+  }
+  return keys
+}
 
 export function SurveyCreate() {
   const { id } = useParams()
@@ -46,7 +82,11 @@ export function SurveyCreate() {
   const [includeOwnBackstories, setIncludeOwnBackstories] = useState(false)
   const [ownBackstoriesCount, setOwnBackstoriesCount] = useState(0)
   const [saving, setSaving] = useState(false)
+  const [duplicating, setDuplicating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Baseline snapshot of questions as last persisted in DB — used to diff orphaned media on save
+  const savedQuestionsRef = useRef<Question[]>([])
 
   const { createRun, loading: creatingRun } = useCreateSurveyRun()
 
@@ -72,6 +112,7 @@ export function SurveyCreate() {
       const survey = data as Survey
       setName(survey.name || '')
       setQuestions(survey.questions)
+      savedQuestionsRef.current = survey.questions
       // Extract sample size from demographics if present
       const { _sample_size, ...restDemographics } = survey.demographics as DemographicFilterType & { _sample_size?: number[] }
       setDemographics(restDemographics)
@@ -115,17 +156,38 @@ export function SurveyCreate() {
     setQuestions(questions.filter((_, i) => i !== index))
   }
 
-  const duplicateQuestion = (index: number) => {
-    const questionToDuplicate = questions[index]
+  const duplicateQuestion = async (index: number) => {
+    const src = questions[index]
+    const hasMedia = !!(src.media || src.option_media?.some((m) => m != null))
+
+    let copiedMedia: MediaAttachment | undefined
+    let copiedOptionMedia: (MediaAttachment | null)[] | undefined
+    let copyFailed = false
+
+    if (hasMedia) {
+      setDuplicating(true)
+      try {
+        copiedMedia = src.media ? await copyMedia(src.media) : undefined
+        copiedOptionMedia = src.option_media
+          ? await Promise.all(src.option_media.map((m) => (m ? copyMedia(m) : null)))
+          : undefined
+      } catch {
+        copyFailed = true
+      }
+      setDuplicating(false)
+    }
+
     const newQuestion: Question = {
-      ...questionToDuplicate,
-      qkey: `q${Date.now()}`, // Unique key for the duplicated question
-      options: questionToDuplicate.options ? [...questionToDuplicate.options] : undefined,
+      ...src,
+      qkey: `q${Date.now()}`,
+      options: src.options ? [...src.options] : undefined,
+      media: copiedMedia,
+      option_media: copiedOptionMedia?.length ? copiedOptionMedia : undefined,
     }
     const newQuestions = [...questions]
     newQuestions.splice(index + 1, 0, newQuestion)
     setQuestions(newQuestions)
-    toast({ title: 'Copied!' })
+    toast({ title: copyFailed ? 'Copied (without media — copy failed)' : 'Copied!' })
   }
 
   const sensors = useSensors(
@@ -156,14 +218,14 @@ export function SurveyCreate() {
     }
     for (let i = 0; i < questions.length; i++) {
       const q = questions[i]
-      if (!q.text.trim()) {
-        return `Question ${i + 1} is missing text`
+      if (!q.text.trim() && !q.media) {
+        return `Question ${i + 1} needs text or media`
       }
       if (q.type !== 'open_response' && (!q.options || q.options.length < 2)) {
         return `Question ${i + 1} needs at least 2 options`
       }
-      if (q.options?.some((opt) => !opt.trim())) {
-        return `Question ${i + 1} has empty options`
+      if (q.options?.some((opt, j) => !opt.trim() && !q.option_media?.[j])) {
+        return `Question ${i + 1} has empty options (add text or media)`
       }
     }
     return null
@@ -227,6 +289,16 @@ export function SurveyCreate() {
       }
     }
 
+    // After successful DB save, clean up orphaned Wasabi media
+    if (result) {
+      const prevKeys = collectMediaKeys(savedQuestionsRef.current)
+      const currKeys = collectMediaKeys(questions)
+      for (const key of prevKeys) {
+        if (!currKeys.has(key)) deleteMedia(key)
+      }
+      savedQuestionsRef.current = questions
+    }
+
     setSaving(false)
     return result
   }
@@ -263,6 +335,26 @@ export function SurveyCreate() {
       }
       if (!llmConfig.vllm_model) {
         setError('vLLM model is not set. Please configure it in the Settings page.')
+        return
+      }
+    }
+
+    // Check if survey has media attachments
+    const hasMedia = questions.some(
+      (q) => q.media || q.option_media?.some((m) => m != null)
+    )
+
+    if (hasMedia) {
+      // Validate multimodal model support
+      const modelId = llmConfig.provider === 'openrouter' ? llmConfig.openrouter_model : llmConfig.vllm_model
+      const isMultimodal = await checkMultimodalSupport(modelId || '')
+
+      if (!isMultimodal) {
+        setError(
+          `Your model (${modelId}) may not support multimodal input. This survey has questions with media attachments. ` +
+          'Please use a multimodal model (e.g., google/gemini-2.0-flash, anthropic/claude-sonnet-4, openai/gpt-4o) ' +
+          'or remove media from your questions.'
+        )
         return
       }
     }
@@ -367,7 +459,7 @@ export function SurveyCreate() {
                       index={index}
                       onChange={(q) => updateQuestion(index, q)}
                       onDelete={() => deleteQuestion(index)}
-                      onDuplicate={() => duplicateQuestion(index)}
+                      onDuplicate={() => !duplicating && duplicateQuestion(index)}
                     />
                   ))}
                 </div>

@@ -93,6 +93,21 @@ class LLMConfig:
 
 
 @dataclass
+class WasabiConfig:
+    """Wasabi (S3-compatible) storage configuration for media files."""
+    access_key_id: str = field(default_factory=lambda: os.environ.get("WASABI_ACCESS_KEY_ID", ""))
+    secret_access_key: str = field(default_factory=lambda: os.environ.get("WASABI_SECRET_ACCESS_KEY", ""))
+    bucket: str = field(default_factory=lambda: os.environ.get("WASABI_BUCKET", ""))
+    region: str = field(default_factory=lambda: os.environ.get("WASABI_REGION", "us-west-2"))
+    endpoint: str = field(default_factory=lambda: os.environ.get("WASABI_ENDPOINT", "https://s3.wasabisys.com"))
+
+    @property
+    def is_configured(self) -> bool:
+        """Check if Wasabi is configured (all required fields set)."""
+        return bool(self.access_key_id and self.secret_access_key and self.bucket)
+
+
+@dataclass
 class WorkerConfig:
     """Worker process configuration."""
     max_retries: int = field(default_factory=lambda: int(os.environ.get("MAX_RETRIES", "3")))
@@ -108,6 +123,7 @@ class Config:
     supabase: SupabaseConfig = field(default_factory=SupabaseConfig)
     rabbitmq: RabbitMQConfig = field(default_factory=RabbitMQConfig)
     worker: WorkerConfig = field(default_factory=WorkerConfig)
+    wasabi: WasabiConfig = field(default_factory=WasabiConfig)
 
 
 def get_config() -> Config:

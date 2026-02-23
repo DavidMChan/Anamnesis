@@ -29,6 +29,9 @@ class TruncationError(LLMError):
 class StructuredOutputNotSupported(LLMError):
     """Model doesn't support structured output (json_schema)."""
 
+class MultimodalNotSupportedError(NonRetryableError):
+    """Model doesn't support multimodal input (images/audio)."""
+
 
 # ─── LLMResponse ─────────────────────────────────────────────────────────────
 

@@ -78,12 +78,19 @@ export interface DemographicKey {
 
 export type QuestionType = 'mcq' | 'multiple_select' | 'open_response' | 'ranking'
 
+export interface MediaAttachment {
+  key: string       // Wasabi object key (e.g., "media/abc123.png")
+  type: string      // MIME type (e.g., "image/png", "audio/wav")
+  name: string      // Original filename for display
+}
+
 export interface Question {
   qkey: string
   type: QuestionType
   text: string
   options?: string[]
-  image_url?: string
+  media?: MediaAttachment               // Question-level attachment
+  option_media?: (MediaAttachment | null)[]  // Per-option, parallel to options[]
 }
 
 export type SurveyStatus = 'draft' | 'active'
