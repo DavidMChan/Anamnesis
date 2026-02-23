@@ -36,6 +36,19 @@ class TestClipBoundaryMarkers:
         result = clean_open_response("Question: What is your name?")
         assert result == ""
 
+    def test_clip_at_prompt_template_leakage(self):
+        """Model regurgitates the consistency prompt after a word count."""
+        text = (
+            "I believe education is the most important issue facing our country today. "
+            "202 words Please answer the following question keeping in mind your previous answers."
+        )
+        result = clean_open_response(text)
+        assert result == "I believe education is the most important issue facing our country today."
+
+    def test_clip_prompt_template_case_insensitive(self):
+        result = clean_open_response("Some answer. please answer the following question")
+        assert result == "Some answer."
+
 
 class TestHTMLCleanup:
     """Step 2: HTML entity unescape, <br> to newline, strip tags."""

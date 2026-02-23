@@ -160,6 +160,12 @@ def clean_open_response(text: str) -> str:
     if match:
         text = text[:match.start()]
 
+    # Prompt template leakage — model regurgitates the consistency prompt
+    # (e.g. "202 words Please answer the following question keeping in mind...")
+    match = re.search(r'(?i)please answer the following question', text)
+    if match:
+        text = text[:match.start()]
+
     # Step 2: HTML cleanup
     text = html.unescape(text)
     text = re.sub(r'<br\s*/?>', '\n', text)
