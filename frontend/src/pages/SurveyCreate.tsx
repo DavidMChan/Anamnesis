@@ -20,7 +20,6 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { QuestionEditor } from '@/components/surveys/QuestionEditor'
 import { DemographicFilter } from '@/components/surveys/DemographicFilter'
@@ -53,7 +52,6 @@ export function SurveyCreate() {
   const [demographics, setDemographics] = useState<DemographicFilterType>({})
   const [sampleSize, setSampleSize] = useState<number | undefined>(undefined)
   const [includeOwnBackstories, setIncludeOwnBackstories] = useState(false)
-  const [surveyStatus, setSurveyStatus] = useState<'draft' | 'active'>('draft')
   const [ownBackstoriesCount, setOwnBackstoriesCount] = useState(0)
   const [saving, setSaving] = useState(false)
   const [duplicating, setDuplicating] = useState(false)
@@ -61,8 +59,6 @@ export function SurveyCreate() {
 
   // Baseline snapshot of questions as last persisted in DB — used to diff orphaned media on save
   const savedQuestionsRef = useRef<Question[]>([])
-
-  const isActiveEditing = isEditing && surveyStatus === 'active'
 
   useEffect(() => {
     if (isEditing) {
@@ -84,10 +80,14 @@ export function SurveyCreate() {
       navigate('/surveys')
     } else if (data) {
       const survey = data as Survey
+      // Active surveys can't be edited — redirect to view page
+      if (survey.status === 'active') {
+        navigate(`/surveys/${id}`, { replace: true })
+        return
+      }
       setName(survey.name || '')
       setQuestions(survey.questions)
       savedQuestionsRef.current = survey.questions
-      setSurveyStatus(survey.status)
       // Extract sample size from demographics if present
       const { _sample_size, ...restDemographics } = survey.demographics as DemographicFilterType & { _sample_size?: number[] }
       setDemographics(restDemographics)
@@ -321,14 +321,10 @@ export function SurveyCreate() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-semibold">Questions</h2>
-            {isActiveEditing ? (
-              <Badge variant="secondary">Locked (survey has been run)</Badge>
-            ) : (
-              <Button onClick={addQuestion}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add Question
-              </Button>
-            )}
+            <Button onClick={addQuestion}>
+              <Plus className="h-4 w-4 mr-2" />
+              Add Question
+            </Button>
           </div>
 
           {questions.length === 0 ? (
@@ -341,28 +337,6 @@ export function SurveyCreate() {
                 </Button>
               </CardContent>
             </Card>
-          ) : isActiveEditing ? (
-            /* Read-only question display for active surveys */
-            <div className="space-y-4">
-              {questions.map((question, index) => (
-                <Card key={question.qkey} className="opacity-75">
-                  <CardContent className="pt-6">
-                    <div className="flex items-start justify-between mb-2">
-                      <span className="text-sm font-medium text-muted-foreground">Q{index + 1}</span>
-                      <Badge variant="outline">{question.type}</Badge>
-                    </div>
-                    <p className="font-medium mb-2">{question.text}</p>
-                    {question.options && (
-                      <ul className="text-sm text-muted-foreground space-y-1 ml-4">
-                        {question.options.map((opt, i) => (
-                          <li key={i}>{question.type === 'ranking' ? `${i + 1}. ` : '• '}{opt}</li>
-                        ))}
-                      </ul>
-                    )}
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
           ) : (
             <DndContext
               sensors={sensors}

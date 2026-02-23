@@ -133,6 +133,7 @@ export interface SurveyRun {
   results?: SurveyResults
   error_log?: SurveyRunErrorLog[]
   llm_config: LLMConfig
+  demographics?: DemographicFilter
   started_at: string | null
   completed_at: string | null
   created_at: string

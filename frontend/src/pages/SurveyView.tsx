@@ -9,14 +9,15 @@ import { useSurveyRun, useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
 import { cancelSurveyRun } from '@/lib/surveyRunner'
 import { useAuthContext } from '@/contexts/AuthContext'
-import type { Survey, SurveyRun, MediaAttachment, LLMConfig } from '@/types/database'
+import type { Survey, SurveyRun, MediaAttachment, LLMConfig, DemographicFilter as DemographicFilterType } from '@/types/database'
 import { MediaPreview } from '@/components/surveys/MediaPreview'
+import { DemographicFilter } from '@/components/surveys/DemographicFilter'
 import { getMediaUrl } from '@/lib/media'
 import { mergeEffectiveConfig, getConfigSources, LLM_DEFAULTS } from '@/lib/llmConfig'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { ArrowLeft, Edit, Play, History, Settings } from 'lucide-react'
+import { ArrowLeft, Edit, Play, History, Settings, ChevronDown, ChevronRight } from 'lucide-react'
 
 /** Standalone audio player that loads its own URL from a media key */
 function AudioPlayer({ media }: { media: MediaAttachment }) {
@@ -191,6 +192,9 @@ export function SurveyView() {
   const [configError, setConfigError] = useState<string | null>(null)
   const [expandedAudio, setExpandedAudio] = useState<{ qkey: string; optIndex: number } | null>(null)
   const [runOverrides, setRunOverrides] = useState<Partial<LLMConfig>>({})
+  const [questionsExpanded, setQuestionsExpanded] = useState(false)
+  const [runDemographics, setRunDemographics] = useState<DemographicFilterType>({})
+  const [runSampleSize, setRunSampleSize] = useState<number | undefined>(undefined)
 
   // Fetch survey run data
   const { run: latestRun, runs, isRunning, refresh: refreshRuns } = useSurveyRun({
@@ -204,6 +208,14 @@ export function SurveyView() {
   useEffect(() => {
     fetchSurvey()
   }, [id])
+
+  // Initialize run demographics from survey defaults when survey loads
+  useEffect(() => {
+    if (!survey) return
+    const { _sample_size, ...restDemographics } = survey.demographics as DemographicFilterType & { _sample_size?: number[] }
+    setRunDemographics(restDemographics)
+    setRunSampleSize(_sample_size?.[0])
+  }, [survey?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchSurvey = async () => {
     if (!id) return
@@ -271,7 +283,12 @@ export function SurveyView() {
 
     // Merge profile defaults + local overrides into run config snapshot
     const runLlmConfig = mergeEffectiveConfig(llmConfig, runOverrides)
-    const runId = await createRun(survey.id, runLlmConfig)
+    // Build effective demographics for this run
+    const effectiveDemographics = {
+      ...runDemographics,
+      ...(runSampleSize != null && { _sample_size: [runSampleSize] }),
+    } as DemographicFilterType
+    const runId = await createRun(survey.id, runLlmConfig, effectiveDemographics)
     if (runId) {
       refreshRuns()
       fetchSurvey()
@@ -321,12 +338,14 @@ export function SurveyView() {
             </p>
           </div>
           <div className="flex gap-2">
-            <Link to={`/surveys/${survey.id}/edit`}>
-              <Button variant="outline">
-                <Edit className="h-4 w-4 mr-2" />
-                Edit
-              </Button>
-            </Link>
+            {survey.status === 'draft' && (
+              <Link to={`/surveys/${survey.id}/edit`}>
+                <Button variant="outline">
+                  <Edit className="h-4 w-4 mr-2" />
+                  Edit
+                </Button>
+              </Link>
+            )}
             {runs.length > 0 && (
               <Button variant="outline" onClick={() => setShowHistory(!showHistory)}>
                 <History className="h-4 w-4 mr-2" />
@@ -378,13 +397,23 @@ export function SurveyView() {
 
         {/* Questions */}
         <Card>
-          <CardHeader>
-            <CardTitle>Questions</CardTitle>
+          <CardHeader
+            className="cursor-pointer"
+            onClick={() => setQuestionsExpanded(!questionsExpanded)}
+          >
+            <div className="flex items-center justify-between">
+              <CardTitle>Questions</CardTitle>
+              {questionsExpanded ? (
+                <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              ) : (
+                <ChevronRight className="h-4 w-4 text-muted-foreground" />
+              )}
+            </div>
             <CardDescription>
               {survey.questions.length} questions in this survey
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          {questionsExpanded && <CardContent>
             <div className="space-y-4">
               {survey.questions.map((question, index) => (
                 <div key={question.qkey} className="border rounded-lg p-4">
@@ -438,7 +467,7 @@ export function SurveyView() {
                 </div>
               ))}
             </div>
-          </CardContent>
+          </CardContent>}
         </Card>
 
         {/* Run Configuration — local state, applied when "Run Survey" is clicked */}
@@ -448,31 +477,14 @@ export function SurveyView() {
           onChangeOverrides={setRunOverrides}
         />
 
-        {/* Demographic Filters */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Demographic Filters</CardTitle>
-            <CardDescription>
-              Target audience for this survey
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {Object.keys(survey.demographics).length === 0 ? (
-              <p className="text-muted-foreground">No demographic filters applied (all backstories)</p>
-            ) : (
-              <div className="space-y-2">
-                {Object.entries(survey.demographics).map(([key, value]) => (
-                  <div key={key} className="flex items-center gap-2">
-                    <span className="font-medium capitalize">{key.replace('_', ' ')}:</span>
-                    <span className="text-muted-foreground">
-                      {Array.isArray(value) ? value.join(', ') : JSON.stringify(value)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        {/* Demographic Filters (editable per-run) */}
+        <DemographicFilter
+          value={runDemographics}
+          onChange={setRunDemographics}
+          sampleSize={runSampleSize}
+          onSampleSizeChange={setRunSampleSize}
+          description="Settings for the next run (empty = inherit from initial survey settings)"
+        />
       </div>
     </Layout>
   )
