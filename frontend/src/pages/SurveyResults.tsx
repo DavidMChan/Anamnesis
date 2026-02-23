@@ -46,21 +46,17 @@ function RunConfigCard({ run }: { run: SurveyRun | null }) {
     <Card>
       <button
         type="button"
-        className="w-full text-left"
+        className="flex items-center justify-between w-full px-6 py-4 text-left"
         onClick={() => setExpanded(!expanded)}
       >
-        <CardHeader className="pb-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Settings className="h-4 w-4" />
-              <CardTitle className="text-base">Run Configuration</CardTitle>
-            </div>
-            <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} />
-          </div>
-        </CardHeader>
+        <div className="flex items-center gap-2">
+          <Settings className="h-4 w-4" />
+          <span className="text-base font-semibold leading-none tracking-tight">Run Configuration</span>
+        </div>
+        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} />
       </button>
       {expanded && (
-        <CardContent className="pt-0">
+        <CardContent className="pt-0 pb-4">
           <div className="space-y-2 text-sm">
             <div className="flex items-center gap-2">
               <span className="font-medium w-24">Provider:</span>

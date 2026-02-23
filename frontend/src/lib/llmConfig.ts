@@ -11,28 +11,28 @@ export function getModelName(config: Partial<LLMConfig> | undefined | null): str
   return config.provider === 'vllm' ? config.vllm_model : config.openrouter_model
 }
 
-/** Merge user profile defaults + per-survey overrides + system defaults */
+/** Merge user profile defaults + local overrides + system defaults into a run config */
 export function mergeEffectiveConfig(
   profileConfig: LLMConfig | undefined,
-  surveyConfig: Partial<LLMConfig> | null | undefined,
+  overrides: Partial<LLMConfig> | null | undefined,
 ): LLMConfig {
   return {
     ...profileConfig,
-    ...surveyConfig,
-    temperature: surveyConfig?.temperature ?? profileConfig?.temperature ?? LLM_DEFAULTS.temperature,
-    max_tokens: surveyConfig?.max_tokens ?? profileConfig?.max_tokens ?? LLM_DEFAULTS.max_tokens,
+    ...overrides,
+    temperature: overrides?.temperature ?? profileConfig?.temperature ?? LLM_DEFAULTS.temperature,
+    max_tokens: overrides?.max_tokens ?? profileConfig?.max_tokens ?? LLM_DEFAULTS.max_tokens,
   } as LLMConfig
 }
 
-/** Check which fields come from survey override vs profile default */
+/** Check which fields come from local override vs profile default */
 export function getConfigSources(
   profileConfig: LLMConfig | undefined,
-  surveyConfig: Partial<LLMConfig> | null | undefined,
+  overrides: Partial<LLMConfig> | null | undefined,
 ): Record<string, 'override' | 'profile' | 'default'> {
   const sources: Record<string, 'override' | 'profile' | 'default'> = {}
 
-  for (const key of ['provider', 'openrouter_model', 'vllm_model', 'vllm_endpoint', 'temperature', 'max_tokens'] as const) {
-    if (surveyConfig?.[key] != null) {
+  for (const key of ['provider', 'openrouter_model', 'vllm_model', 'vllm_endpoint', 'temperature', 'max_tokens', 'max_concurrent_tasks'] as const) {
+    if (overrides?.[key] != null) {
       sources[key] = 'override'
     } else if (profileConfig?.[key] != null) {
       sources[key] = 'profile'

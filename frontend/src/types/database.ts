@@ -111,7 +111,6 @@ export interface Survey {
   questions: Question[]
   demographics: DemographicFilter
   status: SurveyStatus
-  llm_config?: Partial<LLMConfig> | null
   created_at: string
 }
 
