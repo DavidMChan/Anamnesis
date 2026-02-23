@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import { useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { Button } from '@/components/ui/button'
@@ -7,8 +7,29 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Card, CardContent, CardHeader } from '@/components/ui/card'
-import type { Question, QuestionType } from '@/types/database'
+import type { Question, QuestionType, MediaAttachment } from '@/types/database'
+import { MediaUpload } from '@/components/surveys/MediaUpload'
+import { getMediaUrl } from '@/lib/media'
 import { Trash2, GripVertical, Plus, X, Copy } from 'lucide-react'
+
+/** Standalone audio player that loads its own URL from a media key */
+function AudioPlayer({ media }: { media: MediaAttachment }) {
+  const [url, setUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getMediaUrl(media.key)
+      .then((u) => { if (!cancelled) setUrl(u) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [media.key])
+
+  if (!url) {
+    return <span className="text-xs text-muted-foreground italic">Loading audio...</span>
+  }
+
+  return <audio controls src={url} className="w-full" />
+}
 
 interface QuestionEditorProps {
   question: Question
@@ -22,6 +43,7 @@ export function QuestionEditor({ question, index, onChange, onDelete, onDuplicat
   const [showOptions, setShowOptions] = useState(
     question.type === 'mcq' || question.type === 'multiple_select' || question.type === 'ranking'
   )
+  const [expandedAudioOption, setExpandedAudioOption] = useState<number | null>(null)
 
   const {
     attributes,
@@ -55,12 +77,28 @@ export function QuestionEditor({ question, index, onChange, onDelete, onDuplicat
   }
 
   const addOption = () => {
-    onChange({ ...question, options: [...(question.options || []), ''] })
+    const newOptionMedia = question.option_media ? [...question.option_media, null] : undefined
+    onChange({ ...question, options: [...(question.options || []), ''], ...(newOptionMedia && { option_media: newOptionMedia }) })
   }
 
   const removeOption = (optionIndex: number) => {
     const newOptions = (question.options || []).filter((_, i) => i !== optionIndex)
-    onChange({ ...question, options: newOptions })
+    const newOptionMedia = question.option_media?.filter((_, i) => i !== optionIndex)
+    onChange({ ...question, options: newOptions, option_media: newOptionMedia?.length ? newOptionMedia : undefined })
+  }
+
+  const handleQuestionMedia = (media: MediaAttachment | null) => {
+    onChange({ ...question, media: media ?? undefined })
+  }
+
+  const handleOptionMedia = (optionIndex: number, media: MediaAttachment | null) => {
+    const newOptionMedia = question.option_media
+      ? [...question.option_media]
+      : new Array(question.options?.length || 0).fill(null)
+    newOptionMedia[optionIndex] = media
+    // Clear option_media entirely if all null
+    const hasAny = newOptionMedia.some((m) => m !== null)
+    onChange({ ...question, option_media: hasAny ? newOptionMedia : undefined })
   }
 
   return (
@@ -107,33 +145,54 @@ export function QuestionEditor({ question, index, onChange, onDelete, onDuplicat
             placeholder="Enter your question..."
             rows={2}
           />
+          <MediaUpload value={question.media} onChange={handleQuestionMedia} />
         </div>
 
         {showOptions && (
           <div className="space-y-2">
             <Label>Options</Label>
             <div className="space-y-2">
-              {(question.options || []).map((option, optionIndex) => (
-                <div key={optionIndex} className="flex items-center gap-2">
-                  <span className="text-sm text-muted-foreground w-6">
-                    {question.type === 'ranking' ? `${optionIndex + 1}.` : question.type === 'mcq' ? '○' : '☐'}
-                  </span>
-                  <Input
-                    value={option}
-                    onChange={(e) => handleOptionChange(optionIndex, e.target.value)}
-                    placeholder={`Option ${optionIndex + 1}`}
-                  />
-                  {(question.options?.length || 0) > 2 && (
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => removeOption(optionIndex)}
-                    >
-                      <X className="h-4 w-4" />
-                    </Button>
-                  )}
-                </div>
-              ))}
+              {(question.options || []).map((option, optionIndex) => {
+                const optionMedia = question.option_media?.[optionIndex] ?? null
+                const isAudioOption = optionMedia && !optionMedia.type.startsWith('image/')
+                const isThisAudioExpanded = expandedAudioOption === optionIndex
+
+                return (
+                  <div key={optionIndex} className="space-y-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm text-muted-foreground w-6">
+                        {question.type === 'ranking' ? `${optionIndex + 1}.` : question.type === 'mcq' ? '○' : '☐'}
+                      </span>
+                      <Input
+                        value={option}
+                        onChange={(e) => handleOptionChange(optionIndex, e.target.value)}
+                        placeholder={`Option ${optionIndex + 1}`}
+                      />
+                      <MediaUpload
+                        compact
+                        value={optionMedia}
+                        onChange={(media) => handleOptionMedia(optionIndex, media)}
+                        isAudioExpanded={isThisAudioExpanded}
+                        onAudioToggle={isAudioOption ? (expanded) => setExpandedAudioOption(expanded ? optionIndex : null) : undefined}
+                      />
+                      {(question.options?.length || 0) > 2 && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          onClick={() => removeOption(optionIndex)}
+                        >
+                          <X className="h-4 w-4" />
+                        </Button>
+                      )}
+                    </div>
+                    {isThisAudioExpanded && isAudioOption && optionMedia && (
+                      <div className="pl-8 pr-2">
+                        <AudioPlayer media={optionMedia} />
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
             </div>
             <Button variant="outline" size="sm" onClick={addOption}>
               <Plus className="h-4 w-4 mr-1" />

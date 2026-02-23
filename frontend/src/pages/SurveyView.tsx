@@ -8,8 +8,48 @@ import { supabase } from '@/lib/supabase'
 import { useSurveyRun, useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
 import { useAuthContext } from '@/contexts/AuthContext'
-import type { Survey, SurveyRun } from '@/types/database'
+import type { Survey, SurveyRun, MediaAttachment } from '@/types/database'
+import { MediaPreview } from '@/components/surveys/MediaPreview'
+import { getMediaUrl } from '@/lib/media'
 import { ArrowLeft, Edit, Play, History, Settings } from 'lucide-react'
+
+/** Standalone audio player that loads its own URL from a media key */
+function AudioPlayer({ media }: { media: MediaAttachment }) {
+  const [url, setUrl] = useState<string | null>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    getMediaUrl(media.key)
+      .then((u) => { if (!cancelled) setUrl(u) })
+      .catch(() => {})
+    return () => { cancelled = true }
+  }, [media.key])
+
+  if (!url) {
+    return <span className="text-xs text-muted-foreground italic">Loading audio...</span>
+  }
+
+  return <audio controls src={url} className="w-full" />
+}
+
+/**
+ * Check if a model supports multimodal input via the OpenRouter models API.
+ */
+async function checkMultimodalSupport(modelId: string): Promise<boolean> {
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/models')
+    if (!response.ok) return true
+    const data = await response.json()
+    const models = data?.data as Array<{ id: string; architecture?: { modality?: string } }> | undefined
+    if (!models) return true
+    const model = models.find((m) => m.id === modelId)
+    if (!model) return true
+    const modality = model.architecture?.modality || ''
+    return modality.includes('image') || modality.includes('multimodal') || modality.includes('audio')
+  } catch {
+    return true
+  }
+}
 
 const statusColors: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'gold'> = {
   draft: 'secondary',
@@ -32,6 +72,7 @@ export function SurveyView() {
   const [showHistory, setShowHistory] = useState(false)
   const [selectedRun, setSelectedRun] = useState<SurveyRun | null>(null)
   const [configError, setConfigError] = useState<string | null>(null)
+  const [expandedAudio, setExpandedAudio] = useState<{ qkey: string; optIndex: number } | null>(null)
 
   // Fetch survey run data
   const { run: latestRun, runs, isRunning, refresh: refreshRuns } = useSurveyRun({
@@ -89,6 +130,23 @@ export function SurveyView() {
       }
       if (!llmConfig.vllm_model) {
         setConfigError('vLLM model is not set. Please configure it in the Settings page.')
+        return
+      }
+    }
+
+    // Check if survey has media attachments
+    const hasMedia = survey.questions.some(
+      (q) => q.media || q.option_media?.some((m) => m != null)
+    )
+
+    if (hasMedia) {
+      const modelId = llmConfig.provider === 'openrouter' ? llmConfig.openrouter_model : llmConfig.vllm_model
+      const isMultimodal = await checkMultimodalSupport(modelId || '')
+      if (!isMultimodal) {
+        setConfigError(
+          `Your model (${modelId}) may not support multimodal input. This survey has questions with media attachments. ` +
+          'Please use a multimodal model (e.g., google/gemini-2.0-flash, anthropic/claude-sonnet-4, openai/gpt-4o).'
+        )
         return
       }
     }
@@ -223,14 +281,42 @@ export function SurveyView() {
                     </Badge>
                   </div>
                   <p className="font-medium mb-2">{question.text}</p>
+                  {question.media && (
+                    <div className="mb-2">
+                      <MediaPreview media={question.media} />
+                    </div>
+                  )}
                   {question.options && question.options.length > 0 && (
                     <ul className="text-sm text-muted-foreground space-y-1 ml-4">
-                      {question.options.map((option, optIndex) => (
-                        <li key={optIndex}>
-                          {question.type === 'ranking' ? `${optIndex + 1}. ` : '• '}
-                          {option}
-                        </li>
-                      ))}
+                      {question.options.map((option, optIndex) => {
+                        const optMedia = question.option_media?.[optIndex]
+                        const isAudioOpt = optMedia && !optMedia.type.startsWith('image/')
+                        const isThisExpanded = expandedAudio?.qkey === question.qkey && expandedAudio?.optIndex === optIndex
+
+                        return (
+                          <li key={optIndex} className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span>
+                                {question.type === 'ranking' ? `${optIndex + 1}. ` : '• '}
+                                {option}
+                              </span>
+                              {optMedia && (
+                                <MediaPreview
+                                  media={optMedia}
+                                  compact
+                                  isAudioExpanded={isThisExpanded}
+                                  onAudioToggle={isAudioOpt ? (expanded) => setExpandedAudio(expanded ? { qkey: question.qkey, optIndex } : null) : undefined}
+                                />
+                              )}
+                            </div>
+                            {isThisExpanded && isAudioOpt && optMedia && (
+                              <div className="ml-4">
+                                <AudioPlayer media={optMedia} />
+                              </div>
+                            )}
+                          </li>
+                        )
+                      })}
                     </ul>
                   )}
                 </div>
