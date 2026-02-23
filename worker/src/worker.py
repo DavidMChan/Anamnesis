@@ -129,7 +129,7 @@ class SeriesWithContext:
             if question.type == "open_response":
                 if answer:
                     tier = "tier1_text"
-                    logger.info(f"[{tier}] {question.qkey}={repr(answer[:80])}")
+                    logger.info(f"[{tier}] {question.qkey}={repr(answer[:200])}")
                     return answer, raw
                 else:
                     logger.warning(f"[parse_fail] {question.qkey} open_response empty, retrying")
@@ -142,10 +142,10 @@ class SeriesWithContext:
                     tier = "tier2_parser"
 
             if answer:
-                logger.info(f"[{tier}] {question.qkey}={answer} (raw={repr(raw[:80])})")
+                logger.info(f"[{tier}] {question.qkey}={answer} (raw={repr(raw[:200])})")
                 return answer, raw
             else:
-                logger.warning(f"[parse_fail] {question.qkey} raw={repr(raw[:80])}")
+                logger.warning(f"[parse_fail] {question.qkey} raw={repr(raw[:200])}")
 
         logger.warning(f"All {self.max_compliance_retries} retries failed for {question.qkey}, marking as non-compliant")
         return "", raw
@@ -253,7 +253,7 @@ class TaskProcessor:
                 if question.type == "open_response":
                     if answer:
                         tier = "tier1_text"
-                        logger.info(f"[{tier}] {question.qkey}={repr(answer[:80])} (raw={repr(raw_answer[:80])})")
+                        logger.info(f"[{tier}] {question.qkey}={repr(answer[:200])} (raw={repr(raw_answer[:200])})")
                         break
                     else:
                         logger.warning(f"[parse_fail] {question.qkey} open_response empty, retrying")
@@ -266,9 +266,9 @@ class TaskProcessor:
                         tier = "tier2_parser"
 
                 if answer:
-                    logger.info(f"[{tier}] {question.qkey}={answer} (raw={repr(raw_answer[:80])})")
+                    logger.info(f"[{tier}] {question.qkey}={answer} (raw={repr(raw_answer[:200])})")
                 else:
-                    logger.warning(f"[parse_fail] {question.qkey} raw={repr(raw_answer[:80])}")
+                    logger.warning(f"[parse_fail] {question.qkey} raw={repr(raw_answer[:200])}")
 
                 if answer:
                     break

@@ -19,6 +19,7 @@ from .response import (
     TruncationError,
     StructuredOutputNotSupported,
     MultimodalNotSupportedError,
+    clean_open_response,
 )
 
 logger = logging.getLogger(__name__)
@@ -160,12 +161,11 @@ class UnifiedLLMClient:
             return LLMResponse(answer="", raw="")
 
         # JSON schema response — parse when structured output was actually sent.
-        # vLLM: response_format works in both completions and chat modes.
-        # OpenRouter: response_format only works in chat mode.
+        # We send JSON schema for any question with options, EXCEPT vLLM MCQ
+        # (which uses extra_body.structured_outputs choice constraint instead).
         if self.use_guided_decoding and question and question.options:
             sent_json_schema = (
-                self.provider == "vllm"
-                or (self.provider == "openrouter" and self.use_chat_template)
+                question.type != "mcq" or self.provider == "openrouter"
             )
             if sent_json_schema:
                 if question.type in ("multiple_select", "ranking"):
@@ -181,9 +181,9 @@ class UnifiedLLMClient:
                 if letter in valid:
                     return LLMResponse(answer=letter, raw=content)
 
-        # Open response: use raw text directly
+        # Open response: clean up raw text, preserve original in raw field
         if question and question.type == "open_response":
-            return LLMResponse(answer=content.strip(), raw=content)
+            return LLMResponse(answer=clean_open_response(content), raw=content)
 
         # Multiple select / ranking without guided decoding
         if question and question.type == "multiple_select" and question.options:

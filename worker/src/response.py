@@ -4,6 +4,7 @@ LLM response dataclass and error hierarchy.
 Extracted from llm.py to break circular imports (parser.py → llm.py)
 and separate concerns: response parsing ≠ API client.
 """
+import html
 import logging
 import re
 from dataclasses import dataclass
@@ -130,3 +131,56 @@ class LLMResponse:
 
         logger.warning(f"Failed to parse MCQ answer from: {repr(text[:100])}")
         return cls(answer="", raw=text)
+
+
+# ─── Open Response Cleanup ──────────────────────────────────────────────────
+
+def clean_open_response(text: str) -> str:
+    """Clean up raw open-response text from an LLM.
+
+    Pipeline:
+    1. Clip at boundary markers (<Q>, Question:)
+    2. HTML cleanup (unescape entities, convert <br> to newlines, strip tags)
+    3. Trim to last sentence boundary if text ends with a fragment
+    4. Strip whitespace
+    """
+    if not text or not text.strip():
+        return ""
+
+    # Step 1: Clip at boundary markers
+    # <Q> tag — model generating the next question marker
+    q_idx = text.find("<Q>")
+    if q_idx != -1:
+        text = text[:q_idx]
+
+    # "Question:" with colon — model generating next question prompt.
+    # Case-insensitive. The colon differentiates from natural usage like
+    # "That's a good question about policy."
+    match = re.search(r'(?i)question:', text)
+    if match:
+        text = text[:match.start()]
+
+    # Prompt template leakage — model regurgitates the consistency prompt
+    # (e.g. "202 words Please answer the following question keeping in mind...")
+    match = re.search(r'(?i)please answer the following question', text)
+    if match:
+        text = text[:match.start()]
+
+    # Step 2: HTML cleanup
+    text = html.unescape(text)
+    text = re.sub(r'<br\s*/?>', '\n', text)
+    text = re.sub(r'<[^>]+>', '', text)
+
+    # Step 3: Trim to last sentence boundary
+    stripped = text.strip()
+    if stripped and stripped[-1] not in '.!?':
+        last_boundary = max(
+            stripped.rfind('.'),
+            stripped.rfind('!'),
+            stripped.rfind('?'),
+        )
+        if last_boundary != -1:
+            stripped = stripped[:last_boundary + 1]
+
+    # Step 4: Final whitespace cleanup
+    return stripped.strip()
