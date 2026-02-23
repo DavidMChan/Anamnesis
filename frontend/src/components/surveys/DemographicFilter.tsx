@@ -16,6 +16,8 @@ interface DemographicFilterProps {
   /** Optional limit on number of backstories to use. undefined = use all matching */
   sampleSize?: number
   onSampleSizeChange?: (size: number | undefined) => void
+  /** Override the card description text */
+  description?: string
 }
 
 interface ActiveFilter {
@@ -29,7 +31,7 @@ interface CustomFilter {
   value: string
 }
 
-export function DemographicFilter({ value, onChange, sampleSize, onSampleSizeChange }: DemographicFilterProps) {
+export function DemographicFilter({ value, onChange, sampleSize, onSampleSizeChange, description }: DemographicFilterProps) {
   const [demographicKeys, setDemographicKeys] = useState<DemographicKey[]>([])
   const [activeFilters, setActiveFilters] = useState<ActiveFilter[]>([])
   const [customFilters, setCustomFilters] = useState<CustomFilter[]>([])
@@ -210,7 +212,7 @@ export function DemographicFilter({ value, onChange, sampleSize, onSampleSizeCha
       <CardHeader>
         <CardTitle>Target Demographics</CardTitle>
         <CardDescription>
-          Add filters to target specific demographics. The system will match backstories accordingly.
+          {description || 'Add filters to target specific demographics. The system will match backstories accordingly.'}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">

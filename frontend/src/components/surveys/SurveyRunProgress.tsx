@@ -348,7 +348,10 @@ export function SurveyRunHistory({ runs, onSelectRun }: SurveyRunHistoryProps) {
                   {status.icon}
                   <div>
                     <div className="text-sm font-medium">
-                      {new Date(run.created_at).toLocaleDateString()}
+                      {new Date(run.started_at || run.created_at).toLocaleString(undefined, {
+                        month: 'short', day: 'numeric', year: 'numeric',
+                        hour: 'numeric', minute: '2-digit',
+                      })}
                     </div>
                     <div className="text-xs text-muted-foreground">
                       {run.completed_tasks}/{run.total_tasks} completed

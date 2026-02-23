@@ -8,6 +8,7 @@ import type { LLMConfig, SurveyRun, DemographicFilter } from '@/types/database'
 interface CreateSurveyRunOptions {
   surveyId: string
   llmConfig: LLMConfig
+  demographics: DemographicFilter
 }
 
 interface CreateSurveyRunResult {
@@ -29,23 +30,12 @@ interface CreateSurveyRunResult {
 export async function createSurveyRun(
   options: CreateSurveyRunOptions
 ): Promise<CreateSurveyRunResult> {
-  const { surveyId, llmConfig } = options
+  const { surveyId, llmConfig, demographics: rawDemographics } = options
 
   try {
-    // 1. Get survey to check for sample size setting
-    const { data: survey, error: surveyError } = await supabase
-      .from('surveys')
-      .select('demographics')
-      .eq('id', surveyId)
-      .single()
-
-    if (surveyError) {
-      return { success: false, error: surveyError.message }
-    }
-
-    // Extract sample size and demographic filters from saved demographics
-    const demographics = survey?.demographics as (DemographicFilter & { _sample_size?: number[] }) | null
-    const sampleSize = demographics?._sample_size?.[0]
+    // Extract sample size from demographics param
+    const { _sample_size, ...demographics } = rawDemographics as DemographicFilter & { _sample_size?: number[] }
+    const sampleSize = _sample_size?.[0]
 
     console.log('[createSurveyRun] demographics:', demographics)
     console.log('[createSurveyRun] sampleSize:', sampleSize)
@@ -93,6 +83,7 @@ export async function createSurveyRun(
         results: {},
         error_log: [],
         llm_config: llmConfig,
+        demographics: rawDemographics,
       })
       .select()
       .single()

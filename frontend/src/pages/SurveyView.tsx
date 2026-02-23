@@ -9,10 +9,15 @@ import { useSurveyRun, useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
 import { cancelSurveyRun } from '@/lib/surveyRunner'
 import { useAuthContext } from '@/contexts/AuthContext'
-import type { Survey, SurveyRun, MediaAttachment } from '@/types/database'
+import type { Survey, SurveyRun, MediaAttachment, LLMConfig, DemographicFilter as DemographicFilterType } from '@/types/database'
 import { MediaPreview } from '@/components/surveys/MediaPreview'
+import { DemographicFilter } from '@/components/surveys/DemographicFilter'
 import { getMediaUrl } from '@/lib/media'
-import { ArrowLeft, Edit, Play, History, Settings } from 'lucide-react'
+import { mergeEffectiveConfig, getConfigSources, LLM_DEFAULTS } from '@/lib/llmConfig'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { ArrowLeft, Edit, Play, History, Settings, ChevronDown, ChevronRight } from 'lucide-react'
 
 /** Standalone audio player that loads its own URL from a media key */
 function AudioPlayer({ media }: { media: MediaAttachment }) {
@@ -52,6 +57,118 @@ async function checkMultimodalSupport(modelId: string): Promise<boolean> {
   }
 }
 
+/** Run configuration card — local state only, applied when "Run Survey" is clicked */
+function RunConfigCard({
+  profileConfig,
+  overrides,
+  onChangeOverrides,
+}: {
+  profileConfig?: LLMConfig
+  overrides: Partial<LLMConfig>
+  onChangeOverrides: (o: Partial<LLMConfig>) => void
+}) {
+  const effective = mergeEffectiveConfig(profileConfig, overrides)
+  const sources = getConfigSources(profileConfig, overrides)
+
+  const sourceLabel = (key: string) => {
+    const s = sources[key]
+    if (s === 'override') return <span className="text-xs text-blue-500 ml-1">(override)</span>
+    if (s === 'profile') return <span className="text-xs text-muted-foreground ml-1">(profile)</span>
+    return <span className="text-xs text-muted-foreground ml-1">(default)</span>
+  }
+
+  const provider = overrides.provider || ''
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center gap-2">
+          <Settings className="h-4 w-4" />
+          <CardTitle>Run Configuration</CardTitle>
+        </div>
+        <CardDescription>
+          Settings for the next run (empty = inherit from profile)
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="space-y-2">
+          <Label>Provider {sourceLabel('provider')}</Label>
+          <Select
+            value={provider}
+            onValueChange={(v) => onChangeOverrides({ ...overrides, provider: (v || undefined) as LLMConfig['provider'] })}
+          >
+            <SelectTrigger>
+              <SelectValue placeholder={profileConfig?.provider ? `${profileConfig.provider} (profile)` : 'Select provider'} />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="openrouter">OpenRouter</SelectItem>
+              <SelectItem value="vllm">vLLM</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        {(provider === 'openrouter' || (!provider && effective.provider === 'openrouter')) && (
+          <div className="space-y-2">
+            <Label>Model {sourceLabel('openrouter_model')}</Label>
+            <Input
+              value={overrides.openrouter_model ?? ''}
+              onChange={(e) => onChangeOverrides({ ...overrides, openrouter_model: e.target.value || undefined })}
+              placeholder={profileConfig?.openrouter_model || 'anthropic/claude-3-haiku'}
+            />
+          </div>
+        )}
+        {(provider === 'vllm' || (!provider && effective.provider === 'vllm')) && (
+          <div className="space-y-2">
+            <Label>Model {sourceLabel('vllm_model')}</Label>
+            <Input
+              value={overrides.vllm_model ?? ''}
+              onChange={(e) => onChangeOverrides({ ...overrides, vllm_model: e.target.value || undefined })}
+              placeholder={profileConfig?.vllm_model || 'meta-llama/Llama-3-70b'}
+            />
+          </div>
+        )}
+        <div className="grid grid-cols-2 gap-4">
+          <div className="space-y-2">
+            <Label>Temperature {sourceLabel('temperature')}</Label>
+            <Input
+              type="number"
+              min="0" max="2" step="0.1"
+              value={overrides.temperature ?? ''}
+              onChange={(e) => onChangeOverrides({ ...overrides, temperature: e.target.value ? parseFloat(e.target.value) : undefined })}
+              placeholder={`${profileConfig?.temperature ?? LLM_DEFAULTS.temperature} (default)`}
+            />
+          </div>
+          <div className="space-y-2">
+            <Label>Max Tokens {sourceLabel('max_tokens')}</Label>
+            <Input
+              type="number"
+              min="1" max="16384" step="1"
+              value={overrides.max_tokens ?? ''}
+              onChange={(e) => onChangeOverrides({ ...overrides, max_tokens: e.target.value ? parseInt(e.target.value, 10) : undefined })}
+              placeholder={`${profileConfig?.max_tokens ?? LLM_DEFAULTS.max_tokens} (default)`}
+            />
+          </div>
+        </div>
+        <div className="space-y-2">
+          <Label>Max Concurrent Tasks {sourceLabel('max_concurrent_tasks')}</Label>
+          <Input
+            type="number"
+            min="1" max="200" step="1"
+            value={overrides.max_concurrent_tasks ?? ''}
+            onChange={(e) => {
+              const val = e.target.value ? parseInt(e.target.value, 10) : undefined
+              onChangeOverrides({ ...overrides, max_concurrent_tasks: val ? Math.max(1, Math.min(200, val)) : undefined })
+            }}
+            placeholder={`${profileConfig?.max_concurrent_tasks ?? 10} (default)`}
+          />
+          <p className="text-xs text-muted-foreground">
+            Parallel LLM requests for this run. 5-10 for cloud APIs, 20-100 for self-hosted vLLM.
+          </p>
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
 const statusColors: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'gold'> = {
   draft: 'secondary',
   active: 'gold',
@@ -74,6 +191,10 @@ export function SurveyView() {
   const [selectedRun, setSelectedRun] = useState<SurveyRun | null>(null)
   const [configError, setConfigError] = useState<string | null>(null)
   const [expandedAudio, setExpandedAudio] = useState<{ qkey: string; optIndex: number } | null>(null)
+  const [runOverrides, setRunOverrides] = useState<Partial<LLMConfig>>({})
+  const [questionsExpanded, setQuestionsExpanded] = useState(false)
+  const [runDemographics, setRunDemographics] = useState<DemographicFilterType>({})
+  const [runSampleSize, setRunSampleSize] = useState<number | undefined>(undefined)
 
   // Fetch survey run data
   const { run: latestRun, runs, isRunning, refresh: refreshRuns } = useSurveyRun({
@@ -87,6 +208,14 @@ export function SurveyView() {
   useEffect(() => {
     fetchSurvey()
   }, [id])
+
+  // Initialize run demographics from survey defaults when survey loads
+  useEffect(() => {
+    if (!survey) return
+    const { _sample_size, ...restDemographics } = survey.demographics as DemographicFilterType & { _sample_size?: number[] }
+    setRunDemographics(restDemographics)
+    setRunSampleSize(_sample_size?.[0])
+  }, [survey?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchSurvey = async () => {
     if (!id) return
@@ -152,13 +281,14 @@ export function SurveyView() {
       }
     }
 
-    // Merge per-survey settings into llm_config snapshot
-    const runLlmConfig = {
-      ...llmConfig,
-      ...(survey.temperature != null && { temperature: survey.temperature }),
-      ...(survey.max_tokens != null && { max_tokens: survey.max_tokens }),
-    }
-    const runId = await createRun(survey.id, runLlmConfig)
+    // Merge profile defaults + local overrides into run config snapshot
+    const runLlmConfig = mergeEffectiveConfig(llmConfig, runOverrides)
+    // Build effective demographics for this run
+    const effectiveDemographics = {
+      ...runDemographics,
+      ...(runSampleSize != null && { _sample_size: [runSampleSize] }),
+    } as DemographicFilterType
+    const runId = await createRun(survey.id, runLlmConfig, effectiveDemographics)
     if (runId) {
       refreshRuns()
       fetchSurvey()
@@ -208,14 +338,6 @@ export function SurveyView() {
             </p>
           </div>
           <div className="flex gap-2">
-            {survey.status === 'draft' && (
-              <Link to={`/surveys/${survey.id}/edit`}>
-                <Button variant="outline">
-                  <Edit className="h-4 w-4 mr-2" />
-                  Edit
-                </Button>
-              </Link>
-            )}
             {runs.length > 0 && (
               <Button variant="outline" onClick={() => setShowHistory(!showHistory)}>
                 <History className="h-4 w-4 mr-2" />
@@ -267,13 +389,36 @@ export function SurveyView() {
 
         {/* Questions */}
         <Card>
-          <CardHeader>
-            <CardTitle>Questions</CardTitle>
+          <CardHeader
+            className="cursor-pointer"
+            onClick={() => setQuestionsExpanded(!questionsExpanded)}
+          >
+            <div className="flex items-center justify-between">
+              <CardTitle>Questions</CardTitle>
+              <div className="flex items-center gap-2">
+                {survey.status === 'draft' && (
+                  <Link
+                    to={`/surveys/${survey.id}/edit`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Button variant="outline" size="sm">
+                      <Edit className="h-3.5 w-3.5 mr-1.5" />
+                      Edit
+                    </Button>
+                  </Link>
+                )}
+                {questionsExpanded ? (
+                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                )}
+              </div>
+            </div>
             <CardDescription>
               {survey.questions.length} questions in this survey
             </CardDescription>
           </CardHeader>
-          <CardContent>
+          {questionsExpanded && <CardContent>
             <div className="space-y-4">
               {survey.questions.map((question, index) => (
                 <div key={question.qkey} className="border rounded-lg p-4">
@@ -327,65 +472,24 @@ export function SurveyView() {
                 </div>
               ))}
             </div>
-          </CardContent>
+          </CardContent>}
         </Card>
 
-        {/* Per-Survey LLM Settings */}
-        {(survey.temperature != null || survey.max_tokens != null) && (
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Settings className="h-4 w-4" />
-                <CardTitle>LLM Settings</CardTitle>
-              </div>
-              <CardDescription>
-                Per-survey overrides for this survey
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex gap-6 text-sm">
-                {survey.temperature != null && (
-                  <div>
-                    <span className="font-medium">Temperature:</span>{' '}
-                    <span className="text-muted-foreground">{survey.temperature}</span>
-                  </div>
-                )}
-                {survey.max_tokens != null && (
-                  <div>
-                    <span className="font-medium">Max Tokens:</span>{' '}
-                    <span className="text-muted-foreground">{survey.max_tokens}</span>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        )}
+        {/* Run Configuration — local state, applied when "Run Survey" is clicked */}
+        <RunConfigCard
+          profileConfig={profile?.llm_config}
+          overrides={runOverrides}
+          onChangeOverrides={setRunOverrides}
+        />
 
-        {/* Demographic Filters */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Demographic Filters</CardTitle>
-            <CardDescription>
-              Target audience for this survey
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            {Object.keys(survey.demographics).length === 0 ? (
-              <p className="text-muted-foreground">No demographic filters applied (all backstories)</p>
-            ) : (
-              <div className="space-y-2">
-                {Object.entries(survey.demographics).map(([key, value]) => (
-                  <div key={key} className="flex items-center gap-2">
-                    <span className="font-medium capitalize">{key.replace('_', ' ')}:</span>
-                    <span className="text-muted-foreground">
-                      {Array.isArray(value) ? value.join(', ') : JSON.stringify(value)}
-                    </span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        {/* Demographic Filters (editable per-run) */}
+        <DemographicFilter
+          value={runDemographics}
+          onChange={setRunDemographics}
+          sampleSize={runSampleSize}
+          onSampleSizeChange={setRunSampleSize}
+          description="Settings for the next run (empty = inherit from initial survey settings)"
+        />
       </div>
     </Layout>
   )
