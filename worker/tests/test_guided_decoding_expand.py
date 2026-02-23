@@ -78,7 +78,7 @@ class TestMultipleSelectGuidedDecoding:
     """Tests for multiple_select: JSON schema via response_format (vLLM supports both API modes)."""
 
     def test_vllm_multiple_select_uses_json_schema(self):
-        """Multiple select uses response_format with json_schema."""
+        """Multiple select uses response_format with json_schema (via extra_body in completions mode)."""
         client = make_vllm_client()
         json_resp = '{"choice_A": true, "choice_B": false, "choice_C": true, "choice_D": true}'
         mock = setup_sync_response(client, json_resp)
@@ -88,9 +88,9 @@ class TestMultipleSelectGuidedDecoding:
         client.complete("Test prompt", question=question)
 
         kwargs = get_call_kwargs(mock)
-        assert "response_format" in kwargs
-        assert kwargs["response_format"]["type"] == "json_schema"
-        schema = kwargs["response_format"]["json_schema"]["schema"]
+        rf = kwargs["extra_body"]["response_format"]
+        assert rf["type"] == "json_schema"
+        schema = rf["json_schema"]["schema"]
         assert "choice_A" in schema["properties"]
         assert "choice_D" in schema["properties"]
         assert schema["properties"]["choice_A"]["type"] == "boolean"
@@ -127,7 +127,7 @@ class TestMultipleSelectGuidedDecoding:
             client.complete("Prompt", question=question)
 
             kwargs = get_call_kwargs(mock)
-            schema = kwargs["response_format"]["json_schema"]["schema"]
+            schema = kwargs["extra_body"]["response_format"]["json_schema"]["schema"]
             assert sorted(schema["properties"].keys()) == sorted(expected_keys)
 
     def test_vllm_multiple_select_parses_boolean_map(self):
@@ -173,7 +173,7 @@ class TestRankingGuidedDecoding:
     """Tests for vLLM JSON schema guided decoding with ranking questions."""
 
     def test_vllm_ranking_uses_json_schema(self):
-        """UnifiedLLMClient sends response_format with json_schema for ranking."""
+        """UnifiedLLMClient sends response_format with json_schema for ranking (via extra_body in completions mode)."""
         client = make_vllm_client()
         json_resp = '{"ranking": ["B", "A", "C", "D"]}'
         mock = setup_sync_response(client, json_resp)
@@ -183,9 +183,9 @@ class TestRankingGuidedDecoding:
         client.complete("Test prompt", question=question)
 
         kwargs = get_call_kwargs(mock)
-        assert "response_format" in kwargs
-        assert kwargs["response_format"]["type"] == "json_schema"
-        schema = kwargs["response_format"]["json_schema"]["schema"]
+        rf = kwargs["extra_body"]["response_format"]
+        assert rf["type"] == "json_schema"
+        schema = rf["json_schema"]["schema"]
         assert "ranking" in schema["properties"]
         assert schema["properties"]["ranking"]["minItems"] == 4
         assert schema["properties"]["ranking"]["maxItems"] == 4
@@ -208,7 +208,7 @@ class TestRankingGuidedDecoding:
             client.complete("Prompt", question=question)
 
             kwargs = get_call_kwargs(mock)
-            schema = kwargs["response_format"]["json_schema"]["schema"]
+            schema = kwargs["extra_body"]["response_format"]["json_schema"]["schema"]
             assert schema["properties"]["ranking"]["minItems"] == expected_count
             assert schema["properties"]["ranking"]["maxItems"] == expected_count
 
