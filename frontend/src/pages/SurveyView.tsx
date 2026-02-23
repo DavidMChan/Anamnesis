@@ -338,14 +338,6 @@ export function SurveyView() {
             </p>
           </div>
           <div className="flex gap-2">
-            {survey.status === 'draft' && (
-              <Link to={`/surveys/${survey.id}/edit`}>
-                <Button variant="outline">
-                  <Edit className="h-4 w-4 mr-2" />
-                  Edit
-                </Button>
-              </Link>
-            )}
             {runs.length > 0 && (
               <Button variant="outline" onClick={() => setShowHistory(!showHistory)}>
                 <History className="h-4 w-4 mr-2" />
@@ -403,11 +395,24 @@ export function SurveyView() {
           >
             <div className="flex items-center justify-between">
               <CardTitle>Questions</CardTitle>
-              {questionsExpanded ? (
-                <ChevronDown className="h-4 w-4 text-muted-foreground" />
-              ) : (
-                <ChevronRight className="h-4 w-4 text-muted-foreground" />
-              )}
+              <div className="flex items-center gap-2">
+                {survey.status === 'draft' && (
+                  <Link
+                    to={`/surveys/${survey.id}/edit`}
+                    onClick={(e) => e.stopPropagation()}
+                  >
+                    <Button variant="outline" size="sm">
+                      <Edit className="h-3.5 w-3.5 mr-1.5" />
+                      Edit
+                    </Button>
+                  </Link>
+                )}
+                {questionsExpanded ? (
+                  <ChevronDown className="h-4 w-4 text-muted-foreground" />
+                ) : (
+                  <ChevronRight className="h-4 w-4 text-muted-foreground" />
+                )}
+              </div>
             </div>
             <CardDescription>
               {survey.questions.length} questions in this survey
