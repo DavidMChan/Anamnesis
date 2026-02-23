@@ -29,6 +29,9 @@ export interface LLMConfig {
   // Parser LLM (Tier 2 fallback for MCQ parsing via OpenRouter)
   parser_llm_model?: string  // e.g., "google/gemini-2.0-flash-001"
 
+  // Concurrency control (enforced by dispatcher)
+  max_concurrent_tasks?: number  // Default: 10
+
   // Note: API keys are stored securely in Supabase Vault, not in this config
 }
 
@@ -136,7 +139,7 @@ export interface SurveyRun {
   created_at: string
 }
 
-export type SurveyTaskStatus = 'pending' | 'processing' | 'completed' | 'failed'
+export type SurveyTaskStatus = 'pending' | 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled'
 
 export interface SurveyTask {
   id: string

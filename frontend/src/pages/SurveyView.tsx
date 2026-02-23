@@ -7,6 +7,7 @@ import { Badge } from '@/components/ui/badge'
 import { supabase } from '@/lib/supabase'
 import { useSurveyRun, useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
+import { cancelSurveyRun } from '@/lib/surveyRunner'
 import { useAuthContext } from '@/contexts/AuthContext'
 import type { Survey, SurveyRun, MediaAttachment, LLMConfig } from '@/types/database'
 import { MediaPreview } from '@/components/surveys/MediaPreview'
@@ -393,6 +394,10 @@ export function SurveyView() {
             run={displayRun}
             onViewResults={() => navigate(`/surveys/${survey.id}/results?run=${displayRun.id}`)}
             onRunAgain={runSurvey}
+            onCancel={async () => {
+              await cancelSurveyRun(displayRun.id)
+              refreshRuns()
+            }}
           />
         )}
 

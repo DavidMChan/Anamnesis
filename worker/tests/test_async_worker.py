@@ -8,7 +8,7 @@ Covers:
 - Async queue consumer
 - Graceful shutdown
 - Error handling in async flow
-- Config (MAX_CONCURRENT_TASKS)
+- Config (WorkerConfig)
 - Strategy pattern (async fill)
 """
 import asyncio
@@ -587,26 +587,14 @@ class TestAsyncGracefulShutdown:
 # ==================== Config Tests ====================
 
 
-class TestConfigMaxConcurrent:
-    """Tests for MAX_CONCURRENT_TASKS config."""
+class TestConfigWorker:
+    """Tests for WorkerConfig."""
 
-    def test_default_value(self):
-        """Default MAX_CONCURRENT_TASKS is 10."""
-        with patch.dict("os.environ", {}, clear=False):
-            import os
-            env_copy = os.environ.copy()
-            os.environ.pop("MAX_CONCURRENT_TASKS", None)
-            try:
-                config = WorkerConfig()
-                assert config.max_concurrent_tasks == 10
-            finally:
-                os.environ.update(env_copy)
-
-    def test_loaded_from_env(self):
-        """MAX_CONCURRENT_TASKS loaded from environment."""
-        with patch.dict("os.environ", {"MAX_CONCURRENT_TASKS": "25"}):
-            config = WorkerConfig()
-            assert config.max_concurrent_tasks == 25
+    def test_concurrency_fields_removed(self):
+        """max_concurrent_tasks and prefetch_count no longer exist on WorkerConfig."""
+        config = WorkerConfig()
+        assert not hasattr(config, "max_concurrent_tasks")
+        assert not hasattr(config, "prefetch_count")
 
     def test_metrics_log_interval_default(self):
         """METRICS_LOG_INTERVAL defaults to 30."""
