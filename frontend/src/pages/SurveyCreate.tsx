@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useParams, Link } from 'react-router-dom'
 import {
   DndContext,
@@ -28,6 +28,8 @@ import { useAuthContext } from '@/contexts/AuthContext'
 import { useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import type { Question, DemographicFilter as DemographicFilterType, Survey } from '@/types/database'
 import { toast } from '@/hooks/use-toast'
+import { deleteMedia, copyMedia } from '@/lib/media'
+import type { MediaAttachment } from '@/types/database'
 import { Plus, Save, Play, ArrowLeft, ChevronDown, Settings } from 'lucide-react'
 
 /**
@@ -54,6 +56,16 @@ async function checkMultimodalSupport(modelId: string): Promise<boolean> {
   }
 }
 
+/** Collect all Wasabi media keys referenced by a list of questions. */
+function collectMediaKeys(qs: Question[]): Set<string> {
+  const keys = new Set<string>()
+  for (const q of qs) {
+    if (q.media?.key) keys.add(q.media.key)
+    q.option_media?.forEach((m) => { if (m?.key) keys.add(m.key) })
+  }
+  return keys
+}
+
 export function SurveyCreate() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -70,7 +82,11 @@ export function SurveyCreate() {
   const [includeOwnBackstories, setIncludeOwnBackstories] = useState(false)
   const [ownBackstoriesCount, setOwnBackstoriesCount] = useState(0)
   const [saving, setSaving] = useState(false)
+  const [duplicating, setDuplicating] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Baseline snapshot of questions as last persisted in DB — used to diff orphaned media on save
+  const savedQuestionsRef = useRef<Question[]>([])
 
   const { createRun, loading: creatingRun } = useCreateSurveyRun()
 
@@ -96,6 +112,7 @@ export function SurveyCreate() {
       const survey = data as Survey
       setName(survey.name || '')
       setQuestions(survey.questions)
+      savedQuestionsRef.current = survey.questions
       // Extract sample size from demographics if present
       const { _sample_size, ...restDemographics } = survey.demographics as DemographicFilterType & { _sample_size?: number[] }
       setDemographics(restDemographics)
@@ -139,17 +156,38 @@ export function SurveyCreate() {
     setQuestions(questions.filter((_, i) => i !== index))
   }
 
-  const duplicateQuestion = (index: number) => {
-    const questionToDuplicate = questions[index]
+  const duplicateQuestion = async (index: number) => {
+    const src = questions[index]
+    const hasMedia = !!(src.media || src.option_media?.some((m) => m != null))
+
+    let copiedMedia: MediaAttachment | undefined
+    let copiedOptionMedia: (MediaAttachment | null)[] | undefined
+    let copyFailed = false
+
+    if (hasMedia) {
+      setDuplicating(true)
+      try {
+        copiedMedia = src.media ? await copyMedia(src.media) : undefined
+        copiedOptionMedia = src.option_media
+          ? await Promise.all(src.option_media.map((m) => (m ? copyMedia(m) : null)))
+          : undefined
+      } catch {
+        copyFailed = true
+      }
+      setDuplicating(false)
+    }
+
     const newQuestion: Question = {
-      ...questionToDuplicate,
-      qkey: `q${Date.now()}`, // Unique key for the duplicated question
-      options: questionToDuplicate.options ? [...questionToDuplicate.options] : undefined,
+      ...src,
+      qkey: `q${Date.now()}`,
+      options: src.options ? [...src.options] : undefined,
+      media: copiedMedia,
+      option_media: copiedOptionMedia?.length ? copiedOptionMedia : undefined,
     }
     const newQuestions = [...questions]
     newQuestions.splice(index + 1, 0, newQuestion)
     setQuestions(newQuestions)
-    toast({ title: 'Copied!' })
+    toast({ title: copyFailed ? 'Copied (without media — copy failed)' : 'Copied!' })
   }
 
   const sensors = useSensors(
@@ -249,6 +287,16 @@ export function SurveyCreate() {
       } else {
         result = data as Survey
       }
+    }
+
+    // After successful DB save, clean up orphaned Wasabi media
+    if (result) {
+      const prevKeys = collectMediaKeys(savedQuestionsRef.current)
+      const currKeys = collectMediaKeys(questions)
+      for (const key of prevKeys) {
+        if (!currKeys.has(key)) deleteMedia(key)
+      }
+      savedQuestionsRef.current = questions
     }
 
     setSaving(false)
@@ -411,7 +459,7 @@ export function SurveyCreate() {
                       index={index}
                       onChange={(q) => updateQuestion(index, q)}
                       onDelete={() => deleteQuestion(index)}
-                      onDuplicate={() => duplicateQuestion(index)}
+                      onDuplicate={() => !duplicating && duplicateQuestion(index)}
                     />
                   ))}
                 </div>

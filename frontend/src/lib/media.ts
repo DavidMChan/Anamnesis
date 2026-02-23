@@ -79,6 +79,40 @@ export async function uploadMedia(file: File): Promise<MediaAttachment> {
 }
 
 /**
+ * Delete a media object from Wasabi storage.
+ * Fire-and-forget safe — callers may choose not to await.
+ */
+export async function deleteMedia(key: string): Promise<void> {
+  const { error } = await supabase.functions.invoke('media-delete', {
+    body: { key },
+  })
+
+  if (error) {
+    console.error(`Failed to delete media ${key}:`, error.message)
+  }
+}
+
+/**
+ * Copy a media object in Wasabi (server-side, no download).
+ * Returns a new MediaAttachment with a fresh key but same type/name.
+ */
+export async function copyMedia(attachment: MediaAttachment): Promise<MediaAttachment> {
+  const { data, error } = await supabase.functions.invoke('media-copy', {
+    body: { sourceKey: attachment.key },
+  })
+
+  if (error) {
+    throw new Error(`Failed to copy media: ${error.message}`)
+  }
+
+  return {
+    key: (data as { key: string }).key,
+    type: attachment.type,
+    name: attachment.name,
+  }
+}
+
+/**
  * Get a displayable URL for a media attachment.
  * Returns a presigned GET URL from the Edge Function (1-hour expiry).
  */

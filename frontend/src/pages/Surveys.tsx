@@ -6,8 +6,9 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { supabase } from '@/lib/supabase'
 import { useAuthContext } from '@/contexts/AuthContext'
-import type { Survey } from '@/types/database'
+import type { Survey, Question, MediaAttachment } from '@/types/database'
 import { toast } from '@/hooks/use-toast'
+import { copyMedia, deleteMedia } from '@/lib/media'
 import { Plus, Eye, BarChart3, Trash2, ClipboardList, Copy } from 'lucide-react'
 
 const statusVariants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info' | 'gold'> = {
@@ -43,11 +44,21 @@ export function Surveys() {
   const deleteSurvey = async (id: string) => {
     if (!confirm('Are you sure you want to delete this survey?')) return
 
+    // Grab media keys before deleting from DB
+    const survey = surveys.find((s) => s.id === id)
+
     const { error } = await supabase.from('surveys').delete().eq('id', id)
 
     if (error) {
       console.error('Error deleting survey:', error)
     } else {
+      // Clean up Wasabi media after successful DB delete
+      if (survey) {
+        for (const q of survey.questions) {
+          if (q.media?.key) deleteMedia(q.media.key)
+          q.option_media?.forEach((m) => { if (m?.key) deleteMedia(m.key) })
+        }
+      }
       setSurveys(surveys.filter((s) => s.id !== id))
     }
   }
@@ -55,10 +66,34 @@ export function Surveys() {
   const duplicateSurvey = async (survey: Survey) => {
     if (!user) return
 
+    // Deep-copy all media so the duplicate owns independent Wasabi objects
+    let copyFailed = false
+    const copiedQuestions: Question[] = await Promise.all(
+      survey.questions.map(async (q) => {
+        try {
+          const newMedia: MediaAttachment | undefined = q.media
+            ? await copyMedia(q.media)
+            : undefined
+          const newOptionMedia = q.option_media
+            ? await Promise.all(q.option_media.map((m) => (m ? copyMedia(m) : null)))
+            : undefined
+          return {
+            ...q,
+            media: newMedia,
+            option_media: newOptionMedia?.length ? newOptionMedia : undefined,
+          }
+        } catch {
+          copyFailed = true
+          // On failure, strip media to avoid shared references
+          return { ...q, media: undefined, option_media: undefined }
+        }
+      })
+    )
+
     const newSurveyData = {
       user_id: user.id,
       name: `${survey.name || 'Untitled Survey'} (Copy)`,
-      questions: survey.questions,
+      questions: copiedQuestions,
       demographics: survey.demographics,
       status: 'draft',
     }
@@ -74,7 +109,7 @@ export function Surveys() {
       toast({ title: 'Failed to copy', variant: 'destructive' })
     } else if (data) {
       setSurveys([data as Survey, ...surveys])
-      toast({ title: 'Copied!' })
+      toast({ title: copyFailed ? 'Copied (some media failed to copy)' : 'Copied!' })
     }
   }
 
