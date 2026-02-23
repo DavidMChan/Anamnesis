@@ -416,6 +416,29 @@ export function Settings() {
                 Fallback model for parsing survey answers when guided decoding is not used or failed (via OpenRouter). Leave empty for default.
               </p>
             </div>
+
+            {/* Max Concurrent Tasks */}
+            <div className="space-y-2">
+              <Label htmlFor="max_concurrent_tasks">Max Concurrent Tasks</Label>
+              <Input
+                id="max_concurrent_tasks"
+                type="number"
+                min={1}
+                max={200}
+                value={llmConfig.max_concurrent_tasks ?? 10}
+                onChange={(e) => {
+                  const val = parseInt(e.target.value, 10)
+                  if (!isNaN(val)) {
+                    setLlmConfig({ ...llmConfig, max_concurrent_tasks: Math.max(1, Math.min(200, val)) })
+                  }
+                }}
+              />
+              <p className="text-xs text-muted-foreground">
+                Maximum parallel LLM requests per survey run. Start with 5-10 for cloud APIs
+                (OpenAI, Anthropic). For self-hosted vLLM, try 20-100 — increase until you
+                see rate-limit errors, then back off.
+              </p>
+            </div>
           </CardContent>
         </Card>
 

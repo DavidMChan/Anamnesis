@@ -1,8 +1,9 @@
 """
 Main entry point for the async survey worker.
 
-Runs an asyncio event loop that consumes tasks from RabbitMQ and
-processes them concurrently (up to MAX_CONCURRENT_TASKS at a time).
+Runs an asyncio event loop that consumes tasks from RabbitMQ.
+Concurrency is controlled by the dispatcher (per-run max_concurrent_tasks),
+not by the worker. The worker simply processes whatever messages it receives.
 
 Questions within each task are still processed sequentially
 (context accumulation), but different tasks run in parallel.
@@ -101,9 +102,8 @@ def get_llm_config_for_run(db: DatabaseClient, run_id: str) -> LLMConfig:
 async def main():
     """Async main entry point."""
     config = get_config()
-    max_concurrent = config.worker.max_concurrent_tasks
 
-    logger.info(f"Initializing async worker (max_concurrent_tasks={max_concurrent})...")
+    logger.info("Initializing async worker...")
 
     # Database client (sync — calls wrapped in to_thread)
     db = DatabaseClient(config.supabase)
@@ -130,8 +130,7 @@ async def main():
     tracker = LatencyTracker(window_seconds=config.worker.metrics_log_interval)
     metrics_logger = MetricsLogger(tracker, interval_seconds=config.worker.metrics_log_interval)
 
-    # Concurrency control
-    semaphore = asyncio.Semaphore(max_concurrent)
+    # In-flight task tracking (for graceful shutdown)
     in_flight_tasks: set[asyncio.Task] = set()
     shutting_down = False
 
@@ -199,6 +198,13 @@ async def main():
                 await message.ack()
                 return
 
+            # 1b. Check if run is cancelled/completed/failed — skip if so
+            run_status = await asyncio.to_thread(db.get_run_status, task["survey_run_id"])
+            if run_status in ("cancelled", "completed", "failed"):
+                logger.info(f"Skipping task {task_id} — run {task['survey_run_id']} is {run_status}")
+                await message.ack()
+                return
+
             # 2. Start task: set status=processing, increment attempts
             attempts = await asyncio.to_thread(db.start_task, task_id)
 
@@ -262,19 +268,8 @@ async def main():
             logger.warning(f"Task {task_id} retryable error, requeueing: {e}", exc_info=True)
             await message.nack(requeue=True)
 
-    async def process_with_semaphore(message) -> None:
-        """Acquire semaphore then process message."""
-        async with semaphore:
-            await handle_message(message)
-            # Log metrics periodically
-            metrics_logger.maybe_log(
-                in_flight=len(in_flight_tasks),
-                max_concurrent=max_concurrent,
-            )
-
-    # Set up RabbitMQ consumer with prefetch = max_concurrent
-    config.rabbitmq.prefetch_count = max_concurrent
-    consumer = AsyncQueueConsumer(config.rabbitmq, prefetch_count=max_concurrent)
+    # Set up RabbitMQ consumer
+    consumer = AsyncQueueConsumer(config.rabbitmq)
 
     # Graceful shutdown
     shutdown_event = asyncio.Event()
@@ -295,10 +290,7 @@ async def main():
     # Connect and start consuming
     try:
         await consumer.connect()
-        logger.info(
-            f"Async worker started, consuming from {config.rabbitmq.queue_name} "
-            f"(max_concurrent={max_concurrent})"
-        )
+        logger.info(f"Async worker started, consuming from {config.rabbitmq.queue_name}")
 
         async for message in consumer:
             if shutting_down:
@@ -306,9 +298,12 @@ async def main():
                 await message.nack(requeue=True)
                 break
 
-            task = asyncio.create_task(process_with_semaphore(message))
+            task = asyncio.create_task(handle_message(message))
             in_flight_tasks.add(task)
             task.add_done_callback(in_flight_tasks.discard)
+
+            # Log metrics periodically
+            metrics_logger.maybe_log(in_flight=len(in_flight_tasks))
 
     except Exception as e:
         if not shutting_down:

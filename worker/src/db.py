@@ -162,6 +162,21 @@ class DatabaseClient:
         ).execute()
         return bool(rpc_result.data)
 
+    def get_run_status(self, run_id: str) -> Optional[str]:
+        """
+        Get the current status of a survey run.
+
+        Args:
+            run_id: UUID of the survey run
+
+        Returns:
+            Status string or None if not found
+        """
+        data = self._safe_single_execute(
+            self.client.table("survey_runs").select("status").eq("id", run_id)
+        )
+        return data.get("status") if data else None
+
     # ==================== Backstory Operations ====================
 
     def get_backstory(self, backstory_id: str) -> Optional[Dict[str, Any]]:
@@ -391,26 +406,45 @@ class DatabaseClient:
         )
         return result.data or []
 
-    def get_pending_tasks_for_dispatch(self, run_id: str) -> List[Dict[str, Any]]:
+    def get_in_flight_count(self, run_id: str) -> int:
         """
-        Get all pending tasks for a run (for dispatching to queue).
-
-        Unlike get_pending_tasks, this returns ALL pending tasks without limit.
+        Count tasks that are currently queued or processing for a run.
 
         Args:
             run_id: UUID of the survey run
 
         Returns:
-            List of pending task records
+            Number of in-flight tasks
         """
         result = (
+            self.client.table("survey_tasks")
+            .select("id", count="exact")
+            .eq("survey_run_id", run_id)
+            .in_("status", ["queued", "processing"])
+            .execute()
+        )
+        return result.count or 0
+
+    def get_pending_tasks_for_dispatch(self, run_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Get pending tasks for a run (for dispatching to queue).
+
+        Args:
+            run_id: UUID of the survey run
+            limit: Maximum number of tasks to return. None returns all.
+
+        Returns:
+            List of pending task records
+        """
+        query = (
             self.client.table("survey_tasks")
             .select("id, backstory_id")
             .eq("survey_run_id", run_id)
             .eq("status", "pending")
-            .execute()
         )
-        return result.data or []
+        if limit:
+            query = query.limit(limit)
+        return query.execute().data or []
 
     def mark_task_queued(self, task_id: str) -> None:
         """
