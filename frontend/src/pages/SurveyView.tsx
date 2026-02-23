@@ -8,10 +8,14 @@ import { supabase } from '@/lib/supabase'
 import { useSurveyRun, useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
 import { useAuthContext } from '@/contexts/AuthContext'
-import type { Survey, SurveyRun, MediaAttachment } from '@/types/database'
+import type { Survey, SurveyRun, MediaAttachment, LLMConfig } from '@/types/database'
 import { MediaPreview } from '@/components/surveys/MediaPreview'
 import { getMediaUrl } from '@/lib/media'
-import { ArrowLeft, Edit, Play, History, Settings } from 'lucide-react'
+import { mergeEffectiveConfig, getModelName, getConfigSources, LLM_DEFAULTS } from '@/lib/llmConfig'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { ArrowLeft, Edit, Play, History, Settings, Pencil, Check, X } from 'lucide-react'
 
 /** Standalone audio player that loads its own URL from a media key */
 function AudioPlayer({ media }: { media: MediaAttachment }) {
@@ -51,6 +55,152 @@ async function checkMultimodalSupport(modelId: string): Promise<boolean> {
   }
 }
 
+interface LLMSettingsCardProps {
+  survey: Survey
+  profileConfig?: LLMConfig
+  editing: boolean
+  editConfig: Partial<LLMConfig>
+  saving: boolean
+  onStartEdit: () => void
+  onCancelEdit: () => void
+  onChangeConfig: (config: Partial<LLMConfig>) => void
+  onSave: () => void
+}
+
+function LLMSettingsCard({
+  survey, profileConfig, editing, editConfig, saving,
+  onStartEdit, onCancelEdit, onChangeConfig, onSave,
+}: LLMSettingsCardProps) {
+  const effective = mergeEffectiveConfig(profileConfig, survey.llm_config)
+  const sources = getConfigSources(profileConfig, survey.llm_config)
+  const modelName = getModelName(effective)
+
+  const sourceLabel = (key: string) => {
+    const s = sources[key]
+    if (s === 'override') return <span className="text-xs text-blue-500 ml-1">(survey)</span>
+    if (s === 'profile') return <span className="text-xs text-muted-foreground ml-1">(profile)</span>
+    return <span className="text-xs text-muted-foreground ml-1">(default)</span>
+  }
+
+  const editProvider = editConfig.provider || ''
+
+  return (
+    <Card>
+      <CardHeader>
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Settings className="h-4 w-4" />
+            <CardTitle>LLM Settings</CardTitle>
+          </div>
+          {!editing ? (
+            <Button variant="ghost" size="icon" onClick={onStartEdit} title="Edit LLM settings">
+              <Pencil className="h-4 w-4" />
+            </Button>
+          ) : (
+            <div className="flex gap-1">
+              <Button variant="ghost" size="icon" onClick={onCancelEdit} title="Cancel">
+                <X className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="icon" onClick={onSave} disabled={saving} title="Save">
+                <Check className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
+        </div>
+        <CardDescription>
+          {editing ? 'Edit per-survey overrides (empty = inherit from profile)' : 'Effective configuration for the next run'}
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        {editing ? (
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Provider Override</Label>
+              <Select
+                value={editProvider}
+                onValueChange={(v) => onChangeConfig({ ...editConfig, provider: (v || undefined) as LLMConfig['provider'] })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Inherit from profile" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="openrouter">OpenRouter</SelectItem>
+                  <SelectItem value="vllm">vLLM</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {(editProvider === 'openrouter' || (!editProvider && effective.provider === 'openrouter')) && (
+              <div className="space-y-2">
+                <Label>Model</Label>
+                <Input
+                  value={editConfig.openrouter_model ?? ''}
+                  onChange={(e) => onChangeConfig({ ...editConfig, openrouter_model: e.target.value || undefined })}
+                  placeholder={profileConfig?.openrouter_model || 'anthropic/claude-3-haiku'}
+                />
+              </div>
+            )}
+            {(editProvider === 'vllm' || (!editProvider && effective.provider === 'vllm')) && (
+              <div className="space-y-2">
+                <Label>Model</Label>
+                <Input
+                  value={editConfig.vllm_model ?? ''}
+                  onChange={(e) => onChangeConfig({ ...editConfig, vllm_model: e.target.value || undefined })}
+                  placeholder={profileConfig?.vllm_model || 'meta-llama/Llama-3-70b'}
+                />
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Temperature</Label>
+                <Input
+                  type="number"
+                  min="0" max="2" step="0.1"
+                  value={editConfig.temperature ?? ''}
+                  onChange={(e) => onChangeConfig({ ...editConfig, temperature: e.target.value ? parseFloat(e.target.value) : undefined })}
+                  placeholder={`${effective.temperature ?? LLM_DEFAULTS.temperature} (default)`}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Max Tokens</Label>
+                <Input
+                  type="number"
+                  min="1" max="16384" step="1"
+                  value={editConfig.max_tokens ?? ''}
+                  onChange={(e) => onChangeConfig({ ...editConfig, max_tokens: e.target.value ? parseInt(e.target.value, 10) : undefined })}
+                  placeholder={`${effective.max_tokens ?? LLM_DEFAULTS.max_tokens} (default)`}
+                />
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center gap-2">
+              <span className="font-medium w-24">Provider:</span>
+              <span className="text-muted-foreground">{effective.provider || 'Not set'}</span>
+              {effective.provider && sourceLabel('provider')}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="font-medium w-24">Model:</span>
+              <span className="text-muted-foreground">{modelName || 'Not set'}</span>
+              {modelName && sourceLabel(effective.provider === 'vllm' ? 'vllm_model' : 'openrouter_model')}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="font-medium w-24">Temperature:</span>
+              <span className="text-muted-foreground">{effective.temperature ?? LLM_DEFAULTS.temperature}</span>
+              {sourceLabel('temperature')}
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="font-medium w-24">Max Tokens:</span>
+              <span className="text-muted-foreground">{effective.max_tokens ?? LLM_DEFAULTS.max_tokens}</span>
+              {sourceLabel('max_tokens')}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  )
+}
+
 const statusColors: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'gold'> = {
   draft: 'secondary',
   active: 'gold',
@@ -73,6 +223,9 @@ export function SurveyView() {
   const [selectedRun, setSelectedRun] = useState<SurveyRun | null>(null)
   const [configError, setConfigError] = useState<string | null>(null)
   const [expandedAudio, setExpandedAudio] = useState<{ qkey: string; optIndex: number } | null>(null)
+  const [editingLlm, setEditingLlm] = useState(false)
+  const [editLlmConfig, setEditLlmConfig] = useState<Partial<LLMConfig>>({})
+  const [savingLlm, setSavingLlm] = useState(false)
 
   // Fetch survey run data
   const { run: latestRun, runs, isRunning, refresh: refreshRuns } = useSurveyRun({
@@ -152,11 +305,7 @@ export function SurveyView() {
     }
 
     // Merge per-survey settings into llm_config snapshot
-    const runLlmConfig = {
-      ...llmConfig,
-      ...(survey.temperature != null && { temperature: survey.temperature }),
-      ...(survey.max_tokens != null && { max_tokens: survey.max_tokens }),
-    }
+    const runLlmConfig = mergeEffectiveConfig(llmConfig, survey.llm_config)
     const runId = await createRun(survey.id, runLlmConfig)
     if (runId) {
       refreshRuns()
@@ -207,14 +356,12 @@ export function SurveyView() {
             </p>
           </div>
           <div className="flex gap-2">
-            {survey.status === 'draft' && (
-              <Link to={`/surveys/${survey.id}/edit`}>
-                <Button variant="outline">
-                  <Edit className="h-4 w-4 mr-2" />
-                  Edit
-                </Button>
-              </Link>
-            )}
+            <Link to={`/surveys/${survey.id}/edit`}>
+              <Button variant="outline">
+                <Edit className="h-4 w-4 mr-2" />
+                Edit
+              </Button>
+            </Link>
             {runs.length > 0 && (
               <Button variant="outline" onClick={() => setShowHistory(!showHistory)}>
                 <History className="h-4 w-4 mr-2" />
@@ -325,36 +472,39 @@ export function SurveyView() {
           </CardContent>
         </Card>
 
-        {/* Per-Survey LLM Settings */}
-        {(survey.temperature != null || survey.max_tokens != null) && (
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Settings className="h-4 w-4" />
-                <CardTitle>LLM Settings</CardTitle>
-              </div>
-              <CardDescription>
-                Per-survey overrides for this survey
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <div className="flex gap-6 text-sm">
-                {survey.temperature != null && (
-                  <div>
-                    <span className="font-medium">Temperature:</span>{' '}
-                    <span className="text-muted-foreground">{survey.temperature}</span>
-                  </div>
-                )}
-                {survey.max_tokens != null && (
-                  <div>
-                    <span className="font-medium">Max Tokens:</span>{' '}
-                    <span className="text-muted-foreground">{survey.max_tokens}</span>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        )}
+        {/* LLM Settings — always visible, inline editable */}
+        <LLMSettingsCard
+          survey={survey}
+          profileConfig={profile?.llm_config}
+          editing={editingLlm}
+          editConfig={editLlmConfig}
+          saving={savingLlm}
+          onStartEdit={() => {
+            setEditLlmConfig(survey.llm_config || {})
+            setEditingLlm(true)
+          }}
+          onCancelEdit={() => setEditingLlm(false)}
+          onChangeConfig={setEditLlmConfig}
+          onSave={async () => {
+            setSavingLlm(true)
+            // Strip empty string values to null
+            const cleaned: Partial<LLMConfig> = {}
+            for (const [k, v] of Object.entries(editLlmConfig)) {
+              if (v !== '' && v != null) {
+                (cleaned as Record<string, unknown>)[k] = v
+              }
+            }
+            const { error } = await supabase
+              .from('surveys')
+              .update({ llm_config: Object.keys(cleaned).length > 0 ? cleaned : null })
+              .eq('id', survey.id)
+            setSavingLlm(false)
+            if (!error) {
+              setSurvey({ ...survey, llm_config: Object.keys(cleaned).length > 0 ? cleaned : null })
+              setEditingLlm(false)
+            }
+          }}
+        />
 
         {/* Demographic Filters */}
         <Card>

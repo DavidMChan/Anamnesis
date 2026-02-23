@@ -108,8 +108,7 @@ export interface Survey {
   questions: Question[]
   demographics: DemographicFilter
   status: SurveyStatus
-  temperature?: number | null
-  max_tokens?: number | null
+  llm_config?: Partial<LLMConfig> | null
   created_at: string
 }
 

@@ -8,7 +8,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { supabase } from '@/lib/supabase'
 import { useSurveyRun } from '@/hooks/useSurveyRun'
 import type { Survey, SurveyRun, Question, SurveyResults as SurveyResultsType } from '@/types/database'
-import { BarChart2, Table, ImageDown, RefreshCw } from 'lucide-react'
+import { getModelName } from '@/lib/llmConfig'
+import { BarChart2, Table, ImageDown, RefreshCw, ChevronDown, Settings } from 'lucide-react'
 import { ResultsHero } from '@/components/results/ResultsHero'
 import { OpenResponseList } from '@/components/results/OpenResponseList'
 import { DistributionChart } from '@/components/results/DistributionChart'
@@ -32,6 +33,57 @@ const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'
 //   '#FDB515', // Berkeley gold
 //   '#C4820E', // BAIR gold accent
 // ]
+
+function RunConfigCard({ run }: { run: SurveyRun | null }) {
+  const [expanded, setExpanded] = useState(false)
+
+  if (!run) return null
+
+  const config = run.llm_config
+  const modelName = getModelName(config)
+
+  return (
+    <Card>
+      <button
+        type="button"
+        className="w-full text-left"
+        onClick={() => setExpanded(!expanded)}
+      >
+        <CardHeader className="pb-3">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Settings className="h-4 w-4" />
+              <CardTitle className="text-base">Run Configuration</CardTitle>
+            </div>
+            <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} />
+          </div>
+        </CardHeader>
+      </button>
+      {expanded && (
+        <CardContent className="pt-0">
+          <div className="space-y-2 text-sm">
+            <div className="flex items-center gap-2">
+              <span className="font-medium w-24">Provider:</span>
+              <Badge variant="outline">{config.provider || 'Not set'}</Badge>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="font-medium w-24">Model:</span>
+              <span className="text-muted-foreground font-mono text-xs">{modelName || 'Not set'}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="font-medium w-24">Temperature:</span>
+              <span className="text-muted-foreground">{config.temperature ?? 'Not set'}</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="font-medium w-24">Max Tokens:</span>
+              <span className="text-muted-foreground">{config.max_tokens ?? 'Not set'}</span>
+            </div>
+          </div>
+        </CardContent>
+      )}
+    </Card>
+  )
+}
 
 interface QuestionStats {
   qkey: string
@@ -540,10 +592,13 @@ export function SurveyResults() {
       <div className="max-w-5xl mx-auto space-y-6">
         <ResultsHero
           survey={survey}
+          run={run}
           totalResponses={totalResponses}
           onBack={() => navigate(`/surveys/${survey.id}`)}
           onDownloadCSV={downloadCSV}
         />
+
+        <RunConfigCard run={run} />
 
         {isRunning && run && (
           <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-3">

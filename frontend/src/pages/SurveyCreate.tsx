@@ -20,17 +20,20 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
 import { QuestionEditor } from '@/components/surveys/QuestionEditor'
 import { DemographicFilter } from '@/components/surveys/DemographicFilter'
 import { supabase } from '@/lib/supabase'
 import { useAuthContext } from '@/contexts/AuthContext'
 import { useCreateSurveyRun } from '@/hooks/useSurveyRun'
-import type { Question, DemographicFilter as DemographicFilterType, Survey } from '@/types/database'
+import type { Question, DemographicFilter as DemographicFilterType, Survey, LLMConfig } from '@/types/database'
 import { toast } from '@/hooks/use-toast'
 import { deleteMedia, copyMedia } from '@/lib/media'
+import { mergeEffectiveConfig, LLM_DEFAULTS } from '@/lib/llmConfig'
 import type { MediaAttachment } from '@/types/database'
-import { Plus, Save, Play, ArrowLeft, ChevronDown, Settings } from 'lucide-react'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Plus, Save, Play, ArrowLeft, Settings } from 'lucide-react'
 
 /**
  * Check if a model supports multimodal input via the OpenRouter models API.
@@ -76,10 +79,9 @@ export function SurveyCreate() {
   const [questions, setQuestions] = useState<Question[]>([])
   const [demographics, setDemographics] = useState<DemographicFilterType>({})
   const [sampleSize, setSampleSize] = useState<number | undefined>(undefined)
-  const [temperature, setTemperature] = useState<number | undefined>(undefined)
-  const [maxTokens, setMaxTokens] = useState<number | undefined>(undefined)
-  const [showLlmSettings, setShowLlmSettings] = useState(false)
+  const [llmConfig, setLlmConfig] = useState<Partial<LLMConfig>>({})
   const [includeOwnBackstories, setIncludeOwnBackstories] = useState(false)
+  const [surveyStatus, setSurveyStatus] = useState<'draft' | 'active'>('draft')
   const [ownBackstoriesCount, setOwnBackstoriesCount] = useState(0)
   const [saving, setSaving] = useState(false)
   const [duplicating, setDuplicating] = useState(false)
@@ -89,6 +91,8 @@ export function SurveyCreate() {
   const savedQuestionsRef = useRef<Question[]>([])
 
   const { createRun, loading: creatingRun } = useCreateSurveyRun()
+
+  const isActiveEditing = isEditing && surveyStatus === 'active'
 
   useEffect(() => {
     if (isEditing) {
@@ -113,15 +117,12 @@ export function SurveyCreate() {
       setName(survey.name || '')
       setQuestions(survey.questions)
       savedQuestionsRef.current = survey.questions
+      setSurveyStatus(survey.status)
       // Extract sample size from demographics if present
       const { _sample_size, ...restDemographics } = survey.demographics as DemographicFilterType & { _sample_size?: number[] }
       setDemographics(restDemographics)
       setSampleSize(_sample_size?.[0])
-      setTemperature(survey.temperature ?? undefined)
-      setMaxTokens(survey.max_tokens ?? undefined)
-      if (survey.temperature != null || survey.max_tokens != null) {
-        setShowLlmSettings(true)
-      }
+      setLlmConfig(survey.llm_config || {})
     }
   }
 
@@ -248,14 +249,21 @@ export function SurveyCreate() {
       ? { ...demographics, _sample_size: [sampleSize] }
       : demographics
 
+    // Clean llm_config: strip empty values
+    const cleanedLlmConfig: Partial<LLMConfig> = {}
+    for (const [k, v] of Object.entries(llmConfig)) {
+      if (v !== '' && v != null) {
+        (cleanedLlmConfig as Record<string, unknown>)[k] = v
+      }
+    }
+
     const surveyData = {
       user_id: user.id,
       name: name.trim(),
       questions: questions as unknown,
       demographics: demographicsWithSampleSize as unknown,
       status,
-      temperature: temperature ?? null,
-      max_tokens: maxTokens ?? null,
+      llm_config: Object.keys(cleanedLlmConfig).length > 0 ? cleanedLlmConfig : null,
     } as Record<string, unknown>
 
     let result: Survey | null = null
@@ -363,11 +371,7 @@ export function SurveyCreate() {
     const result = await saveSurvey('draft')
     if (result) {
       // Merge per-survey settings into llm_config snapshot
-      const runLlmConfig = {
-        ...llmConfig,
-        ...(result.temperature != null && { temperature: result.temperature }),
-        ...(result.max_tokens != null && { max_tokens: result.max_tokens }),
-      }
+      const runLlmConfig = mergeEffectiveConfig(profile?.llm_config, result.llm_config)
       const runId = await createRun(result.id, runLlmConfig)
       if (runId) {
         navigate(`/surveys/${result.id}`)
@@ -425,10 +429,14 @@ export function SurveyCreate() {
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h2 className="text-xl font-semibold">Questions</h2>
-            <Button onClick={addQuestion}>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Question
-            </Button>
+            {isActiveEditing ? (
+              <Badge variant="secondary">Locked (survey has been run)</Badge>
+            ) : (
+              <Button onClick={addQuestion}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Question
+              </Button>
+            )}
           </div>
 
           {questions.length === 0 ? (
@@ -441,6 +449,28 @@ export function SurveyCreate() {
                 </Button>
               </CardContent>
             </Card>
+          ) : isActiveEditing ? (
+            /* Read-only question display for active surveys */
+            <div className="space-y-4">
+              {questions.map((question, index) => (
+                <Card key={question.qkey} className="opacity-75">
+                  <CardContent className="pt-6">
+                    <div className="flex items-start justify-between mb-2">
+                      <span className="text-sm font-medium text-muted-foreground">Q{index + 1}</span>
+                      <Badge variant="outline">{question.type}</Badge>
+                    </div>
+                    <p className="font-medium mb-2">{question.text}</p>
+                    {question.options && (
+                      <ul className="text-sm text-muted-foreground space-y-1 ml-4">
+                        {question.options.map((opt, i) => (
+                          <li key={i}>{question.type === 'ranking' ? `${i + 1}. ` : '• '}{opt}</li>
+                        ))}
+                      </ul>
+                    )}
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
           ) : (
             <DndContext
               sensors={sensors}
@@ -476,63 +506,90 @@ export function SurveyCreate() {
         />
 
         <Card>
-          <CardHeader
-            className="cursor-pointer"
-            onClick={() => setShowLlmSettings(!showLlmSettings)}
-          >
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <Settings className="h-4 w-4" />
-                <CardTitle className="text-base">LLM Settings</CardTitle>
-              </div>
-              <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${showLlmSettings ? 'rotate-180' : ''}`} />
+          <CardHeader>
+            <div className="flex items-center gap-2">
+              <Settings className="h-4 w-4" />
+              <CardTitle className="text-base">LLM Settings</CardTitle>
             </div>
             <p className="text-sm text-muted-foreground">
-              Override temperature and max tokens for this survey (optional)
+              Override provider, model, temperature and max tokens for this survey (empty = inherit from profile)
             </p>
           </CardHeader>
-          {showLlmSettings && (
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label htmlFor="survey_temperature">Temperature</Label>
-                  <Input
-                    id="survey_temperature"
-                    type="number"
-                    min="0"
-                    max="2"
-                    step="0.1"
-                    value={temperature ?? ''}
-                    onChange={(e) =>
-                      setTemperature(e.target.value ? parseFloat(e.target.value) : undefined)
-                    }
-                    placeholder="Default"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Controls randomness. 0 = deterministic.
-                  </p>
-                </div>
-                <div className="space-y-2">
-                  <Label htmlFor="survey_max_tokens">Max Tokens</Label>
-                  <Input
-                    id="survey_max_tokens"
-                    type="number"
-                    min="1"
-                    max="16384"
-                    step="1"
-                    value={maxTokens ?? ''}
-                    onChange={(e) =>
-                      setMaxTokens(e.target.value ? parseInt(e.target.value, 10) : undefined)
-                    }
-                    placeholder="Default"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    Maximum tokens in response.
-                  </p>
-                </div>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label>Provider Override</Label>
+              <Select
+                value={llmConfig.provider || ''}
+                onValueChange={(v) => setLlmConfig({ ...llmConfig, provider: (v || undefined) as LLMConfig['provider'] })}
+              >
+                <SelectTrigger>
+                  <SelectValue placeholder="Inherit from profile" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="openrouter">OpenRouter</SelectItem>
+                  <SelectItem value="vllm">vLLM</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {(llmConfig.provider === 'openrouter' || (!llmConfig.provider && profile?.llm_config?.provider === 'openrouter')) && (
+              <div className="space-y-2">
+                <Label>Model Override</Label>
+                <Input
+                  value={llmConfig.openrouter_model ?? ''}
+                  onChange={(e) => setLlmConfig({ ...llmConfig, openrouter_model: e.target.value || undefined })}
+                  placeholder={profile?.llm_config?.openrouter_model || 'anthropic/claude-3-haiku'}
+                />
               </div>
-            </CardContent>
-          )}
+            )}
+            {(llmConfig.provider === 'vllm' || (!llmConfig.provider && profile?.llm_config?.provider === 'vllm')) && (
+              <div className="space-y-2">
+                <Label>Model Override</Label>
+                <Input
+                  value={llmConfig.vllm_model ?? ''}
+                  onChange={(e) => setLlmConfig({ ...llmConfig, vllm_model: e.target.value || undefined })}
+                  placeholder={profile?.llm_config?.vllm_model || 'meta-llama/Llama-3-70b'}
+                />
+              </div>
+            )}
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="survey_temperature">Temperature</Label>
+                <Input
+                  id="survey_temperature"
+                  type="number"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  value={llmConfig.temperature ?? ''}
+                  onChange={(e) =>
+                    setLlmConfig({ ...llmConfig, temperature: e.target.value ? parseFloat(e.target.value) : undefined })
+                  }
+                  placeholder={`${LLM_DEFAULTS.temperature} (default)`}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Controls randomness. 0 = deterministic.
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="survey_max_tokens">Max Tokens</Label>
+                <Input
+                  id="survey_max_tokens"
+                  type="number"
+                  min="1"
+                  max="16384"
+                  step="1"
+                  value={llmConfig.max_tokens ?? ''}
+                  onChange={(e) =>
+                    setLlmConfig({ ...llmConfig, max_tokens: e.target.value ? parseInt(e.target.value, 10) : undefined })
+                  }
+                  placeholder={`${LLM_DEFAULTS.max_tokens} (default)`}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Maximum tokens in response.
+                </p>
+              </div>
+            </div>
+          </CardContent>
         </Card>
 
         {ownBackstoriesCount > 0 && (
