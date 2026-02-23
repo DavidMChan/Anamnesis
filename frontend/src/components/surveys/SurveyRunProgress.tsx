@@ -7,7 +7,18 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Progress } from '@/components/ui/progress'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, ChevronDown } from 'lucide-react'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
+import { RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, Square, ChevronDown } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import type { SurveyRun, SurveyRunStatus } from '@/types/database'
 
@@ -15,6 +26,7 @@ interface SurveyRunProgressProps {
   run: SurveyRun
   onViewResults?: () => void
   onRunAgain?: () => void
+  onCancel?: () => Promise<void>
 }
 
 const statusConfig: Record<
@@ -48,13 +60,24 @@ const statusConfig: Record<
   },
 }
 
-export function SurveyRunProgress({ run, onViewResults, onRunAgain }: SurveyRunProgressProps) {
+export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel }: SurveyRunProgressProps) {
+  const [cancelling, setCancelling] = useState(false)
   const status = statusConfig[run.status]
   const totalProcessed = run.completed_tasks + run.failed_tasks
   const progress = run.total_tasks > 0 ? Math.round((totalProcessed / run.total_tasks) * 100) : 0
 
   const isInProgress = run.status === 'pending' || run.status === 'running'
   const isComplete = run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled'
+
+  const handleCancel = async () => {
+    if (!onCancel) return
+    setCancelling(true)
+    try {
+      await onCancel()
+    } finally {
+      setCancelling(false)
+    }
+  }
 
   return (
     <Card>
@@ -116,6 +139,31 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain }: SurveyRunP
             <Button onClick={onViewResults} className="flex-1">
               {isInProgress ? 'View Partial Results' : 'View Results'}
             </Button>
+          )}
+          {isInProgress && onCancel && (
+            <AlertDialog>
+              <AlertDialogTrigger asChild>
+                <Button variant="destructive" disabled={cancelling}>
+                  <Square className="h-4 w-4 mr-2" />
+                  {cancelling ? 'Stopping...' : 'Stop Run'}
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Stop this survey run?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Tasks already in progress will finish, but no new tasks will be started.
+                    You can start a new run afterwards.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={handleCancel}>
+                    Stop Run
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
           )}
           {isComplete && onRunAgain && (
             <Button variant="outline" onClick={onRunAgain}>

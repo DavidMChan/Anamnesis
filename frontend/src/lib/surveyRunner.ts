@@ -190,12 +190,11 @@ export async function getSurveyRun(runId: string): Promise<SurveyRun | null> {
 
 /**
  * Cancel a running survey.
+ *
+ * Uses the cancel_run RPC which atomically cancels the run and
+ * all pending/queued tasks in a single transaction.
  */
 export async function cancelSurveyRun(runId: string): Promise<boolean> {
-  const { error } = await supabase
-    .from('survey_runs')
-    .update({ status: 'cancelled', completed_at: new Date().toISOString() })
-    .eq('id', runId)
-
+  const { error } = await supabase.rpc('cancel_run', { p_run_id: runId })
   return !error
 }
