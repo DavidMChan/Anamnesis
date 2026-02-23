@@ -102,7 +102,7 @@ class TestVLLMGuidedDecoding:
         call_kwargs = mock.completions.create.call_args.kwargs
         assert "extra_body" not in call_kwargs
 
-        # vLLM multiple_select and ranking use response_format (json_schema) in both API modes
+        # vLLM multiple_select and ranking use response_format (json_schema) via extra_body in completions mode
         for qtype in ["multiple_select", "ranking"]:
             client = make_vllm_client()
             if qtype == "multiple_select":
@@ -115,8 +115,8 @@ class TestVLLMGuidedDecoding:
             client.complete("Prompt", question=question)
 
             call_kwargs = mock.completions.create.call_args.kwargs
-            assert "response_format" in call_kwargs, f"response_format should be in kwargs for {qtype}"
-            assert call_kwargs["response_format"]["type"] == "json_schema"
+            rf = call_kwargs["extra_body"]["response_format"]
+            assert rf["type"] == "json_schema", f"response_format should have json_schema for {qtype}"
 
     def test_vllm_guided_decoding_returns_valid_letter(self):
         """Response from guided decoding is correctly parsed as single letter."""

@@ -82,23 +82,23 @@ class TestStructuredParams:
         assert params == {"extra_body": {"structured_outputs": {"choice": ["A", "B", "C", "D"]}}}
 
     def test_vllm_multiple_select_json_schema(self):
-        """vLLM multiple_select returns response_format with boolean map schema (both API modes)."""
+        """vLLM multiple_select returns response_format with boolean map schema (via extra_body in completions mode)."""
         client = make_client(provider="vllm")
         question = Question(qkey="q1", type="multiple_select", text="Q?", options=["X", "Y", "Z", "W"])
         params = client._build_create_params(question)
-        assert "response_format" in params
-        assert params["response_format"]["type"] == "json_schema"
-        schema = params["response_format"]["json_schema"]["schema"]
+        rf = params["extra_body"]["response_format"]
+        assert rf["type"] == "json_schema"
+        schema = rf["json_schema"]["schema"]
         assert "choice_A" in schema["properties"]
         assert schema["properties"]["choice_A"]["type"] == "boolean"
 
     def test_vllm_ranking_json_schema(self):
-        """vLLM ranking returns response_format with ranking array schema (both API modes)."""
+        """vLLM ranking returns response_format with ranking array schema (via extra_body in completions mode)."""
         client = make_client(provider="vllm")
         question = Question(qkey="q1", type="ranking", text="Q?", options=["X", "Y", "Z"])
         params = client._build_create_params(question)
-        assert "response_format" in params
-        schema = params["response_format"]["json_schema"]["schema"]
+        rf = params["extra_body"]["response_format"]
+        schema = rf["json_schema"]["schema"]
         assert "ranking" in schema["properties"]
         assert schema["properties"]["ranking"]["minItems"] == 3
         assert schema["properties"]["ranking"]["maxItems"] == 3
@@ -112,12 +112,14 @@ class TestStructuredParams:
         assert params["response_format"]["type"] == "json_schema"
         assert params["response_format"]["json_schema"]["strict"] is True
 
-    def test_openrouter_mcq_no_schema_completions_mode(self):
-        """OpenRouter MCQ returns empty params in completions mode."""
+    def test_openrouter_mcq_schema_completions_mode(self):
+        """OpenRouter MCQ sends json_schema via extra_body in completions mode."""
         client = make_client(provider="openrouter")
         question = Question(qkey="q1", type="mcq", text="Q?", options=["Yes", "No"])
         params = client._build_create_params(question)
-        assert params == {}
+        rf = params["extra_body"]["response_format"]
+        assert rf["type"] == "json_schema"
+        assert rf["json_schema"]["strict"] is True
 
     def test_no_guided_for_open_response(self):
         """No structured params for open_response."""
@@ -396,3 +398,82 @@ class TestLLMResponseFromText:
     def test_empty_text_returns_empty(self):
         response = LLMResponse.from_text("")
         assert response.answer == ""
+
+
+# ─── OpenRouter Tier1 Structured Output Detection ─────────────────────────
+
+
+class TestOpenRouterTier1Detection:
+    """Tests for OpenRouter structured output parsing at tier1 (not falling through to tier2)."""
+
+    def test_openrouter_completions_mcq_json(self):
+        """OpenRouter completions mode: JSON MCQ response parsed at tier1."""
+        client = make_client(provider="openrouter", use_chat_template=False)
+        setup_sync_mock(client, '{"answer": "B"}')
+        question = Question(qkey="q1", type="mcq", text="Q?", options=["Yes", "No"])
+
+        result = client.complete("Test", question=question)
+        assert result.answer == "B"
+
+    def test_openrouter_completions_multiple_select_json(self):
+        """OpenRouter completions mode: JSON multiple_select response parsed at tier1."""
+        client = make_client(provider="openrouter", use_chat_template=False)
+        setup_sync_mock(client, '{"choice_A": false, "choice_B": true, "choice_C": true, "choice_D": false}')
+        question = Question(qkey="q1", type="multiple_select", text="Q?", options=["W", "X", "Y", "Z"])
+
+        result = client.complete("Test", question=question)
+        assert result.answer == "B,C"
+
+    def test_openrouter_completions_ranking_json(self):
+        """OpenRouter completions mode: JSON ranking response parsed at tier1."""
+        client = make_client(provider="openrouter", use_chat_template=False)
+        setup_sync_mock(client, '{"ranking": ["C", "D", "E", "A", "B"]}')
+        question = Question(qkey="q1", type="ranking", text="Q?", options=["V", "W", "X", "Y", "Z"])
+
+        result = client.complete("Test", question=question)
+        assert result.answer == "C,D,E,A,B"
+
+    def test_openrouter_chat_mcq_regression(self):
+        """OpenRouter chat mode MCQ still works (regression check)."""
+        client = make_client(provider="openrouter", use_chat_template=True)
+        setup_sync_mock(client, '{"answer": "A"}')
+        question = Question(qkey="q1", type="mcq", text="Q?", options=["Yes", "No"])
+
+        result = client.complete("Test", question=question)
+        assert result.answer == "A"
+
+    def test_vllm_mcq_uses_letter_path(self):
+        """vLLM MCQ still uses letter-constrained path, NOT json_schema parse (regression)."""
+        client = make_client(provider="vllm")
+        setup_sync_mock(client, "C")
+        question = Question(qkey="q1", type="mcq", text="Q?", options=["X", "Y", "Z"])
+
+        result = client.complete("Test", question=question)
+        assert result.answer == "C"
+
+    def test_vllm_multiple_select_uses_json_schema_parse(self):
+        """vLLM multiple_select still uses json_schema parse (regression)."""
+        client = make_client(provider="vllm")
+        setup_sync_mock(client, '{"choice_A": true, "choice_B": false, "choice_C": true}')
+        question = Question(qkey="q1", type="multiple_select", text="Q?", options=["X", "Y", "Z"])
+
+        result = client.complete("Test", question=question)
+        assert result.answer == "A,C"
+
+    def test_vllm_ranking_uses_json_schema_parse(self):
+        """vLLM ranking still uses json_schema parse (regression)."""
+        client = make_client(provider="vllm")
+        setup_sync_mock(client, '{"ranking": ["B", "A", "C"]}')
+        question = Question(qkey="q1", type="ranking", text="Q?", options=["X", "Y", "Z"])
+
+        result = client.complete("Test", question=question)
+        assert result.answer == "B,A,C"
+
+    def test_truncated_json_fallback(self):
+        """Invalid JSON → empty answer (existing behavior preserved for tier2 fallback)."""
+        client = make_client(provider="openrouter", use_chat_template=False)
+        setup_sync_mock(client, '{"answer": "B')  # truncated
+        question = Question(qkey="q1", type="mcq", text="Q?", options=["Yes", "No"])
+
+        result = client.complete("Test", question=question)
+        assert result.answer == ""  # empty → tier2 fallback in worker loop
