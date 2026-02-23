@@ -45,8 +45,10 @@ class TaskDispatcher:
         """
         Dispatch tasks for a survey run to RabbitMQ.
 
-        Only dispatches tasks with status='pending'. RabbitMQ handles
-        redelivery for crashed workers (heartbeat + unacked messages).
+        Throttles dispatch based on the run's max_concurrent_tasks setting
+        (from llm_config snapshot). Only pushes enough tasks to fill available
+        concurrency slots, so the total in-flight never exceeds the limit
+        regardless of how many workers are running.
 
         Args:
             run: Survey run record
@@ -57,12 +59,25 @@ class TaskDispatcher:
         run_id = run["id"]
         run_status = run.get("status", "pending")
 
-        tasks = self.db.get_pending_tasks_for_dispatch(run_id)
-        if tasks:
-            logger.info(f"Found {len(tasks)} pending tasks for run {run_id}")
+        # Get max_concurrent from the run's llm_config snapshot
+        llm_config = run.get("llm_config", {}) or {}
+        max_concurrent = llm_config.get("max_concurrent_tasks", 10)
 
+        # Count tasks currently in-flight (queued + processing)
+        in_flight = self.db.get_in_flight_count(run_id)
+        slots_available = max(0, max_concurrent - in_flight)
+
+        if slots_available == 0:
+            return 0
+
+        # Only fetch and dispatch up to slots_available tasks
+        tasks = self.db.get_pending_tasks_for_dispatch(run_id, limit=slots_available)
         if not tasks:
             return 0
+
+        if len(tasks) > 0:
+            logger.info(f"Found {len(tasks)} pending tasks for run {run_id} "
+                        f"(in_flight={in_flight}, max_concurrent={max_concurrent})")
 
         # Publish each task to RabbitMQ
         dispatched = 0
@@ -77,7 +92,8 @@ class TaskDispatcher:
                 self.db.update_task_status(task["id"], "pending")
                 logger.error(f"Failed to publish task {task['id']}: {e}")
 
-        logger.info(f"Dispatched {dispatched}/{len(tasks)} tasks for run {run_id}")
+        if dispatched > 0:
+            logger.info(f"Dispatched {dispatched} tasks for run {run_id}")
 
         # Update run status to 'running' if we dispatched tasks for a pending run
         if dispatched > 0 and run_status == "pending":

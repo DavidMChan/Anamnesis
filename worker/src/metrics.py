@@ -209,7 +209,7 @@ class MetricsLogger:
                 f"[metrics] window={self.tracker.window_seconds:.0f}s | "
                 f"processed={s.count} | throughput={s.throughput:.1f}/s | "
                 f"p50={format_duration(s.p50)} | p95={format_duration(s.p95)} | "
-                f"p99={format_duration(s.p99)} | in_flight={s.in_flight}/{s.max_concurrent}"
+                f"p99={format_duration(s.p99)} | in_flight={s.in_flight}"
             )
 
         return s

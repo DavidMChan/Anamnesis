@@ -3,7 +3,7 @@
 LLM Backend Benchmark Script.
 
 Measures throughput and latency at different concurrency levels to find
-the optimal MAX_CONCURRENT_TASKS setting for the async worker.
+the optimal max_concurrent_tasks setting (configured per-user in Settings).
 
 Usage:
     python scripts/benchmark.py \
@@ -288,7 +288,7 @@ def print_results(results: list[LevelResult], recommended: Optional[int]) -> Non
 
     print(separator)
     if recommended:
-        print(f"\nRecommendation: MAX_CONCURRENT_TASKS={recommended} (best throughput before degradation)")
+        print(f"\nRecommendation: Set max_concurrent_tasks={recommended} in Settings (best throughput before degradation)")
     else:
         print("\nRecommendation: Could not determine optimal level. Check for errors or try different concurrency values.")
     print()
