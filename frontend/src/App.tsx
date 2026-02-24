@@ -13,6 +13,9 @@ import { SurveyView } from '@/pages/SurveyView'
 import { SurveyResults } from '@/pages/SurveyResults'
 import { Backstories } from '@/pages/Backstories'
 import { About } from '@/pages/About'
+import { DemographicSurveys } from '@/pages/DemographicSurveys'
+import { DemographicSurveyCreate } from '@/pages/DemographicSurveyCreate'
+import { DemographicSurveyView } from '@/pages/DemographicSurveyView'
 
 function App() {
   return (
@@ -64,6 +67,30 @@ function App() {
             element={
               <ProtectedRoute>
                 <SurveyResults />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/demographic-surveys"
+            element={
+              <ProtectedRoute>
+                <DemographicSurveys />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/demographic-surveys/new"
+            element={
+              <ProtectedRoute>
+                <DemographicSurveyCreate />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/demographic-surveys/:id"
+            element={
+              <ProtectedRoute>
+                <DemographicSurveyView />
               </ProtectedRoute>
             }
           />

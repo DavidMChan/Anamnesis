@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Button } from '@/components/ui/button'
 import { X, Plus } from 'lucide-react'
@@ -64,6 +65,9 @@ export function DemographicFilter({
             <div className="flex flex-wrap items-center gap-4">
                 <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-muted-foreground">Filter results by:</span>
+                    <Link to="/demographic-surveys/new" className="text-xs text-primary hover:underline">
+                        Missing a demographic? Define your own.
+                    </Link>
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">

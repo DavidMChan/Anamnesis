@@ -458,6 +458,92 @@ class DatabaseClient:
             "queued_at": "now()"
         }).eq("id", task_id).execute()
 
+    # ==================== Demographic Survey Operations ====================
+
+    def get_survey_type(self, run_id: str) -> Optional[str]:
+        """
+        Get the survey type for a run (via join to surveys table).
+
+        Returns 'survey' or 'demographic', or None if not found.
+        """
+        data = self._safe_single_execute(
+            self.client.table("survey_runs")
+            .select("surveys(type)")
+            .eq("id", run_id)
+        )
+        if not data:
+            return None
+        surveys_data = data.get("surveys")
+        return surveys_data.get("type") if surveys_data else None
+
+    def get_demographic_key_for_survey(self, run_id: str) -> Optional[Dict[str, Any]]:
+        """
+        Get the demographic key slug for a demographic survey run.
+
+        The key slug is on surveys.demographic_key.
+        distribution_mode and num_trials are in the run's llm_config snapshot.
+
+        Returns {key, distribution_mode, num_trials} or None if not a demographic survey.
+        """
+        data = self._safe_single_execute(
+            self.client.table("survey_runs")
+            .select("llm_config, surveys(type, demographic_key)")
+            .eq("id", run_id)
+        )
+        if not data:
+            return None
+
+        surveys_data = data.get("surveys")
+        if not surveys_data or surveys_data.get("type") != "demographic":
+            return None
+
+        demo_key = surveys_data.get("demographic_key")
+        if not demo_key:
+            return None
+
+        llm_config = data.get("llm_config") or {}
+        return {
+            "key": demo_key,
+            "distribution_mode": llm_config.get("distribution_mode", "n_sample"),
+            "num_trials": llm_config.get("num_trials", 20),
+        }
+
+    def write_demographic_result(
+        self,
+        backstory_id: str,
+        demographic_key: str,
+        value: str,
+        distribution: Dict[str, Any],
+    ) -> None:
+        """
+        Write demographic distribution result back to a backstory.
+
+        Calls the write_demographic_result RPC function.
+        """
+        self.client.rpc(
+            "write_demographic_result",
+            {
+                "p_backstory_id": backstory_id,
+                "p_demographic_key": demographic_key,
+                "p_value": value,
+                "p_distribution": distribution,
+            }
+        ).execute()
+
+    def finish_demographic_key(self, survey_id: str, status: str = "finished") -> None:
+        """
+        Update demographic_keys status when a demographic survey run finishes.
+
+        The RPC looks up the key via surveys.demographic_key.
+        """
+        self.client.rpc(
+            "finish_demographic_key",
+            {
+                "p_survey_id": survey_id,
+                "p_status": status,
+            }
+        ).execute()
+
     # ==================== User Config Operations ====================
 
     def get_user(self, user_id: str) -> Optional[Dict[str, Any]]:
