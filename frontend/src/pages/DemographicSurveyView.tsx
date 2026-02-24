@@ -158,6 +158,7 @@ export function DemographicSurveyView() {
               await cancelSurveyRun(displayRun.id)
               refreshRuns()
             }}
+            onTaskRetried={refreshRuns}
           />
         )}
 
