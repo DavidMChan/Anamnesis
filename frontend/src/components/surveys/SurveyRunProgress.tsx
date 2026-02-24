@@ -18,8 +18,9 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
-import { RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, Square, ChevronDown } from 'lucide-react'
+import { RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, Square, ChevronDown, RotateCcw } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
+import { retryTask } from '@/lib/surveyRunner'
 import type { SurveyRun, SurveyRunStatus } from '@/types/database'
 
 interface SurveyRunProgressProps {
@@ -27,6 +28,9 @@ interface SurveyRunProgressProps {
   onViewResults?: () => void
   onRunAgain?: () => void
   onCancel?: () => Promise<void>
+  creatingRun?: boolean
+  /** Called after any task is retried so the parent can refresh run data */
+  onTaskRetried?: () => void
 }
 
 const statusConfig: Record<
@@ -60,7 +64,7 @@ const statusConfig: Record<
   },
 }
 
-export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel }: SurveyRunProgressProps) {
+export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, creatingRun, onTaskRetried }: SurveyRunProgressProps) {
   const [cancelling, setCancelling] = useState(false)
   const status = statusConfig[run.status]
   const totalProcessed = run.completed_tasks + run.failed_tasks
@@ -130,7 +134,7 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel }: 
 
         {/* Error summary */}
         {run.failed_tasks > 0 && (
-          <FailedTaskErrors runId={run.id} failedCount={run.failed_tasks} />
+          <FailedTaskErrors runId={run.id} failedCount={run.failed_tasks} onTaskRetried={onTaskRetried} />
         )}
 
         {/* Actions */}
@@ -166,8 +170,8 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel }: 
             </AlertDialog>
           )}
           {isComplete && onRunAgain && (
-            <Button variant="outline" onClick={onRunAgain}>
-              Run Again
+            <Button variant="outline" onClick={onRunAgain} disabled={creatingRun}>
+              {creatingRun ? 'Starting...' : 'Run Again'}
             </Button>
           )}
         </div>
@@ -179,14 +183,24 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel }: 
 const MAX_DISPLAYED_ERRORS = 20
 
 interface FailedTaskError {
+  id: string
   backstory_id: string
   error: string | null
 }
 
-function FailedTaskErrors({ runId, failedCount }: { runId: string; failedCount: number }) {
+function FailedTaskErrors({
+  runId,
+  failedCount,
+  onTaskRetried,
+}: {
+  runId: string
+  failedCount: number
+  onTaskRetried?: () => void
+}) {
   const [expanded, setExpanded] = useState(false)
   const [errors, setErrors] = useState<FailedTaskError[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [retryingId, setRetryingId] = useState<string | null>(null)
 
   useEffect(() => {
     if (expanded && !loaded) {
@@ -197,7 +211,7 @@ function FailedTaskErrors({ runId, failedCount }: { runId: string; failedCount: 
   const fetchErrors = async () => {
     const { data } = await supabase
       .from('survey_tasks')
-      .select('backstory_id, error')
+      .select('id, backstory_id, error')
       .eq('survey_run_id', runId)
       .eq('status', 'failed')
       .limit(MAX_DISPLAYED_ERRORS + 1)
@@ -206,6 +220,20 @@ function FailedTaskErrors({ runId, failedCount }: { runId: string; failedCount: 
       setErrors(data as FailedTaskError[])
     }
     setLoaded(true)
+  }
+
+  const handleRetry = async (taskId: string) => {
+    setRetryingId(taskId)
+    try {
+      await retryTask(taskId)
+      // Remove from local list immediately
+      setErrors((prev) => prev.filter((e) => e.id !== taskId))
+      onTaskRetried?.()
+    } catch (e) {
+      console.error('Failed to retry task:', e)
+    } finally {
+      setRetryingId(null)
+    }
   }
 
   return (
@@ -228,13 +256,24 @@ function FailedTaskErrors({ runId, failedCount }: { runId: string; failedCount: 
             <p className="text-xs text-muted-foreground">No error details available</p>
           ) : (
             <>
-              {errors.slice(0, MAX_DISPLAYED_ERRORS).map((err, i) => (
-                <div key={i} className="text-xs rounded border border-destructive/10 bg-background p-2">
-                  <span className="font-mono text-muted-foreground">
-                    {err.backstory_id.slice(0, 8)}...
-                  </span>
-                  <span className="mx-2 text-destructive/40">|</span>
-                  <span className="text-destructive">{err.error || 'Unknown error'}</span>
+              {errors.slice(0, MAX_DISPLAYED_ERRORS).map((err) => (
+                <div key={err.id} className="text-xs rounded border border-destructive/10 bg-background p-2 flex items-start gap-2">
+                  <div className="flex-1 min-w-0">
+                    <span className="font-mono text-muted-foreground">
+                      {err.backstory_id.slice(0, 8)}...
+                    </span>
+                    <span className="mx-2 text-destructive/40">|</span>
+                    <span className="text-destructive">{err.error || 'Unknown error'}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleRetry(err.id)}
+                    disabled={retryingId === err.id}
+                    className="shrink-0 flex items-center gap-1 text-muted-foreground hover:text-foreground disabled:opacity-50"
+                    title="Retry this task"
+                  >
+                    <RotateCcw className={`h-3 w-3 ${retryingId === err.id ? 'animate-spin' : ''}`} />
+                  </button>
                 </div>
               ))}
               {failedCount > MAX_DISPLAYED_ERRORS && (
