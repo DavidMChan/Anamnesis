@@ -22,10 +22,10 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { QuestionEditor } from '@/components/surveys/QuestionEditor'
-import { DemographicFilter } from '@/components/surveys/DemographicFilter'
+import { DemographicFilter, defaultDemographicSelectionConfig, legacyToSelectionConfig } from '@/components/surveys/DemographicFilter'
 import { supabase } from '@/lib/supabase'
 import { useAuthContext } from '@/contexts/AuthContext'
-import type { Question, DemographicFilter as DemographicFilterType, Survey } from '@/types/database'
+import type { Question, DemographicFilter as DemographicFilterType, DemographicSelectionConfig, Survey } from '@/types/database'
 import { toast } from '@/hooks/use-toast'
 import { deleteMedia, copyMedia } from '@/lib/media'
 import type { MediaAttachment } from '@/types/database'
@@ -49,8 +49,7 @@ export function SurveyCreate() {
 
   const [name, setName] = useState('')
   const [questions, setQuestions] = useState<Question[]>([])
-  const [demographics, setDemographics] = useState<DemographicFilterType>({})
-  const [sampleSize, setSampleSize] = useState<number | undefined>(undefined)
+  const [demographics, setDemographics] = useState<DemographicSelectionConfig>(defaultDemographicSelectionConfig())
   const [includeOwnBackstories, setIncludeOwnBackstories] = useState(false)
   const [ownBackstoriesCount, setOwnBackstoriesCount] = useState(0)
   const [saving, setSaving] = useState(false)
@@ -88,10 +87,13 @@ export function SurveyCreate() {
       setName(survey.name || '')
       setQuestions(survey.questions)
       savedQuestionsRef.current = survey.questions
-      // Extract sample size from demographics if present
-      const { _sample_size, ...restDemographics } = survey.demographics as DemographicFilterType & { _sample_size?: number[] }
-      setDemographics(restDemographics)
-      setSampleSize(_sample_size?.[0])
+      // Convert legacy format if needed
+      const stored = survey.demographics
+      if (stored && 'mode' in stored && 'filters' in stored) {
+        setDemographics(stored as unknown as DemographicSelectionConfig)
+      } else {
+        setDemographics(legacyToSelectionConfig(stored as DemographicFilterType & { _sample_size?: number[] }))
+      }
     }
   }
 
@@ -213,16 +215,11 @@ export function SurveyCreate() {
     setError(null)
     setSaving(true)
 
-    // Combine demographics with sample size (if set)
-    const demographicsWithSampleSize = sampleSize
-      ? { ...demographics, _sample_size: [sampleSize] }
-      : demographics
-
     const surveyData = {
       user_id: user.id,
       name: name.trim(),
       questions: questions as unknown,
-      demographics: demographicsWithSampleSize as unknown,
+      demographics: demographics as unknown,
       status,
     } as Record<string, unknown>
 
@@ -367,8 +364,6 @@ export function SurveyCreate() {
         <DemographicFilter
           value={demographics}
           onChange={setDemographics}
-          sampleSize={sampleSize}
-          onSampleSizeChange={setSampleSize}
         />
 
         {ownBackstoriesCount > 0 && (

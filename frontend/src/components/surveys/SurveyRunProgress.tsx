@@ -28,6 +28,7 @@ interface SurveyRunProgressProps {
   onViewResults?: () => void
   onRunAgain?: () => void
   onCancel?: () => Promise<void>
+  creatingRun?: boolean
   /** Called after any task is retried so the parent can refresh run data */
   onTaskRetried?: () => void
 }
@@ -63,7 +64,7 @@ const statusConfig: Record<
   },
 }
 
-export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, onTaskRetried }: SurveyRunProgressProps) {
+export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, creatingRun, onTaskRetried }: SurveyRunProgressProps) {
   const [cancelling, setCancelling] = useState(false)
   const status = statusConfig[run.status]
   const totalProcessed = run.completed_tasks + run.failed_tasks
@@ -169,8 +170,8 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, on
             </AlertDialog>
           )}
           {isComplete && onRunAgain && (
-            <Button variant="outline" onClick={onRunAgain}>
-              Run Again
+            <Button variant="outline" onClick={onRunAgain} disabled={creatingRun}>
+              {creatingRun ? 'Starting...' : 'Run Again'}
             </Button>
           )}
         </div>

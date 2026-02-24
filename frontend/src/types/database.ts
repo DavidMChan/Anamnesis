@@ -72,6 +72,19 @@ export interface DemographicFilter {
   [key: string]: string[] | { min?: number; max?: number } | undefined
 }
 
+// New config stored in survey_runs.demographics for distribution-based selection
+export type DemographicSelectionMode = 'top_k' | 'balanced'
+
+export interface DemographicSelectionConfig {
+  mode: DemographicSelectionMode
+  sample_size: number
+  filters: DemographicFilter
+  // Balanced mode only: pipe-delimited group keys → slot counts
+  slot_allocation?: Record<string, number>
+  // Ordered dimension keys for serializing/deserializing group keys
+  dimensions?: string[]
+}
+
 // Metadata about demographic keys
 export type DemographicValueType = 'numeric' | 'enum' | 'text'
 
@@ -145,7 +158,7 @@ export interface SurveyRun {
   results?: SurveyResults
   error_log?: SurveyRunErrorLog[]
   llm_config: LLMConfig
-  demographics?: DemographicFilter
+  demographics?: DemographicFilter | DemographicSelectionConfig
   started_at: string | null
   completed_at: string | null
   created_at: string
