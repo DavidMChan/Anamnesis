@@ -316,13 +316,7 @@ export function SurveyCreate() {
         </Card>
 
         <div className="space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-xl font-semibold">Questions</h2>
-            <Button onClick={addQuestion}>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Question
-            </Button>
-          </div>
+          <h2 className="text-xl font-semibold">Questions</h2>
 
           {questions.length === 0 ? (
             <Card>
@@ -335,29 +329,35 @@ export function SurveyCreate() {
               </CardContent>
             </Card>
           ) : (
-            <DndContext
-              sensors={sensors}
-              collisionDetection={closestCenter}
-              onDragEnd={handleDragEnd}
-            >
-              <SortableContext
-                items={questions.map((q) => q.qkey)}
-                strategy={verticalListSortingStrategy}
+            <>
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
               >
-                <div className="space-y-4">
-                  {questions.map((question, index) => (
-                    <QuestionEditor
-                      key={question.qkey}
-                      question={question}
-                      index={index}
-                      onChange={(q) => updateQuestion(index, q)}
-                      onDelete={() => deleteQuestion(index)}
-                      onDuplicate={() => !duplicating && duplicateQuestion(index)}
-                    />
-                  ))}
-                </div>
-              </SortableContext>
-            </DndContext>
+                <SortableContext
+                  items={questions.map((q) => q.qkey)}
+                  strategy={verticalListSortingStrategy}
+                >
+                  <div className="space-y-4">
+                    {questions.map((question, index) => (
+                      <QuestionEditor
+                        key={question.qkey}
+                        question={question}
+                        index={index}
+                        onChange={(q) => updateQuestion(index, q)}
+                        onDelete={() => deleteQuestion(index)}
+                        onDuplicate={() => !duplicating && duplicateQuestion(index)}
+                      />
+                    ))}
+                  </div>
+                </SortableContext>
+              </DndContext>
+              <Button onClick={addQuestion} variant="outline" className="w-full">
+                <Plus className="h-4 w-4 mr-2" />
+                Add Question
+              </Button>
+            </>
           )}
         </div>
 

@@ -264,3 +264,22 @@ export async function retryTask(taskId: string): Promise<void> {
   const { error } = await supabase.rpc('retry_task', { p_task_id: taskId })
   if (error) throw error
 }
+
+/**
+ * Re-run a demographic survey from scratch.
+ *
+ * Atomically:
+ *   1. Clears all backstory demographic results for this key
+ *   2. Resets demographic_keys.status to 'running'
+ *   3. Creates a new survey_run (reusing the previous run's llm_config)
+ *   4. Queues tasks for all public backstories
+ *
+ * Returns the new run ID.
+ */
+export async function rerunDemographicSurvey(surveyId: string): Promise<CreateSurveyRunResult> {
+  const { data, error } = await supabase.rpc('rerun_demographic_survey', {
+    p_survey_id: surveyId,
+  })
+  if (error) return { success: false, error: error.message }
+  return { success: true, runId: data as string }
+}
