@@ -7,9 +7,10 @@ import { Badge } from '@/components/ui/badge'
 import { supabase } from '@/lib/supabase'
 import { useSurveyRun } from '@/hooks/useSurveyRun'
 import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
-import { cancelSurveyRun } from '@/lib/surveyRunner'
+import { cancelSurveyRun, rerunDemographicSurvey } from '@/lib/surveyRunner'
+import { toast } from '@/hooks/use-toast'
 import type { Survey, SurveyRun, DemographicKey, DemographicKeyStatus } from '@/types/database'
-import { ArrowLeft, History } from 'lucide-react'
+import { ArrowLeft, History, RotateCcw } from 'lucide-react'
 
 const statusVariants: Record<DemographicKeyStatus, 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info' | 'gold'> = {
   pending: 'outline',
@@ -26,6 +27,7 @@ export function DemographicSurveyView() {
   const [loading, setLoading] = useState(true)
   const [showHistory, setShowHistory] = useState(false)
   const [selectedRun, setSelectedRun] = useState<SurveyRun | null>(null)
+  const [rerunning, setRerunning] = useState(false)
 
   const { run: latestRun, runs, isRunning, refresh: refreshRuns } = useSurveyRun({
     surveyId: id,
@@ -82,6 +84,26 @@ export function DemographicSurveyView() {
       setDemographicKey(data as DemographicKey)
     }
   }
+
+  const handleRerun = async () => {
+    if (!survey) return
+    setRerunning(true)
+    try {
+      const result = await rerunDemographicSurvey(survey.id)
+      if (!result.success) {
+        toast({ title: 'Re-run failed', description: result.error, variant: 'destructive' })
+      } else {
+        toast({ title: 'Re-run started', description: 'All previous results cleared. Running from scratch.' })
+        setSelectedRun(null)
+        refreshRuns()
+        fetchDemographicKey(survey.demographic_key)
+      }
+    } finally {
+      setRerunning(false)
+    }
+  }
+
+  const canRerun = !isRunning && !!latestRun && (latestRun.status === 'cancelled' || latestRun.status === 'failed')
 
   const displayRun = selectedRun || latestRun
 
@@ -142,6 +164,12 @@ export function DemographicSurveyView() {
               {runs.length > 0 && ` · ${runs.length} run${runs.length > 1 ? 's' : ''}`}
             </p>
           </div>
+          {canRerun && (
+            <Button variant="outline" onClick={handleRerun} disabled={rerunning}>
+              <RotateCcw className="h-4 w-4 mr-2" />
+              {rerunning ? 'Starting...' : 'Re-run'}
+            </Button>
+          )}
           {runs.length > 1 && (
             <Button variant="outline" onClick={() => setShowHistory(!showHistory)}>
               <History className="h-4 w-4 mr-2" />
