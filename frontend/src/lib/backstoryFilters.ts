@@ -25,6 +25,15 @@ export function isDemographicSelectionConfig(
   return !!value && 'mode' in value && 'filters' in value
 }
 
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
 /**
  * Fetch all public backstories with demographics (excluding anthology).
  * Returns id + demographics for client-side scoring.
@@ -83,6 +92,9 @@ export async function selectBackstoryIds(
   backstories = applyCustomFilters(backstories, config.filters)
 
   if (config.mode === 'top_k') {
+    if (Object.keys(config.filters).length === 0) {
+      return shuffle(backstories).slice(0, config.sample_size).map((b) => b.id)
+    }
     const scored = rankAndSelectBackstories(
       backstories,
       config.filters,
@@ -95,8 +107,7 @@ export async function selectBackstoryIds(
   const { dimensions, groups } = computeCrossProduct(config.filters)
 
   if (groups.length === 0) {
-    // No demographic filters active — just return top K by any criteria
-    return backstories.slice(0, config.sample_size).map((b) => b.id)
+    return shuffle(backstories).slice(0, config.sample_size).map((b) => b.id)
   }
 
   const slotAllocation =
