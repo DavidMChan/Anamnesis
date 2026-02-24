@@ -259,3 +259,14 @@ export async function cancelSurveyRun(runId: string): Promise<boolean> {
   const { error } = await supabase.rpc('cancel_run', { p_run_id: runId })
   return !error
 }
+
+/**
+ * Retry a single failed task.
+ *
+ * Resets the task to 'pending' and the run back to 'running' so the
+ * dispatcher picks it up again.
+ */
+export async function retryTask(taskId: string): Promise<void> {
+  const { error } = await supabase.rpc('retry_task', { p_task_id: taskId })
+  if (error) throw error
+}

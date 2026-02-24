@@ -257,16 +257,33 @@ async def main():
                 demo_key = demo_key_info["key"]
                 backstory_id = task["backstory_id"]
 
+                # Fetch questions to map letter answers (A/B/C…) to option texts
+                questions_data = await asyncio.to_thread(
+                    db.get_survey_questions, task["survey_run_id"]
+                )
+                questions_by_qkey = {q.get("qkey"): q for q in (questions_data or [])}
+
                 for qkey, raw_answers_str in result.result.items():
                     # Parse the N answers (joined by '||')
                     answers = [a for a in raw_answers_str.split("||") if a]
                     if not answers:
                         continue
 
-                    # Compute frequency distribution
+                    # Map single letter → option text (MCQ answers come back as A/B/C…)
+                    question_opts = questions_by_qkey.get(qkey, {}).get("options") or []
+
+                    def letter_to_text(letter: str) -> str:
+                        if question_opts and len(letter) == 1 and letter.isalpha():
+                            idx = ord(letter.upper()) - 65
+                            if 0 <= idx < len(question_opts):
+                                return question_opts[idx]
+                        return letter
+
+                    # Compute frequency distribution over option texts
                     counts: dict[str, int] = {}
                     for ans in answers:
-                        counts[ans] = counts.get(ans, 0) + 1
+                        text = letter_to_text(ans)
+                        counts[text] = counts.get(text, 0) + 1
                     total = len(answers)
                     distribution = {k: round(v / total, 4) for k, v in counts.items()}
 
