@@ -34,11 +34,9 @@ class TaskDispatcher:
         self,
         db: DatabaseClient,
         publisher: QueuePublisher,
-        poll_interval: float = 2.0,
     ):
         self.db = db
         self.publisher = publisher
-        self.poll_interval = poll_interval
         self.running = False
 
     def dispatch_run(self, run: Dict[str, Any]) -> int:
@@ -79,16 +77,18 @@ class TaskDispatcher:
             logger.info(f"Found {len(tasks)} pending tasks for run {run_id} "
                         f"(in_flight={in_flight}, max_concurrent={max_concurrent})")
 
-        # Publish each task to RabbitMQ
+        # Batch-mark all tasks as queued in one UPDATE, then publish individually.
+        # Reverting on publish failure is safe: only that task goes back to pending.
+        task_ids = [task["id"] for task in tasks]
+        self.db.mark_tasks_queued(task_ids)
+
         dispatched = 0
         for task in tasks:
             try:
-                # Mark as queued BEFORE publishing to prevent re-dispatch
-                self.db.mark_task_queued(task["id"])
                 self.publisher.publish_task(run_id, task["id"])
                 dispatched += 1
             except Exception as e:
-                # If publishing fails, revert to pending so it can be retried
+                # Revert this single task so it can be re-dispatched next cycle
                 self.db.update_task_status(task["id"], "pending")
                 logger.error(f"Failed to publish task {task['id']}: {e}")
 
@@ -101,13 +101,13 @@ class TaskDispatcher:
 
         return dispatched
 
-    def poll_and_dispatch(self) -> int:
+    def poll_and_dispatch(self) -> tuple[int, int]:
         """
         Poll for pending runs and dispatch their tasks.
         Also checks if running runs are complete.
 
         Returns:
-            Total number of tasks dispatched
+            (runs_found, total_dispatched) — used by start() to compute adaptive sleep.
         """
         pending_runs = self.db.get_runs_needing_dispatch()
 
@@ -127,22 +127,36 @@ class TaskDispatcher:
             except Exception as e:
                 logger.error(f"Error dispatching run {run['id']}: {e}")
 
-        return total_dispatched
+        return len(pending_runs), total_dispatched
 
     def start(self):
-        """Start the dispatcher loop."""
+        """Start the dispatcher loop with adaptive poll interval.
+
+        Sleep times:
+          - busy  (tasks dispatched):        1s
+          - active (runs exist, none queued): 3s
+          - idle   (no active runs):          5s
+        """
         self.running = True
-        logger.info(f"Dispatcher started (poll_interval={self.poll_interval}s)")
+        logger.info("Dispatcher started (adaptive poll: idle=5s active=3s busy=1s)")
 
         while self.running:
             try:
-                dispatched = self.poll_and_dispatch()
+                runs_found, dispatched = self.poll_and_dispatch()
                 if dispatched > 0:
                     logger.info(f"Dispatched {dispatched} tasks this cycle")
             except Exception as e:
                 logger.error(f"Error in dispatch cycle: {e}")
+                runs_found, dispatched = 0, 0
 
-            time.sleep(self.poll_interval)
+            if dispatched > 0:
+                sleep_time = 1.0
+            elif runs_found > 0:
+                sleep_time = 3.0
+            else:
+                sleep_time = 5.0
+
+            time.sleep(sleep_time)
 
     def stop(self):
         """Stop the dispatcher loop."""
@@ -167,7 +181,6 @@ def main():
     dispatcher = TaskDispatcher(
         db=db,
         publisher=publisher,
-        poll_interval=2.0,
     )
 
     # Signal handlers for graceful shutdown

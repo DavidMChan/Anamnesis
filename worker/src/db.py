@@ -326,10 +326,10 @@ class DatabaseClient:
         Returns:
             List of survey run records
         """
-        # Get runs with status 'pending' or 'running'
+        # Get runs with status 'pending' or 'running' — only fetch columns used by the dispatcher
         result = (
             self.client.table("survey_runs")
-            .select("*")
+            .select("id, status, llm_config")
             .in_("status", ["pending", "running"])
             .execute()
         )
@@ -386,6 +386,20 @@ class DatabaseClient:
             "status": "queued",
             "queued_at": "now()"
         }).eq("id", task_id).execute()
+
+    def mark_tasks_queued(self, task_ids: List[str]) -> None:
+        """
+        Batch-mark multiple tasks as queued in a single UPDATE.
+
+        Args:
+            task_ids: List of task UUIDs
+        """
+        if not task_ids:
+            return
+        self.client.table("survey_tasks").update({
+            "status": "queued",
+            "queued_at": "now()"
+        }).in_("id", task_ids).execute()
 
     # ==================== Demographic Survey Operations ====================
 
