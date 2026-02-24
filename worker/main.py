@@ -24,7 +24,7 @@ from src.response import NonRetryableError, MultimodalNotSupportedError
 from src.metrics import LatencyTracker, MetricsLogger
 from src.parser import ParserLLM
 from src.queue import AsyncQueueConsumer
-from src.worker import TaskProcessor
+from src.worker import TaskProcessor, IndependentRepeat
 
 # Configure logging
 logging.basicConfig(
@@ -226,19 +226,60 @@ async def main():
                 await message.ack()
                 return
 
-            # 5. Process task
+            # 5. Detect demographic survey and choose strategy
+            demo_key_info = await asyncio.to_thread(
+                db.get_demographic_key_for_survey, task["survey_run_id"]
+            )
+            is_demographic = demo_key_info is not None
+
+            strategy = None
+            if is_demographic:
+                num_trials = demo_key_info.get("num_trials", 20)
+                strategy = IndependentRepeat(num_trials=num_trials)
+                logger.info(f"Task {task_id}: demographic survey, using IndependentRepeat(n={num_trials})")
+
             processor = TaskProcessor(
                 db=db,
                 llm=llm,
                 max_retries=config.worker.max_retries,
                 parser_llm=parser_llm,
                 media_client=media_client,
+                strategy=strategy,
             )
 
             start = time.monotonic()
             result = await processor.async_process_task(task)
             duration_ms = (time.monotonic() - start) * 1000
             tracker.record(duration_ms)
+
+            # 5b. For demographic surveys, compute distribution and write back
+            if is_demographic and result.success and result.result:
+                demo_key = demo_key_info["key"]
+                backstory_id = task["backstory_id"]
+
+                for qkey, raw_answers_str in result.result.items():
+                    # Parse the N answers (joined by '||')
+                    answers = [a for a in raw_answers_str.split("||") if a]
+                    if not answers:
+                        continue
+
+                    # Compute frequency distribution
+                    counts: dict[str, int] = {}
+                    for ans in answers:
+                        counts[ans] = counts.get(ans, 0) + 1
+                    total = len(answers)
+                    distribution = {k: round(v / total, 4) for k, v in counts.items()}
+
+                    # Find mode (most frequent answer)
+                    value = max(counts, key=counts.get)  # type: ignore[arg-type]
+
+                    logger.info(f"Task {task_id}: writing demographic result "
+                                f"{demo_key}={value} (dist={distribution})")
+
+                    await asyncio.to_thread(
+                        db.write_demographic_result,
+                        backstory_id, demo_key, value, distribution,
+                    )
 
             # 6. Success → ACK
             logger.info(f"Task {task_id} completed successfully ({duration_ms:.0f}ms)")

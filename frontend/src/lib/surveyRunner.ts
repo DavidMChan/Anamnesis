@@ -127,6 +127,76 @@ export async function createSurveyRun(
 }
 
 /**
+ * Create a new demographic survey run.
+ *
+ * Targets ALL public non-anthology backstories (no demographic filters, no sample size).
+ */
+export async function createDemographicSurveyRun(
+  options: Omit<CreateSurveyRunOptions, 'demographics'>
+): Promise<CreateSurveyRunResult> {
+  const { surveyId, llmConfig } = options
+
+  try {
+    // Get ALL public non-anthology backstories (no filters, no sample limit)
+    const { data: backstories, error: backstoriesError } = await supabase
+      .from('backstories')
+      .select('id')
+      .eq('is_public', true)
+      .neq('source_type', 'anthology')
+
+    if (backstoriesError) {
+      return { success: false, error: backstoriesError.message }
+    }
+
+    if (!backstories || backstories.length === 0) {
+      return { success: false, error: 'No public backstories found' }
+    }
+
+    const backstoryIds = backstories.map((b) => b.id)
+
+    // Create survey run with 'pending' status
+    const { data: run, error: runError } = await supabase
+      .from('survey_runs')
+      .insert({
+        survey_id: surveyId,
+        status: 'pending',
+        total_tasks: backstoryIds.length,
+        completed_tasks: 0,
+        failed_tasks: 0,
+        results: {},
+        error_log: [],
+        llm_config: llmConfig,
+        demographics: {},
+      })
+      .select()
+      .single()
+
+    if (runError || !run) {
+      return { success: false, error: runError?.message || 'Failed to create run' }
+    }
+
+    // Create tasks for each backstory
+    const tasks = backstoryIds.map((backstoryId) => ({
+      survey_run_id: run.id,
+      backstory_id: backstoryId,
+      status: 'pending',
+      attempts: 0,
+    }))
+
+    const { error: tasksError } = await supabase.from('survey_tasks').insert(tasks)
+
+    if (tasksError) {
+      await supabase.from('survey_runs').delete().eq('id', run.id)
+      return { success: false, error: tasksError.message }
+    }
+
+    return { success: true, runId: run.id }
+  } catch (error) {
+    return { success: false, error: String(error) }
+  }
+}
+
+/**
  * Get the latest run for a survey.
  */
 export async function getLatestSurveyRun(surveyId: string): Promise<SurveyRun | null> {

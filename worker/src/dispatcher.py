@@ -120,6 +120,20 @@ class TaskDispatcher:
                 # Sync counters and check completion for all running runs
                 if run.get("status") == "running" or (dispatched > 0 and run.get("status") == "pending"):
                     self.db.check_run_completion(run["id"])
+
+                    # After completion check, see if the run just finished
+                    new_status = self.db.get_run_status(run["id"])
+                    if new_status in ("completed", "failed") and old_status == "running":
+                        # Check if this is a demographic survey
+                        survey_type = self.db.get_survey_type(run["id"])
+                        if survey_type == "demographic":
+                            run_data = self.db.get_survey_run(run["id"])
+                            survey_id = run_data.get("survey_id") if run_data else None
+                            if survey_id:
+                                final_status = "finished" if new_status == "completed" else "failed"
+                                self.db.finish_demographic_key(survey_id, final_status)
+                                logger.info(f"Demographic key for survey {survey_id} "
+                                            f"updated to '{final_status}'")
             except Exception as e:
                 logger.error(f"Error dispatching run {run['id']}: {e}")
 

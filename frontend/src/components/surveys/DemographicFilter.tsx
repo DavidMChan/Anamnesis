@@ -8,6 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { supabase } from '@/lib/supabase'
 import { applyDemographicFilters } from '@/lib/backstoryFilters'
 import type { DemographicFilter as DemographicFilterType, DemographicKey } from '@/types/database'
+import { Link } from 'react-router-dom'
 import { Plus, X } from 'lucide-react'
 
 interface DemographicFilterProps {
@@ -78,6 +79,7 @@ export function DemographicFilter({ value, onChange, sampleSize, onSampleSizeCha
     const { data, error } = await supabase
       .from('demographic_keys')
       .select('*')
+      .eq('status', 'finished')
       .order('display_name')
 
     if (error) {
@@ -212,7 +214,10 @@ export function DemographicFilter({ value, onChange, sampleSize, onSampleSizeCha
       <CardHeader>
         <CardTitle>Target Demographics</CardTitle>
         <CardDescription>
-          {description || 'Add filters to target specific demographics. The system will match backstories accordingly.'}
+          {description || 'Add filters to target specific demographics. The system will match backstories accordingly.'}{' '}
+          <Link to="/demographic-surveys/new" className="text-primary hover:underline">
+            Missing a demographic? Define your own.
+          </Link>
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">
