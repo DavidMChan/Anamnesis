@@ -1,349 +1,391 @@
-# Feature: Minor Frontend Improvements (5 items)
+# Feature: Distribution-Based Demographic Filtering (Two Modes)
 
 ## Status
-- [x] Planning complete
+- [ ] Planning complete
 - [ ] Ready for implementation
 
 ## Description
-A bundle of 5 small UI/UX improvements to the survey platform:
-1. Show which model was used per run on the results page
-2. Show effective LLM config + demographics on SurveyView
-3. Allow editing LLM settings + demographics per run (unlock active surveys)
-4. Default temperature=1, max_tokens=128 when not set
-5. Show run start time in run history
+
+Replace the current hard-match demographic filtering (which matches on the `value` field) with a **distribution-based** system that offers two selection modes:
+
+1. **Top-K Probability** — Score each backstory by joint probability across selected categories, return the highest-scoring K. Best for studying how the overall population responds. No guarantee of balanced representation across categories.
+
+2. **Balanced Matching (Hungarian)** — Allocate K slots across the cross-product of selected categories, then use the Hungarian algorithm to optimally assign one backstory per slot. Guarantees each selected demographic group is represented. Users can customize the slot allocation.
+
+Both modes use the same underlying data: each backstory's probability distributions per demographic dimension.
 
 ---
 
-## Feature 1: Show Model on Results Page
+## UI Design
 
-### What
-On the results page (`SurveyResults.tsx`), show which LLM model was used for the displayed run.
+### Mode Selector
 
-### Where
-- **ResultsHero**: Add model name as a subtitle text in the header line
-  - e.g., `128 responses • 5 questions • anthropic/claude-3-haiku`
-  - Use the `run.llm_config` which is already fetched
-- **Run Config Card**: Add a collapsible card below the hero showing full run config:
-  - Provider (openrouter / vllm)
-  - Model name
-  - Temperature
-  - Max tokens
+Radio buttons at the top of the demographics section:
 
-### Files to Modify
-- `frontend/src/components/results/ResultsHero.tsx` — Add `run` prop (type `SurveyRun`), display model name in subtitle
-- `frontend/src/pages/SurveyResults.tsx` — Pass `run` to `ResultsHero`, add run config card below hero
+```
+○ Top-K Probability
+  Best for seeing how this group responds overall.
+  Selects the K backstories most likely to match your criteria.
+  No guarantee of equal representation across selected groups.
 
-### Implementation Details
-- Extract model name helper (shared across features, put in `frontend/src/lib/llmConfig.ts`):
-  ```ts
-  export function getModelName(config: LLMConfig): string | undefined {
-    return config.provider === 'vllm' ? config.vllm_model : config.openrouter_model
-  }
-  ```
-- The config card should be collapsible (default collapsed) using a simple `useState` toggle
-- Show: Provider badge, Model name, Temperature, Max Tokens
+● Balanced Matching
+  Ensures every selected demographic group is represented.
+  Good for comparing responses across subgroups or simulating
+  stratified sampling.
+```
 
-### Pass Criteria
-- [ ] Results page header shows model name (e.g., "anthropic/claude-3-haiku") in the subtitle line
-- [ ] Collapsible "Run Configuration" card displays provider, model, temperature, max_tokens
-- [ ] Card defaults to collapsed
-- [ ] Handles missing/undefined fields gracefully (show "Not set" or omit)
+### Category Selection (same for both modes)
+
+All demographic dimensions show checkboxes for distribution categories (including numeric types like age — show bins like "18-24", "25-34" instead of min/max).
+
+Available categories are discovered from actual backstory data.
+
+### Sample Size (same for both modes)
+
+Free text input. Preview shows pool size and warns if K exceeds available backstories.
+
+### Mode-Specific UI
+
+#### Top-K Mode
+No additional UI beyond category checkboxes + sample size.
+
+Preview text:
+```
+234 backstories scored · top 20 will be selected
+```
+
+#### Balanced Matching Mode
+
+After the user selects categories, show the cross-product allocation:
+
+**Default view (uniform distribution):**
+```
+You selected:
+  Age: 18-24, 25-34
+  Gender: Male
+  Region: Northeast, Midwest
+  Sample size: 20
+
+Slots will be distributed evenly across 4 groups.
+[Customize slot allocation]
+```
+
+**Expanded (after clicking "Customize slot allocation"):**
+```
+┌─────────────────────────────┬───────┐
+│ Group                       │ Slots │
+├─────────────────────────────┼───────┤
+│ 18-24 · Male · Northeast    │ [ 5 ] │
+│ 18-24 · Male · Midwest      │ [ 5 ] │
+│ 25-34 · Male · Northeast    │ [ 5 ] │
+│ 25-34 · Male · Midwest      │ [ 5 ] │
+├─────────────────────────────┼───────┤
+│ Total                       │  20   │
+└─────────────────────────────┴───────┘
+```
+
+- Each input is editable
+- Validation: sum must equal sample size K
+- Default: `Math.floor(K / numGroups)` with remainder distributed to first groups
+- If user changes K, slot allocation resets to uniform (unless customized)
+
+**Preview text (balanced mode):**
+```
+4 demographic groups · 20 slots allocated
+Best available backstory will be matched to each slot.
+```
 
 ---
 
-## Feature 2: Show Effective LLM Config on SurveyView
+## Technical Approach
 
-### What
-On the survey detail page (`SurveyView.tsx`), always show the effective LLM configuration that will be used for the next run.
+### Core Concepts
 
-### Current Behavior
-The "LLM Settings" card only appears when `survey.temperature != null || survey.max_tokens != null`. It only shows temperature and max_tokens.
+**Backstory demographics** (existing, unchanged):
+```json
+{
+  "c_age": { "value": "18-24", "distribution": { "18-24": 0.6, "25-34": 0.3, "35-44": 0.1 } },
+  "c_gender": { "value": "male", "distribution": { "male": 0.7, "female": 0.3 } }
+}
+```
 
-### New Behavior
-Always show an "LLM Settings" card that displays the **effective** config for the next run:
-- Provider (from per-survey override -> user profile default)
-- Model name (from per-survey override -> user profile default)
-- Temperature (from per-survey override -> user profile default -> system default 1)
-- Max Tokens (from per-survey override -> user profile default -> system default 128)
-- Show which values are overridden vs inherited with subtle text like "(default)" or "(survey override)"
+**Scoring a backstory against a target (one-hot or multi-category):**
+```
+Per-dimension:  P_d = sum of distribution[cat] for each selected category
+Cross-dimension: S  = product of P_d across all dimensions
+```
 
-### Files to Modify
-- `frontend/src/pages/SurveyView.tsx` — Replace the existing conditional LLM Settings card with an always-visible card showing effective config
+For Top-K mode, the "target" is the user's checkbox selections (multi-category per dimension).
+For Balanced mode, each "target slot" is a single combination from the cross-product (one-hot per dimension).
 
-### Implementation Details
-- Use `mergeEffectiveConfig()` helper (see Feature 3) to compute the effective config
-- Show values with "(default)" or "(override)" labels for clarity
+### Mode 1: Top-K Probability
 
-### Pass Criteria
-- [ ] LLM Settings card is always visible on SurveyView (not conditional)
-- [ ] Shows provider, model, temperature, max_tokens
-- [ ] Values correctly cascade: per-survey override > user profile > system defaults
-- [ ] Override vs default values are visually distinguished
+```
+1. Fetch all backstories with demographics
+2. For each backstory, compute:
+   score = Π_d ( Σ_{cat ∈ selected_d} distribution_d[cat] )
+3. Sort by score descending
+4. Return top K (excluding score = 0)
+```
+
+### Mode 2: Balanced Matching (Hungarian)
+
+```
+1. Compute cross-product of selected categories
+   e.g., {18-24, 25-34} × {male} × {NE, MW} = 4 groups
+
+2. Allocate K slots across groups (uniform or user-customized)
+   e.g., [5, 5, 5, 5]
+
+3. Expand slots into target vectors (one-hot per dimension)
+   Slot 0: age=[1,0,0,...], gender=[1,0], region=[1,0,0,0]  (18-24, male, NE)
+   Slot 1: age=[1,0,0,...], gender=[1,0], region=[1,0,0,0]  (18-24, male, NE)
+   ... (5 identical slots for this group)
+
+4. Fetch all backstories with demographics
+
+5. Build cost matrix: K × M
+   cost[slot_i][backstory_j] = Π_d ( target_i_d · distribution_j_d )
+   (dot product of one-hot target with backstory distribution, per dimension → product)
+   This simplifies to: product of distribution[target_category] per dimension
+
+6. Run Hungarian algorithm (maximize total weight)
+   scipy.optimize.linear_sum_assignment (Python)
+   or munkres/hungarian JS library (frontend)
+
+7. Return assigned backstory IDs
+```
+
+**Why identical slots still produce diverse results:**
+Hungarian enforces 1-to-1 assignment. With 5 slots for "18-24, male, NE", the algorithm assigns the 5 *different* backstories that best represent that group. The diversity comes from each backstory having a *different* distribution shape even within the same target group.
+
+### Data Shape Changes
+
+**New `DemographicFilter` type** (extends existing):
+```typescript
+interface DemographicFilter {
+  [key: string]: string[] | undefined          // category selections (unchanged)
+}
+
+// New: stored alongside demographics in survey_runs
+interface DemographicSelectionConfig {
+  mode: 'top_k' | 'balanced'
+  sample_size: number
+  filters: DemographicFilter                    // category checkboxes
+  slot_allocation?: Record<string, number>      // balanced mode only
+  // Keys are serialized group labels: "18-24|male|NE"
+  // Values are slot counts
+}
+```
+
+The `survey_runs.demographics` column will store `DemographicSelectionConfig` instead of the raw `DemographicFilter`. Old format is backward-compatible (treated as top-K with no sample size).
 
 ---
-
-## Feature 3: Per-Run LLM Settings (Unlock Active Survey Editing)
-
-### What
-Allow users to change LLM settings (model, provider, temperature, max_tokens) and demographics per run. Currently, once a survey has been run (status=active), it cannot be edited at all.
-
-### Approach
-1. **DB Migration**: Add `llm_config` JSONB column to `surveys` table, **replacing** the existing standalone `temperature` and `max_tokens` columns. Migrate existing data into the new column and drop the old ones.
-2. **Unlock Edit for Active Surveys**: Show the Edit button for active surveys too, but on the edit page, **lock the questions section** (read-only) for active surveys. Demographics and LLM settings remain editable.
-3. **Inline Editing on SurveyView**: Make the LLM Settings card on SurveyView editable inline (pencil icon -> edit mode). User can quickly tweak settings without going to the full edit page.
-
-### Database Migration
-
-```sql
--- 1. Add new unified column
-ALTER TABLE surveys ADD COLUMN llm_config JSONB;
-
--- 2. Migrate existing temperature/max_tokens data
-UPDATE surveys
-SET llm_config = jsonb_strip_nulls(jsonb_build_object(
-  'temperature', temperature,
-  'max_tokens', max_tokens
-))
-WHERE temperature IS NOT NULL OR max_tokens IS NOT NULL;
-
--- 3. Drop old columns (absorbed into llm_config)
-ALTER TABLE surveys DROP COLUMN temperature;
-ALTER TABLE surveys DROP COLUMN max_tokens;
-```
-
-### Cleanup: What Gets Removed
-
-| Removed | Location | Replaced By |
-|---------|----------|-------------|
-| `surveys.temperature` column | DB | `surveys.llm_config->>'temperature'` |
-| `surveys.max_tokens` column | DB | `surveys.llm_config->>'max_tokens'` |
-| `Survey.temperature` field | `database.ts` | `Survey.llm_config?.temperature` |
-| `Survey.max_tokens` field | `database.ts` | `Survey.llm_config?.max_tokens` |
-| `temperature` state variable | `SurveyCreate.tsx` | Merged into single `llmConfig` state |
-| `maxTokens` state variable | `SurveyCreate.tsx` | Merged into single `llmConfig` state |
-| `showLlmSettings` state variable | `SurveyCreate.tsx` | LLM section always visible |
-| Conditional LLM card (lines 329-357) | `SurveyView.tsx` | Always-visible editable card |
-| Scattered merge logic | `SurveyView.tsx:155-159`, `SurveyCreate.tsx:366-369` | Single `mergeEffectiveConfig()` helper |
-
-### TypeScript Type Changes
-
-In `frontend/src/types/database.ts`:
-```ts
-export interface Survey {
-  id: string
-  user_id: string
-  name?: string
-  questions: Question[]
-  demographics: DemographicFilter
-  status: SurveyStatus
-  llm_config?: Partial<LLMConfig> | null  // Per-survey LLM overrides
-  created_at: string
-  // REMOVED: temperature, max_tokens (now inside llm_config)
-}
-```
-
-### New Shared Helper
-
-Create `frontend/src/lib/llmConfig.ts`:
-```ts
-import type { LLMConfig } from '@/types/database'
-
-export const LLM_DEFAULTS = {
-  temperature: 1,
-  max_tokens: 128,
-} as const
-
-/** Extract display model name from an LLM config */
-export function getModelName(config: LLMConfig): string | undefined {
-  return config.provider === 'vllm' ? config.vllm_model : config.openrouter_model
-}
-
-/** Merge user profile defaults + per-survey overrides + system defaults */
-export function mergeEffectiveConfig(
-  profileConfig: LLMConfig | undefined,
-  surveyConfig: Partial<LLMConfig> | null | undefined,
-): LLMConfig {
-  return {
-    ...profileConfig,
-    ...surveyConfig,
-    temperature: surveyConfig?.temperature ?? profileConfig?.temperature ?? LLM_DEFAULTS.temperature,
-    max_tokens: surveyConfig?.max_tokens ?? profileConfig?.max_tokens ?? LLM_DEFAULTS.max_tokens,
-  }
-}
-```
-
-This single file replaces all scattered merge logic across SurveyView and SurveyCreate.
-
-### Files to Modify
-- **`supabase/migrations/YYYYMMDD_survey_llm_config.sql`** — New migration (add column, migrate data, drop old columns)
-- **`frontend/src/types/database.ts`** — Replace `temperature`/`max_tokens` with `llm_config` on `Survey`
-- **`frontend/src/pages/SurveyView.tsx`** — Always-visible editable LLM card; show Edit button for active surveys; use `mergeEffectiveConfig()` in `runSurvey()`
-- **`frontend/src/pages/SurveyCreate.tsx`** — Replace 3 state vars with single `llmConfig` state; add provider/model fields; lock questions for active surveys; save to `survey.llm_config`
-- **`frontend/src/pages/SurveyResults.tsx`** — No changes needed (reads from `run.llm_config`)
-- **`frontend/src/lib/surveyRunner.ts`** — No changes needed (receives merged config from caller)
 
 ### Files to Create
-- **`frontend/src/lib/llmConfig.ts`** — `LLM_DEFAULTS`, `getModelName()`, `mergeEffectiveConfig()`
 
-### Run Creation Flow (simplified)
-
-In `SurveyView.tsx` `runSurvey()`:
-```ts
-import { mergeEffectiveConfig } from '@/lib/llmConfig'
-
-const runLlmConfig = mergeEffectiveConfig(profile?.llm_config, survey.llm_config)
-const runId = await createRun(survey.id, runLlmConfig)
-```
-
-Replaces the current 5-line manual merge in both SurveyView and SurveyCreate.
-
-### SurveyView Inline Editing
-- The LLM Settings card gets a pencil/edit icon in the header
-- Clicking it toggles edit mode: fields become editable inputs/selects
-- A "Save" button persists changes to the survey's `llm_config` column via Supabase update
-- Fields:
-  - Provider selector: OpenRouter / vLLM (or empty = inherit from profile)
-  - Model input: text field (contextual to selected provider)
-  - Temperature: number input (0-2, step 0.1)
-  - Max Tokens: number input (1-16384)
-- All fields show placeholder with effective default value when empty
-
-### SurveyCreate Changes (Edit Page for Active Surveys)
-- When editing an active survey:
-  - Questions section is read-only (show questions but remove add/remove/edit controls, inputs disabled)
-  - Demographics section remains fully editable
-  - LLM Settings section remains fully editable
-  - Add provider + model fields to the LLM settings section (currently only has temperature + max_tokens)
-- When editing a draft survey: everything editable (no change from current behavior)
-- Replace `temperature`/`maxTokens`/`showLlmSettings` state vars with single `llmConfig: Partial<LLMConfig>` state
-- LLM Settings section always visible (remove collapsible toggle)
-
-### Pass Criteria
-- [ ] New `llm_config` JSONB column exists on surveys table
-- [ ] Old `temperature` and `max_tokens` columns are dropped
-- [ ] Existing survey data is migrated (no data loss)
-- [ ] Active surveys show Edit button on SurveyView
-- [ ] Edit page locks questions section for active surveys (visually read-only)
-- [ ] Edit page allows changing demographics + LLM settings for active surveys
-- [ ] LLM Settings section on edit page includes provider + model fields
-- [ ] SurveyView has inline-editable LLM Settings card
-- [ ] Inline edits save to `survey.llm_config` in the database
-- [ ] Run creation uses `mergeEffectiveConfig()` — single source of truth for merge logic
-- [ ] Each run's `llm_config` snapshot reflects the settings used for that specific run
-
----
-
-## Feature 4: Default LLM Settings
-
-### What
-When temperature or max_tokens are not explicitly set by the user (neither in global settings nor per-survey), apply system defaults:
-- **Temperature**: 1
-- **Max Tokens**: 128
-
-### Implementation
-Handled by `LLM_DEFAULTS` and `mergeEffectiveConfig()` in `frontend/src/lib/llmConfig.ts` (see Feature 3). No additional files needed.
-
-In UI inputs, use `placeholder="1 (default)"` / `placeholder="128 (default)"`.
-
-### Pass Criteria
-- [ ] When temperature is not set anywhere, run uses temperature=1
-- [ ] When max_tokens is not set anywhere, run uses max_tokens=128
-- [ ] UI shows default values as placeholders or helper text
-- [ ] Explicitly set values still override defaults
-
----
-
-## Feature 5: Run History Shows Start Time
-
-### What
-In the run history list (`SurveyRunHistory` component), show when each run started with full datetime, not just the date.
-
-### Current Behavior
-Shows: `new Date(run.created_at).toLocaleDateString()` — only the date, no time.
-
-### New Behavior
-Show date + time, preferring `started_at` when available:
-- If `started_at` exists: show formatted datetime
-- Otherwise: show `created_at` datetime
-- Format: locale-appropriate, e.g., "Feb 22, 2026 3:45 PM"
-
-### Files to Modify
-- `frontend/src/components/surveys/SurveyRunProgress.tsx` — Update display in `SurveyRunHistory`
-
-### Implementation Details
-Change the date display in the run history list items:
-```tsx
-// Before:
-{new Date(run.created_at).toLocaleDateString()}
-
-// After:
-{new Date(run.started_at || run.created_at).toLocaleString(undefined, {
-  month: 'short', day: 'numeric', year: 'numeric',
-  hour: 'numeric', minute: '2-digit',
-})}
-```
-
-### Pass Criteria
-- [ ] Run history entries show date + time (not just date)
-- [ ] Uses `started_at` when available, falls back to `created_at`
-- [ ] Time format is readable (e.g., "Feb 22, 2026 3:45 PM")
-
----
-
-## Implementation Order
-
-Recommended order: **5 -> 3 -> 4 -> 2 -> 1**
-
-1. **Feature 5** (run history time) — One-line change, trivial
-2. **Feature 3** (per-run settings) — DB migration + cleanup old columns + new helper + UI changes. Do this early since Features 2 and 4 depend on it.
-3. **Feature 4** (defaults) — Trivially handled by `mergeEffectiveConfig()` from Feature 3
-4. **Feature 2** (effective config on SurveyView) — Uses the editable card built in Feature 3
-5. **Feature 1** (model on results) — Uses `getModelName()` helper from Feature 3
-
----
-
-## Summary of All File Changes
-
-### New Files
 | File | Purpose |
 |------|---------|
-| `supabase/migrations/YYYYMMDD_survey_llm_config.sql` | Add `llm_config`, migrate data, drop old columns |
-| `frontend/src/lib/llmConfig.ts` | `LLM_DEFAULTS`, `getModelName()`, `mergeEffectiveConfig()` |
+| `frontend/src/lib/backstoryScoring.ts` | Scoring functions (shared by both modes) |
+| `frontend/src/lib/hungarianMatching.ts` | Hungarian algorithm + slot expansion |
+| `frontend/src/lib/__tests__/backstoryScoring.test.ts` | Unit tests for scoring |
+| `frontend/src/lib/__tests__/hungarianMatching.test.ts` | Unit tests for matching |
+| `worker/src/scoring.py` | Python scoring + Hungarian (mirrors TS) |
+| `worker/tests/test_scoring.py` | Python unit tests |
 
-### Modified Files
+### Files to Modify
+
 | File | Changes |
 |------|---------|
-| `frontend/src/types/database.ts` | Remove `temperature`/`max_tokens` from `Survey`, add `llm_config` |
-| `frontend/src/pages/SurveyView.tsx` | Always-visible editable LLM card; unlock Edit for active; use `mergeEffectiveConfig()` |
-| `frontend/src/pages/SurveyCreate.tsx` | Single `llmConfig` state; add provider/model fields; lock questions for active; always-visible LLM section |
-| `frontend/src/components/results/ResultsHero.tsx` | Add `run` prop, show model name in subtitle |
-| `frontend/src/pages/SurveyResults.tsx` | Pass `run` to `ResultsHero`, add collapsible run config card |
-| `frontend/src/components/surveys/SurveyRunProgress.tsx` | Show datetime (not just date) in run history |
+| `frontend/src/components/surveys/DemographicFilter.tsx` | Two-mode UI, cross-product allocation table, distribution key discovery |
+| `frontend/src/lib/backstoryFilters.ts` | Replace `applyDemographicFilters` with scoring-based selection |
+| `frontend/src/lib/surveyRunner.ts` | Use mode-aware selection (top-K or Hungarian) |
+| `frontend/src/types/database.ts` | Add `DemographicSelectionConfig` type, update `DemographicFilter` |
+| `worker/src/db.py` | Update `get_backstory_ids_for_survey()` to use scoring/matching |
 
-### Removed Code
-| What | Where |
-|------|-------|
-| `surveys.temperature` column | DB migration drops it |
-| `surveys.max_tokens` column | DB migration drops it |
-| `temperature` / `maxTokens` / `showLlmSettings` state vars | `SurveyCreate.tsx` |
-| Conditional LLM Settings card | `SurveyView.tsx` (lines 329-357) |
-| Scattered merge logic | `SurveyView.tsx:155-159`, `SurveyCreate.tsx:366-369` |
+### Files to Add (Migration)
 
-**Net result**: 2 new small files, 6 modified files, ~40 lines of removed code replaced by a cleaner shared helper.
+| File | Purpose |
+|------|---------|
+| `supabase/migrations/YYYYMMDD_distribution_keys_rpc.sql` | RPC to discover available distribution categories per dimension |
+
+### Key Decisions
+
+- **Product scoring (IID):** Multiply per-dimension probabilities. Same formula for both modes — Top-K uses multi-category targets, Balanced uses one-hot targets.
+- **Cross-product slot allocation:** Balanced mode enumerates all combinations. Default is uniform. User can customize.
+- **Hungarian in JS:** Use a JS library (e.g., `munkres-js`) for frontend matching. The cost matrix is K×M which is small enough for client-side.
+- **Worker mirrors frontend:** Python worker uses `scipy.optimize.linear_sum_assignment`. Must produce identical results.
+- **All types become categorical:** Even numeric demographics show distribution-bin checkboxes.
+
+---
+
+## Pass Criteria
+
+### Unit Tests — Scoring (`frontend/src/lib/__tests__/backstoryScoring.test.ts`)
+
+- [ ] `scoreBackstory` returns 1.0 when no filters are active (empty filter)
+- [ ] Single dimension, single category: returns that category's probability
+- [ ] Single dimension, multiple categories: returns sum of probabilities
+- [ ] Multiple dimensions: returns product of per-dimension scores
+- [ ] Returns 0 when selected category has zero probability
+- [ ] Returns 0 when backstory lacks a filtered dimension entirely
+- [ ] Ignores `_sample_size` key in filters
+- [ ] Ignores dimensions with empty `[]` or `undefined`
+- [ ] `rankAndSelectBackstories` returns sorted by score descending
+- [ ] `rankAndSelectBackstories` respects topK limit
+- [ ] `rankAndSelectBackstories` excludes score-0 backstories
+
+### Unit Tests — Hungarian Matching (`frontend/src/lib/__tests__/hungarianMatching.test.ts`)
+
+- [ ] `expandSlots` generates correct one-hot target vectors from slot allocation
+  - Input: `{ "18-24|male": 2, "25-34|male": 1 }`, dimensions: `[c_age, c_gender]`
+  - Output: 3 target vectors with correct one-hot encodings
+- [ ] `buildCostMatrix` produces correct K×M matrix
+  - Known backstories + known targets → verify specific cell values
+- [ ] `hungarianMatch` returns 1-to-1 assignment (no backstory repeated)
+- [ ] `hungarianMatch` with uniform slots across 2 groups returns balanced result
+  - 2 groups × 5 slots each → 5 backstories per group, no overlap
+- [ ] `hungarianMatch` handles K > M gracefully (more slots than backstories)
+- [ ] `hungarianMatch` with single group degenerates to top-K behavior
+- [ ] `computeCrossProduct` correctly enumerates combinations
+  - `{c_age: ["18-24","25-34"], c_gender: ["male"]}` → 2 groups
+  - `{c_age: ["18-24","25-34"], c_region: ["NE","MW"]}` → 4 groups
+- [ ] `uniformSlotAllocation` distributes K slots evenly with remainder
+  - K=10, 3 groups → [4, 3, 3]
+  - K=10, 4 groups → [3, 3, 2, 2]
+
+### Unit Tests — Python (`worker/tests/test_scoring.py`)
+
+- [ ] Python `score_backstory` matches TypeScript for identical inputs
+- [ ] Python Hungarian matching produces identical assignments to TypeScript for identical inputs
+- [ ] Worker `get_backstory_ids_for_survey` handles both modes correctly
+
+### E2E Tests
+
+- [ ] User switches between Top-K and Balanced mode; UI updates accordingly
+- [ ] Top-K mode: select age 18-24, set K=10, run → 10 tasks created
+- [ ] Balanced mode: select age [18-24, 25-34], gender [male], K=10 → shows 2 groups with 5 slots each
+- [ ] Balanced mode: click "Customize slot allocation" → editable inputs appear
+- [ ] Balanced mode: change slot counts → validation enforces sum = K
+- [ ] Balanced mode: run survey → tasks created match slot allocation
+- [ ] Numeric demographics (age, income) show checkbox bins, not min/max
+
+### Acceptance Criteria
+
+- [ ] Two-mode radio selector visible in demographics section
+- [ ] Mode descriptions clearly explain the difference
+- [ ] All demographic types show distribution-bin checkboxes
+- [ ] Available bins discovered from actual backstory data
+- [ ] Top-K mode: preview shows "X backstories scored, top K selected"
+- [ ] Balanced mode: shows cross-product groups with default uniform allocation
+- [ ] Balanced mode: "Customize slot allocation" expands editable table
+- [ ] Balanced mode: slot sum validation (must equal K)
+- [ ] Survey run snapshot records mode + allocation in `survey_runs.demographics`
+- [ ] Worker and frontend produce identical selections for same inputs
+- [ ] Backward compatibility: old surveys with value-match filters still work
+- [ ] Zero-score backstories excluded in both modes
+
+---
+
+## Implementation Notes
+
+### For the Implementing Agent
+
+**Order:**
+1. `backstoryScoring.ts` + tests — pure scoring functions, both modes depend on this
+2. `hungarianMatching.ts` + tests — slot expansion, cost matrix, Hungarian wrapper
+3. `DemographicFilter.tsx` — two-mode UI with cross-product table
+4. `surveyRunner.ts` — mode-aware backstory selection
+5. `backstoryFilters.ts` — update or replace `applyDemographicFilters`
+6. `worker/src/scoring.py` + `db.py` — Python equivalents
+7. Supabase migration for distribution key discovery RPC
+
+### JS Hungarian Algorithm
+
+Use `munkres-js` (npm package) or implement a simple version. The algorithm needs to:
+- Accept a K×M cost matrix (K ≤ M)
+- Return K assignments maximizing total cost
+- `scipy.optimize.linear_sum_assignment` minimizes, so negate weights for maximization. Same for JS.
+
+### Cross-Product Computation
+
+```typescript
+function computeCrossProduct(filters: DemographicFilter): string[][] {
+  // filters = { c_age: ["18-24", "25-34"], c_gender: ["male"], c_region: ["NE", "MW"] }
+  // Returns: [
+  //   ["18-24", "male", "NE"],
+  //   ["18-24", "male", "MW"],
+  //   ["25-34", "male", "NE"],
+  //   ["25-34", "male", "MW"],
+  // ]
+}
+```
+
+Be careful with large cross-products. If user selects 4 age bins × 2 genders × 4 regions × 3 parties = 96 groups. With K=100, that's ~1 slot per group. Show a warning if numGroups > K.
+
+### Slot Allocation Serialization
+
+Use a pipe-delimited key for the cross-product group:
+```json
+{
+  "18-24|male|NE": 5,
+  "18-24|male|MW": 5,
+  "25-34|male|NE": 5,
+  "25-34|male|MW": 5
+}
+```
+
+Store the dimension order alongside so it can be parsed back.
+
+### Reference Patterns
+
+- Anthology matching: `anthology/scripts/run_demographic_matching.py` (edge_weight_calculation, maximum_weight_sum_matching)
+- Alterity matching: `alterity-private-main/alterity/preprocess/survey_data_generator.py` (SurveyDataGenerator)
+- Current filter UI: `frontend/src/components/surveys/DemographicFilter.tsx`
+- Current filter logic: `frontend/src/lib/backstoryFilters.ts`
+- Worker filtering: `worker/src/db.py:316-385`
+
+### Gotchas
+
+- **`_sample_size` key**: Skip in scoring. In new config, sample size lives in `DemographicSelectionConfig.sample_size` instead.
+- **Custom filters** (`custom_*`): No distributions. Keep exact-match behavior. Excluded from cross-product in balanced mode.
+- **Anthology backstories**: Excluded (no demographics). Keep `.neq('source_type', 'anthology')`.
+- **Missing dimensions**: Score = 0 for that backstory → excluded.
+- **Cross-product explosion**: Warn if numGroups > K ("Not enough sample size for all groups"). Minimum 1 slot per group.
+- **Hungarian with K > M**: More slots than backstories. Fall back to assigning each backstory to its best slot, leaving some slots empty. Show warning.
+- **Backward compatibility**: Old `DemographicFilter` (no mode field) → treat as top-K with no sample limit.
+
+### Test Data
+
+```typescript
+const backstories = [
+  {
+    id: "a",
+    demographics: {
+      c_age: { value: "18-24", distribution: { "18-24": 0.8, "25-34": 0.15, "35-44": 0.05 } },
+      c_gender: { value: "male", distribution: { "male": 0.9, "female": 0.1 } },
+      c_region: { value: "NE", distribution: { "NE": 0.7, "MW": 0.2, "S": 0.05, "W": 0.05 } }
+    }
+  },
+  {
+    id: "b",
+    demographics: {
+      c_age: { value: "25-34", distribution: { "18-24": 0.1, "25-34": 0.7, "35-44": 0.2 } },
+      c_gender: { value: "male", distribution: { "male": 0.8, "female": 0.2 } },
+      c_region: { value: "MW", distribution: { "NE": 0.1, "MW": 0.6, "S": 0.2, "W": 0.1 } }
+    }
+  },
+  // ... more with known distributions for deterministic assertions
+]
+```
 
 ---
 
 ## Out of Scope
-- Changing API keys per-survey (keys remain in Supabase Vault, global only)
-- Per-survey chat template or guided decoding toggles (keep as global settings)
-- Per-survey parser LLM model (keep as global setting)
-- Changing questions on active surveys
-- Run comparison UI (comparing results across runs with different settings)
 
-## Notes for the Implementing Agent
-- Worker is unaffected — it reads from `survey_runs.llm_config` snapshot, never from `surveys` table directly
-- The `llm_config` column on `surveys` stores a **partial** `LLMConfig` — only fields the user explicitly overrides. Empty/null fields inherit from user profile defaults.
-- Use `useAuthContext()` to get user's profile LLM config for computing effective settings
-- Reference existing UI patterns in `Settings.tsx` for provider select and model input
-- Inline edit on SurveyView should be simple — just `useState` toggle, no heavy form library
-- When dropping DB columns, the migration is irreversible — make sure data migration step runs first
+- User-configurable dimension weights (equal weight via product for now)
+- Probabilistic/random sampling (deterministic only)
+- Uploading real human survey data for matching (future feature)
+- Changes to backstory upload/generation
+- Changes to results/analysis page
+- Per-backstory score visualization in UI (e.g., score histograms)
