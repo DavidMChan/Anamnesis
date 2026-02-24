@@ -1,4 +1,4 @@
-# Feature: Distribution-Based Demographic Filtering (Two Modes)
+# Feature: Logprobs Mode for Demographic Surveys
 
 ## Status
 - [ ] Planning complete
@@ -6,386 +6,189 @@
 
 ## Description
 
-Replace the current hard-match demographic filtering (which matches on the `value` field) with a **distribution-based** system that offers two selection modes:
+Add a **logprobs distribution mode** for demographic surveys. Instead of asking each backstory the same question N times (current n_sample mode), logprobs mode asks **once** with `logprobs=True` and computes the probability distribution directly from the LLM's token log-probabilities. This is ~20x cheaper and faster than n_sample mode, and follows the approach in Anthology's `demographic_logprob_parser()`.
 
-1. **Top-K Probability** — Score each backstory by joint probability across selected categories, return the highest-scoring K. Best for studying how the overall population responds. No guarantee of balanced representation across categories.
+**Scope:** Demographic surveys only, vLLM provider only, MCQ questions only.
 
-2. **Balanced Matching (Hungarian)** — Allocate K slots across the cross-product of selected categories, then use the Hungarian algorithm to optimally assign one backstory per slot. Guarantees each selected demographic group is represented. Users can customize the slot allocation.
+## Background & Reference
 
-Both modes use the same underlying data: each backstory's probability distributions per demographic dimension.
-
----
-
-## UI Design
-
-### Mode Selector
-
-Radio buttons at the top of the demographics section:
-
+Anthology's `demographic_logprob_parser()` (`anthology/demographic_survey/response_parser.py:280-301`):
+```python
+def demographic_logprob_parser(logprobs, num_choices):
+    result_dict = {chr(i + 65): 0.0 for i in range(num_choices)}
+    for logprob in logprobs:
+        token = logprob.token
+        if token.startswith("("):
+            token = token[-1]
+        if token in result_dict:
+            result_dict[token] += exp(logprob.logprob)
+    return result_dict
 ```
-○ Top-K Probability
-  Best for seeing how this group responds overall.
-  Selects the K backstories most likely to match your criteria.
-  No guarantee of equal representation across selected groups.
-
-● Balanced Matching
-  Ensures every selected demographic group is represented.
-  Good for comparing responses across subgroups or simulating
-  stratified sampling.
-```
-
-### Category Selection (same for both modes)
-
-All demographic dimensions show checkboxes for distribution categories (including numeric types like age — show bins like "18-24", "25-34" instead of min/max).
-
-Available categories are discovered from actual backstory data.
-
-### Sample Size (same for both modes)
-
-Free text input. Preview shows pool size and warns if K exceeds available backstories.
-
-### Mode-Specific UI
-
-#### Top-K Mode
-No additional UI beyond category checkboxes + sample size.
-
-Preview text:
-```
-234 backstories scored · top 20 will be selected
-```
-
-#### Balanced Matching Mode
-
-After the user selects categories, show the cross-product allocation:
-
-**Default view (uniform distribution):**
-```
-You selected:
-  Age: 18-24, 25-34
-  Gender: Male
-  Region: Northeast, Midwest
-  Sample size: 20
-
-Slots will be distributed evenly across 4 groups.
-[Customize slot allocation]
-```
-
-**Expanded (after clicking "Customize slot allocation"):**
-```
-┌─────────────────────────────┬───────┐
-│ Group                       │ Slots │
-├─────────────────────────────┼───────┤
-│ 18-24 · Male · Northeast    │ [ 5 ] │
-│ 18-24 · Male · Midwest      │ [ 5 ] │
-│ 25-34 · Male · Northeast    │ [ 5 ] │
-│ 25-34 · Male · Midwest      │ [ 5 ] │
-├─────────────────────────────┼───────┤
-│ Total                       │  20   │
-└─────────────────────────────┴───────┘
-```
-
-- Each input is editable
-- Validation: sum must equal sample size K
-- Default: `Math.floor(K / numGroups)` with remainder distributed to first groups
-- If user changes K, slot allocation resets to uniform (unless customized)
-
-**Preview text (balanced mode):**
-```
-4 demographic groups · 20 slots allocated
-Best available backstory will be matched to each slot.
-```
-
----
 
 ## Technical Approach
 
-### Core Concepts
-
-**Backstory demographics** (existing, unchanged):
-```json
-{
-  "c_age": { "value": "18-24", "distribution": { "18-24": 0.6, "25-34": 0.3, "35-44": 0.1 } },
-  "c_gender": { "value": "male", "distribution": { "male": 0.7, "female": 0.3 } }
-}
-```
-
-**Scoring a backstory against a target (one-hot or multi-category):**
-```
-Per-dimension:  P_d = sum of distribution[cat] for each selected category
-Cross-dimension: S  = product of P_d across all dimensions
-```
-
-For Top-K mode, the "target" is the user's checkbox selections (multi-category per dimension).
-For Balanced mode, each "target slot" is a single combination from the cross-product (one-hot per dimension).
-
-### Mode 1: Top-K Probability
-
-```
-1. Fetch all backstories with demographics
-2. For each backstory, compute:
-   score = Π_d ( Σ_{cat ∈ selected_d} distribution_d[cat] )
-3. Sort by score descending
-4. Return top K (excluding score = 0)
-```
-
-### Mode 2: Balanced Matching (Hungarian)
-
-```
-1. Compute cross-product of selected categories
-   e.g., {18-24, 25-34} × {male} × {NE, MW} = 4 groups
-
-2. Allocate K slots across groups (uniform or user-customized)
-   e.g., [5, 5, 5, 5]
-
-3. Expand slots into target vectors (one-hot per dimension)
-   Slot 0: age=[1,0,0,...], gender=[1,0], region=[1,0,0,0]  (18-24, male, NE)
-   Slot 1: age=[1,0,0,...], gender=[1,0], region=[1,0,0,0]  (18-24, male, NE)
-   ... (5 identical slots for this group)
-
-4. Fetch all backstories with demographics
-
-5. Build cost matrix: K × M
-   cost[slot_i][backstory_j] = Π_d ( target_i_d · distribution_j_d )
-   (dot product of one-hot target with backstory distribution, per dimension → product)
-   This simplifies to: product of distribution[target_category] per dimension
-
-6. Run Hungarian algorithm (maximize total weight)
-   scipy.optimize.linear_sum_assignment (Python)
-   or munkres/hungarian JS library (frontend)
-
-7. Return assigned backstory IDs
-```
-
-**Why identical slots still produce diverse results:**
-Hungarian enforces 1-to-1 assignment. With 5 slots for "18-24, male, NE", the algorithm assigns the 5 *different* backstories that best represent that group. The diversity comes from each backstory having a *different* distribution shape even within the same target group.
-
-### Data Shape Changes
-
-**New `DemographicFilter` type** (extends existing):
-```typescript
-interface DemographicFilter {
-  [key: string]: string[] | undefined          // category selections (unchanged)
-}
-
-// New: stored alongside demographics in survey_runs
-interface DemographicSelectionConfig {
-  mode: 'top_k' | 'balanced'
-  sample_size: number
-  filters: DemographicFilter                    // category checkboxes
-  slot_allocation?: Record<string, number>      // balanced mode only
-  // Keys are serialized group labels: "18-24|male|NE"
-  // Values are slot counts
-}
-```
-
-The `survey_runs.demographics` column will store `DemographicSelectionConfig` instead of the raw `DemographicFilter`. Old format is backward-compatible (treated as top-K with no sample size).
-
----
-
 ### Files to Create
 
-| File | Purpose |
-|------|---------|
-| `frontend/src/lib/backstoryScoring.ts` | Scoring functions (shared by both modes) |
-| `frontend/src/lib/hungarianMatching.ts` | Hungarian algorithm + slot expansion |
-| `frontend/src/lib/__tests__/backstoryScoring.test.ts` | Unit tests for scoring |
-| `frontend/src/lib/__tests__/hungarianMatching.test.ts` | Unit tests for matching |
-| `worker/src/scoring.py` | Python scoring + Hungarian (mirrors TS) |
-| `worker/tests/test_scoring.py` | Python unit tests |
+- **`worker/src/logprobs.py`** — Logprobs parsing utilities
+  - `LogprobsResult` dataclass: `{generated_token: str, top_logprobs: Dict[str, float]}`
+  - `parse_logprobs_to_distribution(top_logprobs: Dict[str, float], num_options: int) -> Dict[str, float]`
+    - Cleans tokens: handles "A", "(A", " A" variants (following Anthology)
+    - Accumulates `exp(logprob)` per option letter
+    - Normalizes to sum=1, rounds to 4 decimal places
+    - Returns letter-keyed dict: `{"A": 0.72, "B": 0.25, "C": 0.03}`
+    - Edge case: if no matching tokens found, logs warning and returns uniform distribution
+
+- **`worker/tests/test_logprobs.py`** — Unit tests for logprobs parsing
 
 ### Files to Modify
 
-| File | Changes |
-|------|---------|
-| `frontend/src/components/surveys/DemographicFilter.tsx` | Two-mode UI, cross-product allocation table, distribution key discovery |
-| `frontend/src/lib/backstoryFilters.ts` | Replace `applyDemographicFilters` with scoring-based selection |
-| `frontend/src/lib/surveyRunner.ts` | Use mode-aware selection (top-K or Hungarian) |
-| `frontend/src/types/database.ts` | Add `DemographicSelectionConfig` type, update `DemographicFilter` |
-| `worker/src/db.py` | Update `get_backstory_ids_for_survey()` to use scoring/matching |
+- **`worker/src/llm.py`** (`UnifiedLLMClient`) — Add `async_complete_logprobs()` method
+  - New method that calls the LLM API with logprobs parameters
+  - Forces `max_tokens=1`, `temperature=0.0`
+  - **No structured output** (no guided decoding) — logprobs require unconstrained generation to get the true model distribution
+  - Handles both API modes:
+    - Chat API (`use_chat_template=True`): `logprobs=True, top_logprobs=20`
+    - Completion API (`use_chat_template=False`): `logprobs=20`
+  - Returns `LogprobsResult` with unified format regardless of API mode
+  - Error handling: same `RetryableError`/`NonRetryableError` hierarchy as `async_complete()`
 
-### Files to Add (Migration)
+- **`worker/src/worker.py`** — Add `LogprobsSingle` filling strategy
+  - New class implementing `FillingStrategy` protocol
+  - For each question: builds prompt via `build_initial_prompt()`, calls `llm.async_complete_logprobs()`, parses result with `parse_logprobs_to_distribution()`
+  - Only supports MCQ questions (raises `NonRetryableError` for other types)
+  - Returns `{qkey: JSON_string_of_distribution}` (e.g., `'{"A": 0.72, "B": 0.25, "C": 0.03}'`)
+  - No media support needed (demographic MCQ questions don't use media)
 
-| File | Purpose |
-|------|---------|
-| `supabase/migrations/YYYYMMDD_distribution_keys_rpc.sql` | RPC to discover available distribution categories per dimension |
+- **`worker/main.py`** — Route to LogprobsSingle strategy + handle logprobs result format
+  - In demographic detection block (~line 236): check `distribution_mode`
+    - `"logprobs"` → use `LogprobsSingle()` strategy
+    - `"n_sample"` (default) → use `IndependentRepeat(num_trials=N)` (existing behavior)
+  - In post-processing block (~line 256): branch on mode
+    - `"logprobs"`: `json.loads(raw_data)` → already letter-keyed normalized distribution, pick `value = max(dist, key=dist.get)`
+    - `"n_sample"`: existing `"||"` splitting and frequency counting (unchanged)
+  - Import `LogprobsSingle` from `worker.py` and `json`
+
+- **`frontend/src/components/demographic-surveys/DemographicKeyForm.tsx`** — Enable logprobs option
+  - Remove `disabled` from the logprobs `<SelectItem>` (line 215)
+  - Update the label: `"Logprobs (vLLM only)"` instead of `"Logprobs (vLLM only — coming soon)"`
+  - When logprobs is selected: the "Trials per Backstory" field already hides (existing conditional on line 222 checks `value.distributionMode === 'n_sample'`)
+
+- **`frontend/src/pages/DemographicSurveyCreate.tsx`** — Validate provider for logprobs mode
+  - In the submit handler: when `formData.distributionMode === 'logprobs'`, check that effective provider is `'vllm'`
+  - Show toast error if OpenRouter is selected with logprobs: "Logprobs mode requires vLLM provider"
 
 ### Key Decisions
 
-- **Product scoring (IID):** Multiply per-dimension probabilities. Same formula for both modes — Top-K uses multi-category targets, Balanced uses one-hot targets.
-- **Cross-product slot allocation:** Balanced mode enumerates all combinations. Default is uniform. User can customize.
-- **Hungarian in JS:** Use a JS library (e.g., `munkres-js`) for frontend matching. The cost matrix is K×M which is small enough for client-side.
-- **Worker mirrors frontend:** Python worker uses `scipy.optimize.linear_sum_assignment`. Must produce identical results.
-- **All types become categorical:** Even numeric demographics show distribution-bin checkboxes.
+1. **vLLM only**: OpenRouter may not reliably expose logprobs for all models. Restricting to vLLM keeps it simple and correct.
 
----
+2. **No guided decoding in logprobs mode**: Structured output constrains the output space, which changes the logprob distribution. We need the unconstrained distribution to get meaningful probabilities. Instead, use `max_tokens=1` and extract from `top_logprobs`.
+
+3. **Letter-keyed distributions**: Both modes store distributions with letter keys (`{"A": 0.72, "B": 0.25, "C": 0.03}`), consistent with the existing n_sample format. The frontend maps letters to option text at display time.
+
+4. **JSON encoding in result**: The `LogprobsSingle` strategy encodes its distribution as a JSON string in the task result dict (since result values are `str`). `main.py` detects the mode and parses accordingly.
+
+5. **Temperature 0**: Logprobs mode forces `temperature=0.0` for deterministic, interpretable distributions.
 
 ## Pass Criteria
 
-### Unit Tests — Scoring (`frontend/src/lib/__tests__/backstoryScoring.test.ts`)
+### Unit Tests — `worker/tests/test_logprobs.py`
 
-- [ ] `scoreBackstory` returns 1.0 when no filters are active (empty filter)
-- [ ] Single dimension, single category: returns that category's probability
-- [ ] Single dimension, multiple categories: returns sum of probabilities
-- [ ] Multiple dimensions: returns product of per-dimension scores
-- [ ] Returns 0 when selected category has zero probability
-- [ ] Returns 0 when backstory lacks a filtered dimension entirely
-- [ ] Ignores `_sample_size` key in filters
-- [ ] Ignores dimensions with empty `[]` or `undefined`
-- [ ] `rankAndSelectBackstories` returns sorted by score descending
-- [ ] `rankAndSelectBackstories` respects topK limit
-- [ ] `rankAndSelectBackstories` excludes score-0 backstories
+- [ ] `test_basic_distribution`: Given top_logprobs `{"A": -0.33, "B": -2.10, "C": -3.00}` with 3 options → returns normalized dict with correct proportions, sums to ~1.0
+- [ ] `test_paren_token_handling`: Given `{"(A": -0.5, "(B": -2.0}` with 2 options → strips parens, maps to A, B correctly
+- [ ] `test_space_prefixed_tokens`: Given `{" A": -0.5, " B": -2.0}` with 2 options → strips space, maps to A, B
+- [ ] `test_accumulates_variants`: Given `{"A": -1.0, "(A": -1.5}` → both accumulate into A's probability
+- [ ] `test_missing_options`: Given logprobs with only A and B tokens for 4 options → C, D get 0.0 probability
+- [ ] `test_no_matching_tokens`: Given logprobs with only irrelevant tokens → returns uniform distribution (1/N for each option)
+- [ ] `test_normalization`: Output probabilities sum to 1.0 (within `pytest.approx` tolerance)
+- [ ] `test_irrelevant_tokens_ignored`: Tokens like "the", "answer", "is" don't affect distribution
 
-### Unit Tests — Hungarian Matching (`frontend/src/lib/__tests__/hungarianMatching.test.ts`)
+### Unit Tests — `worker/tests/test_worker.py` additions
 
-- [ ] `expandSlots` generates correct one-hot target vectors from slot allocation
-  - Input: `{ "18-24|male": 2, "25-34|male": 1 }`, dimensions: `[c_age, c_gender]`
-  - Output: 3 target vectors with correct one-hot encodings
-- [ ] `buildCostMatrix` produces correct K×M matrix
-  - Known backstories + known targets → verify specific cell values
-- [ ] `hungarianMatch` returns 1-to-1 assignment (no backstory repeated)
-- [ ] `hungarianMatch` with uniform slots across 2 groups returns balanced result
-  - 2 groups × 5 slots each → 5 backstories per group, no overlap
-- [ ] `hungarianMatch` handles K > M gracefully (more slots than backstories)
-- [ ] `hungarianMatch` with single group degenerates to top-K behavior
-- [ ] `computeCrossProduct` correctly enumerates combinations
-  - `{c_age: ["18-24","25-34"], c_gender: ["male"]}` → 2 groups
-  - `{c_age: ["18-24","25-34"], c_region: ["NE","MW"]}` → 4 groups
-- [ ] `uniformSlotAllocation` distributes K slots evenly with remainder
-  - K=10, 3 groups → [4, 3, 3]
-  - K=10, 4 groups → [3, 3, 2, 2]
+- [ ] `test_logprobs_single_strategy`: Mock `llm.async_complete_logprobs()` → verify `LogprobsSingle.fill()` returns JSON-encoded letter distribution
+- [ ] `test_logprobs_single_rejects_non_mcq`: Verify `NonRetryableError` raised for `open_response` questions
 
-### Unit Tests — Python (`worker/tests/test_scoring.py`)
+### Frontend Tests
 
-- [ ] Python `score_backstory` matches TypeScript for identical inputs
-- [ ] Python Hungarian matching produces identical assignments to TypeScript for identical inputs
-- [ ] Worker `get_backstory_ids_for_survey` handles both modes correctly
-
-### E2E Tests
-
-- [ ] User switches between Top-K and Balanced mode; UI updates accordingly
-- [ ] Top-K mode: select age 18-24, set K=10, run → 10 tasks created
-- [ ] Balanced mode: select age [18-24, 25-34], gender [male], K=10 → shows 2 groups with 5 slots each
-- [ ] Balanced mode: click "Customize slot allocation" → editable inputs appear
-- [ ] Balanced mode: change slot counts → validation enforces sum = K
-- [ ] Balanced mode: run survey → tasks created match slot allocation
-- [ ] Numeric demographics (age, income) show checkbox bins, not min/max
+- [ ] `DemographicKeyForm`: logprobs option is selectable (not disabled)
+- [ ] `DemographicKeyForm`: selecting logprobs hides "Trials per Backstory" input
+- [ ] `DemographicSurveyCreate`: shows error when logprobs + non-vLLM provider
 
 ### Acceptance Criteria
 
-- [ ] Two-mode radio selector visible in demographics section
-- [ ] Mode descriptions clearly explain the difference
-- [ ] All demographic types show distribution-bin checkboxes
-- [ ] Available bins discovered from actual backstory data
-- [ ] Top-K mode: preview shows "X backstories scored, top K selected"
-- [ ] Balanced mode: shows cross-product groups with default uniform allocation
-- [ ] Balanced mode: "Customize slot allocation" expands editable table
-- [ ] Balanced mode: slot sum validation (must equal K)
-- [ ] Survey run snapshot records mode + allocation in `survey_runs.demographics`
-- [ ] Worker and frontend produce identical selections for same inputs
-- [ ] Backward compatibility: old surveys with value-match filters still work
-- [ ] Zero-score backstories excluded in both modes
-
----
+- [ ] Logprobs option is selectable in DemographicKeyForm advanced settings
+- [ ] Logprobs mode calls LLM once per backstory (not N times)
+- [ ] Distribution is correctly computed from token log-probabilities
+- [ ] Distribution is normalized (sums to 1.0)
+- [ ] Result is written to `backstories.demographics[key]` with same `{value, distribution}` format as n_sample
+- [ ] n_sample mode continues to work unchanged (backward compatible)
+- [ ] Validation: vLLM only, MCQ only
+- [ ] Worker logs clearly indicate which mode is used: `"using LogprobsSingle"` vs `"using IndependentRepeat(n=20)"`
 
 ## Implementation Notes
 
 ### For the Implementing Agent
 
-**Order:**
-1. `backstoryScoring.ts` + tests — pure scoring functions, both modes depend on this
-2. `hungarianMatching.ts` + tests — slot expansion, cost matrix, Hungarian wrapper
-3. `DemographicFilter.tsx` — two-mode UI with cross-product table
-4. `surveyRunner.ts` — mode-aware backstory selection
-5. `backstoryFilters.ts` — update or replace `applyDemographicFilters`
-6. `worker/src/scoring.py` + `db.py` — Python equivalents
-7. Supabase migration for distribution key discovery RPC
+**Implementation order:**
+1. `worker/src/logprobs.py` — Pure functions, easy to test in isolation
+2. `worker/tests/test_logprobs.py` — Write tests (TDD)
+3. `worker/src/llm.py` — Add `async_complete_logprobs()` method
+4. `worker/src/worker.py` — Add `LogprobsSingle` strategy class
+5. `worker/main.py` — Wire up routing and post-processing
+6. Frontend changes (DemographicKeyForm, DemographicSurveyCreate)
 
-### JS Hungarian Algorithm
+**OpenAI SDK logprobs response structures (both supported by vLLM):**
 
-Use `munkres-js` (npm package) or implement a simple version. The algorithm needs to:
-- Accept a K×M cost matrix (K ≤ M)
-- Return K assignments maximizing total cost
-- `scipy.optimize.linear_sum_assignment` minimizes, so negate weights for maximization. Same for JS.
-
-### Cross-Product Computation
-
-```typescript
-function computeCrossProduct(filters: DemographicFilter): string[][] {
-  // filters = { c_age: ["18-24", "25-34"], c_gender: ["male"], c_region: ["NE", "MW"] }
-  // Returns: [
-  //   ["18-24", "male", "NE"],
-  //   ["18-24", "male", "MW"],
-  //   ["25-34", "male", "NE"],
-  //   ["25-34", "male", "MW"],
-  // ]
-}
+Chat API (`/v1/chat/completions` — when `use_chat_template=True`):
+```python
+response = await client.chat.completions.create(
+    model=model, messages=[...],
+    logprobs=True, top_logprobs=20, max_tokens=1, temperature=0.0,
+)
+# response.choices[0].logprobs.content[0].top_logprobs
+# → List[ChatCompletionTokenLogprob(token="A", logprob=-0.33, bytes=[65])]
 ```
 
-Be careful with large cross-products. If user selects 4 age bins × 2 genders × 4 regions × 3 parties = 96 groups. With K=100, that's ~1 slot per group. Show a warning if numGroups > K.
-
-### Slot Allocation Serialization
-
-Use a pipe-delimited key for the cross-product group:
-```json
-{
-  "18-24|male|NE": 5,
-  "18-24|male|MW": 5,
-  "25-34|male|NE": 5,
-  "25-34|male|MW": 5
-}
+Completion API (`/v1/completions` — when `use_chat_template=False`):
+```python
+response = await client.completions.create(
+    model=model, prompt="...",
+    logprobs=20, max_tokens=1, temperature=0.0,
+)
+# response.choices[0].logprobs.top_logprobs[0]
+# → Dict[str, float]: {"A": -0.33, "B": -2.10, ...}
 ```
 
-Store the dimension order alongside so it can be parsed back.
+Both return different structures — `async_complete_logprobs()` must normalize into the common `LogprobsResult` dataclass.
 
-### Reference Patterns
+**Existing patterns to follow:**
+- Strategy pattern in `worker/src/worker.py` — `LogprobsSingle` implements same `FillingStrategy` protocol as `IndependentRepeat` and `SeriesWithContext`
+- Error handling in `worker/src/llm.py` — same `RetryableError`/`NonRetryableError` hierarchy
+- Frontend config flow: `DemographicKeyForm` → `DemographicSurveyCreate` → `surveyRunner.createDemographicSurveyRun()` → `survey_runs.llm_config`
 
-- Anthology matching: `anthology/scripts/run_demographic_matching.py` (edge_weight_calculation, maximum_weight_sum_matching)
-- Alterity matching: `alterity-private-main/alterity/preprocess/survey_data_generator.py` (SurveyDataGenerator)
-- Current filter UI: `frontend/src/components/surveys/DemographicFilter.tsx`
-- Current filter logic: `frontend/src/lib/backstoryFilters.ts`
-- Worker filtering: `worker/src/db.py:316-385`
-
-### Gotchas
-
-- **`_sample_size` key**: Skip in scoring. In new config, sample size lives in `DemographicSelectionConfig.sample_size` instead.
-- **Custom filters** (`custom_*`): No distributions. Keep exact-match behavior. Excluded from cross-product in balanced mode.
-- **Anthology backstories**: Excluded (no demographics). Keep `.neq('source_type', 'anthology')`.
-- **Missing dimensions**: Score = 0 for that backstory → excluded.
-- **Cross-product explosion**: Warn if numGroups > K ("Not enough sample size for all groups"). Minimum 1 slot per group.
-- **Hungarian with K > M**: More slots than backstories. Fall back to assigning each backstory to its best slot, leaving some slots empty. Show warning.
-- **Backward compatibility**: Old `DemographicFilter` (no mode field) → treat as top-K with no sample limit.
-
-### Test Data
-
-```typescript
-const backstories = [
-  {
-    id: "a",
-    demographics: {
-      c_age: { value: "18-24", distribution: { "18-24": 0.8, "25-34": 0.15, "35-44": 0.05 } },
-      c_gender: { value: "male", distribution: { "male": 0.9, "female": 0.1 } },
-      c_region: { value: "NE", distribution: { "NE": 0.7, "MW": 0.2, "S": 0.05, "W": 0.05 } }
-    }
-  },
-  {
-    id: "b",
-    demographics: {
-      c_age: { value: "25-34", distribution: { "18-24": 0.1, "25-34": 0.7, "35-44": 0.2 } },
-      c_gender: { value: "male", distribution: { "male": 0.8, "female": 0.2 } },
-      c_region: { value: "MW", distribution: { "NE": 0.1, "MW": 0.6, "S": 0.2, "W": 0.1 } }
-    }
-  },
-  // ... more with known distributions for deterministic assertions
-]
+**Config flow (already wired end-to-end, just not consumed):**
+```
+DemographicKeyForm.distributionMode
+  → DemographicSurveyCreate bundles into llmConfig.distribution_mode
+    → surveyRunner stores in survey_runs.llm_config
+      → Worker reads via db.get_demographic_key_for_survey() (line 507)
+        → main.py selects strategy based on distribution_mode
 ```
 
----
+**Common gotchas:**
+- Don't use guided decoding with logprobs — it constrains the output and changes the probability distribution
+- The Completion API uses `logprobs=N` (integer), Chat API uses `logprobs=True` + `top_logprobs=N` — different param names
+- Token `" A"` (with space prefix) is common in BPE tokenizers — must strip leading whitespace
+- `json.loads()` in main.py for logprobs mode vs `"||"` splitting for n_sample — use explicit mode check, don't try/except
+
+### Database
+
+No schema changes needed. `distribution_mode` and `num_trials` are already part of the `llm_config` JSONB stored on `survey_runs`. The `db.get_demographic_key_for_survey()` method already reads `distribution_mode` from `llm_config` (see `worker/src/db.py:507`).
 
 ## Out of Scope
 
-- User-configurable dimension weights (equal weight via product for now)
-- Probabilistic/random sampling (deterministic only)
-- Uploading real human survey data for matching (future feature)
-- Changes to backstory upload/generation
-- Changes to results/analysis page
-- Per-backstory score visualization in UI (e.g., score histograms)
+- OpenRouter logprobs support
+- Logprobs for regular (non-demographic) surveys
+- Logprobs for non-MCQ question types (multiple_select, ranking, open_response)
+- UI to display logprobs distributions differently from n_sample distributions
+- Streaming logprobs
+- Batching logprobs requests across backstories

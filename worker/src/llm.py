@@ -12,6 +12,7 @@ if TYPE_CHECKING:
 import openai
 from openai import AsyncOpenAI, OpenAI
 
+from .logprobs import LogprobsResult
 from .response import (
     LLMResponse,
     RetryableError,
@@ -343,6 +344,65 @@ class UnifiedLLMClient:
             return LLMResponse.from_text(content)
         except Exception as e:
             raise NonRetryableError(f"Text fallback also failed: {e}")
+
+    async def async_complete_logprobs(self, prompt: str) -> LogprobsResult:
+        """
+        Get logprobs from LLM (async). Forces max_tokens=1, temperature=0.0.
+
+        No structured output / guided decoding — logprobs require unconstrained
+        generation to get the true model probability distribution.
+
+        Handles both API modes:
+          - Chat API (use_chat_template=True): logprobs=True, top_logprobs=20
+          - Completion API (use_chat_template=False): logprobs=20
+
+        Returns LogprobsResult with unified format regardless of API mode.
+        """
+        try:
+            if self.use_chat_template:
+                response = await self._async_client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.0,
+                    max_tokens=1,
+                    logprobs=True,
+                    top_logprobs=20,
+                )
+                choice = response.choices[0]
+                generated_token = choice.message.content or ""
+                # Chat API: List[ChatCompletionTokenLogprob] with .token and .logprob
+                raw_top = choice.logprobs.content[0].top_logprobs if (
+                    choice.logprobs and choice.logprobs.content
+                ) else []
+                top_logprobs = {entry.token: entry.logprob for entry in raw_top}
+            else:
+                response = await self._async_client.completions.create(
+                    model=self.model,
+                    prompt=prompt,
+                    temperature=0.0,
+                    max_tokens=1,
+                    logprobs=20,
+                )
+                choice = response.choices[0]
+                generated_token = choice.text or ""
+                # Completion API: Dict[str, float] directly
+                raw_top = choice.logprobs.top_logprobs[0] if (
+                    choice.logprobs and choice.logprobs.top_logprobs
+                ) else {}
+                top_logprobs = dict(raw_top) if raw_top else {}
+
+            return LogprobsResult(
+                generated_token=generated_token,
+                top_logprobs=top_logprobs,
+            )
+        except openai.AuthenticationError as e:
+            raise NonRetryableError(str(e))
+        except openai.RateLimitError as e:
+            raise RetryableError(str(e))
+        except openai.APIStatusError as e:
+            if e.status_code >= 500:
+                raise RetryableError(str(e))
+            raise NonRetryableError(str(e))
 
     async def close(self):
         """Close the async client."""
