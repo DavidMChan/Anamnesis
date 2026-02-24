@@ -65,7 +65,7 @@ export function DemographicSurveys() {
           <div>
             <h1 className="text-2xl font-bold">Demographic Surveys</h1>
             <p className="text-muted-foreground">
-              Create surveys to determine new demographic dimensions for all backstories
+              Need a demographic that doesn't exist yet? Create one here.
             </p>
           </div>
           <Link to="/demographic-surveys/new">
@@ -84,8 +84,7 @@ export function DemographicSurveys() {
               </div>
               <h3 className="font-semibold mb-1">No demographic surveys yet</h3>
               <p className="text-muted-foreground text-sm mb-4 text-center max-w-sm">
-                Create a demographic survey to determine a new dimension (e.g., political leaning)
-                for all backstories.
+                Define your first new demographic here!
               </p>
               <Link to="/demographic-surveys/new">
                 <Button className="gap-2">

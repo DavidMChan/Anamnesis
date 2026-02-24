@@ -134,9 +134,7 @@ export function DemographicSurveyView() {
             <p className="text-muted-foreground">
               <span className="font-mono">{survey.demographic_key}</span>
               {' · '}
-              {demographicKey?.value_type === 'enum'
-                ? `${demographicKey.enum_values?.length || 0} values`
-                : demographicKey?.value_type}
+              {`${demographicKey?.enum_values?.length || 0} values`}
               {' · '}
               {distributionMode === 'n_sample'
                 ? `${numTrials} trials per backstory`
@@ -209,10 +207,6 @@ export function DemographicSurveyView() {
                   <dd className="font-mono">{demographicKey.key}</dd>
                 </div>
                 <div>
-                  <dt className="text-muted-foreground">Value Type</dt>
-                  <dd className="capitalize">{demographicKey.value_type}</dd>
-                </div>
-                <div>
                   <dt className="text-muted-foreground">Distribution Mode</dt>
                   <dd>{distributionMode === 'n_sample' ? 'N-Sample' : 'Logprobs'}</dd>
                 </div>
@@ -220,9 +214,9 @@ export function DemographicSurveyView() {
                   <dt className="text-muted-foreground">Trials per Backstory</dt>
                   <dd>{numTrials}</dd>
                 </div>
-                {demographicKey.value_type === 'enum' && demographicKey.enum_values && (
+                {demographicKey.enum_values && (
                   <div className="col-span-2">
-                    <dt className="text-muted-foreground mb-1">Enum Values</dt>
+                    <dt className="text-muted-foreground mb-1">Values</dt>
                     <dd className="flex flex-wrap gap-1.5">
                       {demographicKey.enum_values.map((val) => (
                         <Badge key={val} variant="secondary">{val}</Badge>

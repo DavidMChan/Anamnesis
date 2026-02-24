@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button'
 import {
   ClipboardList,
   BookOpen,
+  FlaskConical,
   Settings,
   LogOut,
   Menu,
@@ -22,6 +23,7 @@ interface NavItem {
 
 const mainNavItems: NavItem[] = [
   { label: 'Surveys', href: '/surveys', icon: ClipboardList },
+  { label: 'Demographics', href: '/demographic-surveys', icon: FlaskConical },
   { label: 'Backstories', href: '/backstories', icon: BookOpen },
 ]
 

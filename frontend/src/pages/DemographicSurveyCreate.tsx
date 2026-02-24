@@ -2,18 +2,20 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Layout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { supabase } from '@/lib/supabase'
 import { useAuthContext } from '@/contexts/AuthContext'
 import { DemographicKeyForm, type DemographicKeyFormData } from '@/components/demographic-surveys/DemographicKeyForm'
+import { RunConfigCard } from '@/components/surveys/RunConfigCard'
 import { createDemographicSurveyRun } from '@/lib/surveyRunner'
 import { mergeEffectiveConfig } from '@/lib/llmConfig'
 import { toast } from '@/hooks/use-toast'
-import { ArrowLeft, Play } from 'lucide-react'
+import type { LLMConfig } from '@/types/database'
+import { ArrowLeft, Play, Eye } from 'lucide-react'
 
 const defaultFormData: DemographicKeyFormData = {
   key: '',
   displayName: '',
-  valueType: 'enum',
   enumValues: [],
   distributionMode: 'n_sample',
   numTrials: 20,
@@ -24,11 +26,18 @@ const defaultFormData: DemographicKeyFormData = {
   },
 }
 
+const HOW_IT_WORKS_STEPS = [
+  { num: 1, title: 'Define', desc: 'Name the demographic and list possible values' },
+  { num: 2, title: 'Survey', desc: 'The LLM answers a multiple-choice question for each backstory' },
+  { num: 3, title: 'Results', desc: 'Becomes a filterable demographic on all backstories for everyone to use' },
+]
+
 export function DemographicSurveyCreate() {
   const navigate = useNavigate()
   const { user, profile, maskedApiKeys } = useAuthContext()
   const [formData, setFormData] = useState<DemographicKeyFormData>(defaultFormData)
   const [existingKeys, setExistingKeys] = useState<string[]>([])
+  const [runOverrides, setRunOverrides] = useState<Partial<LLMConfig>>({})
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -47,12 +56,11 @@ export function DemographicSurveyCreate() {
 
   const validate = (): Record<string, string> => {
     const errors: Record<string, string> = {}
-    if (!formData.key) errors.key = 'Key is required'
-    if (/[^a-z0-9_]/.test(formData.key)) errors.key = 'Only lowercase letters, numbers, and underscores'
-    if (existingKeys.includes(formData.key)) errors.key = 'This key already exists'
     if (!formData.displayName) errors.displayName = 'Display name is required'
-    if (formData.valueType === 'enum' && formData.enumValues.length < 2) {
-      errors.enumValues = 'At least 2 enum values required'
+    if (!formData.key) errors.key = 'Name is required to generate a key'
+    if (existingKeys.includes(formData.key)) errors.key = 'A demographic with this name already exists'
+    if (formData.enumValues.length < 2) {
+      errors.enumValues = 'At least 2 values required'
     }
     if (!formData.question.text) errors.question = 'Question text is required'
     return errors
@@ -88,8 +96,8 @@ export function DemographicSurveyCreate() {
         .insert({
           key: formData.key,
           display_name: formData.displayName,
-          value_type: formData.valueType,
-          enum_values: formData.valueType === 'enum' ? formData.enumValues : null,
+          value_type: 'enum',
+          enum_values: formData.enumValues,
           status: 'running',
           created_by: user.id,
         })
@@ -121,7 +129,7 @@ export function DemographicSurveyCreate() {
 
       // 3. Create a survey run — distribution_mode/num_trials go in llm_config snapshot
       const runLlmConfig = {
-        ...mergeEffectiveConfig(llmConfig, {}),
+        ...mergeEffectiveConfig(llmConfig, runOverrides),
         distribution_mode: formData.distributionMode as 'n_sample' | 'logprobs',
         num_trials: formData.numTrials,
       }
@@ -154,9 +162,24 @@ export function DemographicSurveyCreate() {
           <div>
             <h1 className="text-2xl font-bold">New Demographic Survey</h1>
             <p className="text-muted-foreground">
-              Define a demographic key and run a survey to determine it for all backstories
+              Your target demographics are not on the list? Define your own here.
             </p>
           </div>
+        </div>
+
+        {/* How It Works strip */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+          {HOW_IT_WORKS_STEPS.map((step) => (
+            <div key={step.num} className="flex items-start gap-3 p-3 rounded-lg">
+              <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary text-sm font-semibold">
+                {step.num}
+              </div>
+              <div>
+                <p className="text-sm font-medium leading-tight">{step.title}</p>
+                <p className="text-xs text-muted-foreground mt-0.5">{step.desc}</p>
+              </div>
+            </div>
+          ))}
         </div>
 
         {/* Error */}
@@ -172,6 +195,49 @@ export function DemographicSurveyCreate() {
           onChange={setFormData}
           existingKeys={existingKeys}
         />
+
+        {/* Run Configuration */}
+        <RunConfigCard
+          profileConfig={profile?.llm_config}
+          overrides={runOverrides}
+          onChangeOverrides={setRunOverrides}
+        />
+
+        {/* Prompt Preview */}
+        {formData.question.text && (
+          <Card>
+            <CardHeader>
+              <div className="flex items-center gap-2">
+                <Eye className="h-4 w-4" />
+                <CardTitle>Prompt Preview</CardTitle>
+              </div>
+              <CardDescription>
+                What will be sent to the LLM for each backstory (repeated {formData.numTrials} times independently)
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <pre className="text-sm bg-muted rounded-lg p-4 whitespace-pre-wrap font-mono overflow-x-auto leading-relaxed">
+                <span className="text-muted-foreground italic">{'[backstory text]'}</span>
+                {'\n\n'}
+                {formData.question.type === 'mcq' ? (
+                  <>
+                    {`Question: ${formData.question.text}`}
+                    {formData.question.options?.map((opt, i) => (
+                      `\n(${String.fromCharCode(65 + i)}) ${opt}`
+                    )).join('')}
+                    {`\nAnswer with ${formData.question.options?.map((_, i) => `(${String.fromCharCode(65 + i)})`).join(', ')}.`}
+                    {'\nAnswer:'}
+                  </>
+                ) : (
+                  <>
+                    {`Question: ${formData.question.text}`}
+                    {'\nAnswer:'}
+                  </>
+                )}
+              </pre>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Submit */}
         <div className="flex justify-end">
