@@ -151,6 +151,94 @@ class SeriesWithContext:
         return "", raw
 
 
+class IndependentRepeat:
+    """
+    N-sample mode for demographic surveys: asks a single question N times
+    independently (NO context accumulation between trials).
+
+    Returns all N raw answers for aggregation into a frequency distribution.
+    """
+
+    def __init__(self, num_trials: int = 20, max_compliance_retries: int = 10):
+        self.num_trials = num_trials
+        self.max_compliance_retries = max_compliance_retries
+
+    async def fill(
+        self,
+        backstory: str,
+        questions: List[Question],
+        llm: UnifiedLLMClient,
+        parser_llm: Optional[ParserLLM] = None,
+        media_client: Optional[WasabiMediaClient] = None,
+    ) -> Dict[str, str]:
+        """
+        Ask each question N times independently. Returns a special result:
+        {qkey: "answer1||answer2||...||answerN"} with all N raw answers
+        joined by '||' for downstream distribution computation.
+        """
+        results: Dict[str, str] = {}
+
+        for question in questions:
+            answers: List[str] = []
+            for trial in range(self.num_trials):
+                # Each trial is independent — fresh prompt, no context
+                text_prompt = build_initial_prompt(backstory, question)
+
+                # Download media if needed
+                question_media = None
+                if question.has_media:
+                    if not media_client:
+                        raise NonRetryableError(
+                            f"Question '{question.qkey}' has media but Wasabi is not configured."
+                        )
+                    question_media = await asyncio.to_thread(
+                        media_client.download_media_for_question, question
+                    )
+
+                prompt: Prompt = build_multimodal_prompt(text_prompt, question_media)
+                answer, _ = await self._ask_with_retry(prompt, question, llm, parser_llm, trial)
+                answers.append(answer)
+
+            # Join all N answers with separator for downstream processing
+            results[question.qkey] = "||".join(answers)
+            logger.info(f"IndependentRepeat: {question.qkey} collected {len(answers)} answers")
+
+        return results
+
+    async def _ask_with_retry(
+        self,
+        prompt: Prompt,
+        question: Question,
+        llm: UnifiedLLMClient,
+        parser_llm: Optional[ParserLLM],
+        trial: int,
+    ) -> tuple:
+        """Ask question with compliance retries + Tier 1/2 parsing."""
+        raw = ""
+        for retry in range(self.max_compliance_retries):
+            response = await llm.async_complete(prompt, question=question)
+            raw = response.raw or ""
+            answer = response.answer
+
+            # Open response: accept any non-empty text
+            if question.type == "open_response":
+                if answer:
+                    return answer, raw
+                continue
+
+            # Tier 2: parser LLM fallback
+            if not answer and question.type in ("mcq", "multiple_select", "ranking") and parser_llm and raw:
+                answer = await parser_llm.async_parse(raw, question)
+
+            if answer:
+                if trial == 0 and retry == 0:
+                    logger.debug(f"IndependentRepeat trial {trial}: {question.qkey}={answer}")
+                return answer, raw
+
+        logger.warning(f"IndependentRepeat trial {trial}: all retries failed for {question.qkey}")
+        return "", raw
+
+
 # ─── TaskProcessor ────────────────────────────────────────────────────────────
 
 

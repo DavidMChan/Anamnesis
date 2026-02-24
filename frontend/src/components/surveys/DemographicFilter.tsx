@@ -17,6 +17,7 @@ import {
   defaultSlotAllocation,
   serializeGroup,
 } from '@/lib/hungarianMatching'
+import { Link } from 'react-router-dom'
 import { Plus, X, ChevronDown, ChevronRight } from 'lucide-react'
 
 interface DemographicFilterProps {
@@ -79,6 +80,7 @@ export function DemographicFilter({ value, onChange, description }: DemographicF
     const { data, error } = await supabase
       .from('demographic_keys')
       .select('*')
+      .eq('status', 'finished')
       .order('display_name')
 
     if (error) {
@@ -283,7 +285,10 @@ export function DemographicFilter({ value, onChange, description }: DemographicF
       <CardHeader>
         <CardTitle>Target Demographics</CardTitle>
         <CardDescription>
-          {description || 'Select demographic categories and a matching mode for backstory selection.'}
+          {description || 'Select demographic categories and a matching mode for backstory selection.'}{' '}
+          <Link to="/demographic-surveys/new" className="text-primary hover:underline">
+            Missing a demographic? Define your own.
+          </Link>
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-6">

@@ -32,6 +32,10 @@ export interface LLMConfig {
   // Concurrency control (enforced by dispatcher)
   max_concurrent_tasks?: number  // Default: 10
 
+  // Demographic survey execution params (stored in run snapshot)
+  distribution_mode?: 'n_sample' | 'logprobs'
+  num_trials?: number  // N-sample mode: how many times per backstory
+
   // Note: API keys are stored securely in Supabase Vault, not in this config
 }
 
@@ -84,11 +88,16 @@ export interface DemographicSelectionConfig {
 // Metadata about demographic keys
 export type DemographicValueType = 'numeric' | 'enum' | 'text'
 
+export type DemographicKeyStatus = 'pending' | 'running' | 'finished' | 'failed'
+export type DistributionMode = 'n_sample' | 'logprobs'
+
 export interface DemographicKey {
   key: string
   display_name: string
   value_type: DemographicValueType
   enum_values: string[] | null
+  status: DemographicKeyStatus
+  created_by: string | null
   created_at: string
 }
 
@@ -110,6 +119,7 @@ export interface Question {
 }
 
 export type SurveyStatus = 'draft' | 'active'
+export type SurveyType = 'survey' | 'demographic'
 
 export interface SurveyResults {
   [backstory_id: string]: {
@@ -124,6 +134,8 @@ export interface Survey {
   questions: Question[]
   demographics: DemographicFilter
   status: SurveyStatus
+  type: SurveyType
+  demographic_key?: string | null  // For type='demographic': which key this survey populates
   created_at: string
 }
 
