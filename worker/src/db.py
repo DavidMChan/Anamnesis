@@ -321,68 +321,65 @@ class DatabaseClient:
         """
         Get backstory IDs matching survey criteria.
 
-        Demographics are stored as:
-          {"c_age": {"value": "45-54", "distribution": {...}}, ...}
-
-        Filters match on the "value" field within each dimension.
-        Filter format: {"c_age": ["45-54", "55-64"], "c_gender": ["Male"]}
+        Supports two formats:
+        1. New DemographicSelectionConfig: {"mode": "top_k"|"balanced", "sample_size": N, "filters": {...}}
+        2. Legacy DemographicFilter: {"c_age": ["45-54", "55-64"], ...}
 
         Args:
             survey_id: UUID of the survey (to get demographic filter)
-            demographic_filter: Optional demographic filter to apply
+            demographic_filter: Optional demographic filter/config to apply
 
         Returns:
             List of backstory UUIDs
         """
-        # TODO: Remove .neq("anthology") once anthology backstories have demographics
-        query = self.client.table("backstories").select("id").eq("is_public", True).neq("source_type", "anthology")
+        from .scoring import select_backstory_ids as scoring_select
 
-        if demographic_filter:
+        # Fetch all public backstories with demographics
+        # TODO: Remove .neq("anthology") once anthology backstories have demographics
+        result = (
+            self.client.table("backstories")
+            .select("id, demographics")
+            .eq("is_public", True)
+            .neq("source_type", "anthology")
+            .execute()
+        )
+        backstories = [
+            row for row in (result.data or [])
+            if row.get("demographics")
+        ]
+
+        if not demographic_filter:
+            return [b["id"] for b in backstories]
+
+        # New format: DemographicSelectionConfig
+        if "mode" in demographic_filter and "filters" in demographic_filter:
+            return scoring_select(demographic_filter, backstories)
+
+        # Legacy format: value-based matching
+        filtered = []
+        for row in backstories:
+            demos = row.get("demographics") or {}
+            match = True
             for key, allowed_values in demographic_filter.items():
+                if key == "_sample_size":
+                    continue
                 if not allowed_values or not isinstance(allowed_values, list):
                     continue
-                # Filter: demographics->{key}->>'value' must be in allowed_values
-                # Supabase PostgREST supports filtering into JSONB with ->
-                # We use .in_ on the extracted text value
-                for value in allowed_values:
-                    # Use contains filter: demographics must contain {key: {value: val}}
-                    # PostgREST @> operator via .contains()
-                    pass
-                # For multiple allowed values, we need an OR across them.
-                # Supabase .contains() does AND, so for OR we fetch all and filter.
-                # Alternative: use RPC or fetch all and filter in Python.
-                # For now, fetch all and filter client-side for correctness.
-                pass
+                dim = demos.get(key)
+                if not dim or dim.get("value") not in allowed_values:
+                    match = False
+                    break
+            if match:
+                filtered.append(row["id"])
 
-        # Fetch all public backstories and filter client-side if needed
-        if demographic_filter and any(
-            v for v in demographic_filter.values() if v and isinstance(v, list)
-        ):
-            result = (
-                self.client.table("backstories")
-                .select("id, demographics")
-                .eq("is_public", True)
-                # TODO: Remove .neq("anthology") once anthology backstories have demographics
-                .neq("source_type", "anthology")
-                .execute()
-            )
-            filtered = []
-            for row in result.data or []:
-                demos = row.get("demographics") or {}
-                match = True
-                for key, allowed_values in demographic_filter.items():
-                    if not allowed_values or not isinstance(allowed_values, list):
-                        continue
-                    dim = demos.get(key)
-                    if not dim or dim.get("value") not in allowed_values:
-                        match = False
-                        break
-                if match:
-                    filtered.append(row["id"])
-            return filtered
+        # Apply legacy sample size limit
+        sample_size_arr = demographic_filter.get("_sample_size")
+        if isinstance(sample_size_arr, list) and len(sample_size_arr) > 0:
+            limit = int(sample_size_arr[0])
+            if limit > 0:
+                filtered = filtered[:limit]
 
-        result = query.execute()
-        return [row["id"] for row in (result.data or [])]
+        return filtered
 
     # ==================== Dispatcher Operations ====================
 

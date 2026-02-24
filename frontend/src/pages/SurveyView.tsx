@@ -9,9 +9,9 @@ import { useSurveyRun, useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
 import { cancelSurveyRun } from '@/lib/surveyRunner'
 import { useAuthContext } from '@/contexts/AuthContext'
-import type { Survey, SurveyRun, MediaAttachment, LLMConfig, DemographicFilter as DemographicFilterType } from '@/types/database'
+import type { Survey, SurveyRun, MediaAttachment, LLMConfig, DemographicSelectionConfig, DemographicFilter as DemographicFilterType } from '@/types/database'
 import { MediaPreview } from '@/components/surveys/MediaPreview'
-import { DemographicFilter } from '@/components/surveys/DemographicFilter'
+import { DemographicFilter, defaultDemographicSelectionConfig, legacyToSelectionConfig } from '@/components/surveys/DemographicFilter'
 import { getMediaUrl } from '@/lib/media'
 import { mergeEffectiveConfig, getConfigSources, LLM_DEFAULTS } from '@/lib/llmConfig'
 import { Input } from '@/components/ui/input'
@@ -193,8 +193,7 @@ export function SurveyView() {
   const [expandedAudio, setExpandedAudio] = useState<{ qkey: string; optIndex: number } | null>(null)
   const [runOverrides, setRunOverrides] = useState<Partial<LLMConfig>>({})
   const [questionsExpanded, setQuestionsExpanded] = useState(false)
-  const [runDemographics, setRunDemographics] = useState<DemographicFilterType>({})
-  const [runSampleSize, setRunSampleSize] = useState<number | undefined>(undefined)
+  const [runDemographics, setRunDemographics] = useState<DemographicSelectionConfig>(defaultDemographicSelectionConfig())
 
   // Fetch survey run data
   const { run: latestRun, runs, isRunning, refresh: refreshRuns } = useSurveyRun({
@@ -212,9 +211,13 @@ export function SurveyView() {
   // Initialize run demographics from survey defaults when survey loads
   useEffect(() => {
     if (!survey) return
-    const { _sample_size, ...restDemographics } = survey.demographics as DemographicFilterType & { _sample_size?: number[] }
-    setRunDemographics(restDemographics)
-    setRunSampleSize(_sample_size?.[0])
+    // Convert legacy format if needed
+    const stored = survey.demographics
+    if (stored && 'mode' in stored && 'filters' in stored) {
+      setRunDemographics(stored as unknown as DemographicSelectionConfig)
+    } else {
+      setRunDemographics(legacyToSelectionConfig(stored as DemographicFilterType & { _sample_size?: number[] }))
+    }
   }, [survey?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchSurvey = async () => {
@@ -283,12 +286,7 @@ export function SurveyView() {
 
     // Merge profile defaults + local overrides into run config snapshot
     const runLlmConfig = mergeEffectiveConfig(llmConfig, runOverrides)
-    // Build effective demographics for this run
-    const effectiveDemographics = {
-      ...runDemographics,
-      ...(runSampleSize != null && { _sample_size: [runSampleSize] }),
-    } as DemographicFilterType
-    const runId = await createRun(survey.id, runLlmConfig, effectiveDemographics)
+    const runId = await createRun(survey.id, runLlmConfig, runDemographics)
     if (runId) {
       refreshRuns()
       fetchSurvey()
@@ -486,8 +484,6 @@ export function SurveyView() {
         <DemographicFilter
           value={runDemographics}
           onChange={setRunDemographics}
-          sampleSize={runSampleSize}
-          onSampleSizeChange={setRunSampleSize}
           description="Settings for the next run (empty = inherit from initial survey settings)"
         />
       </div>
