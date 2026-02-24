@@ -87,34 +87,43 @@ export async function selectBackstoryIds(
   config: DemographicSelectionConfig
 ): Promise<string[]> {
   let backstories = await fetchBackstoriesWithDemographics()
+  console.log(`[selectBackstoryIds] pool size: ${backstories.length}`)
 
   // Apply custom_ filters first (exact match)
   backstories = applyCustomFilters(backstories, config.filters)
+  if (backstories.length !== backstories.length) {
+    console.log(`[selectBackstoryIds] after custom filters: ${backstories.length}`)
+  }
 
   if (config.mode === 'top_k') {
     if (Object.keys(config.filters).length === 0) {
-      return shuffle(backstories).slice(0, config.sample_size).map((b) => b.id)
+      const selected = shuffle(backstories).slice(0, config.sample_size)
+      console.log(`[selectBackstoryIds] top_k, no filters → random sample of ${selected.length}`)
+      return selected.map((b) => b.id)
     }
-    const scored = rankAndSelectBackstories(
-      backstories,
-      config.filters,
-      config.sample_size
-    )
+    const scored = rankAndSelectBackstories(backstories, config.filters, config.sample_size)
+    console.log(`[selectBackstoryIds] top_k, filters=${JSON.stringify(config.filters)}`)
+    console.log(`[selectBackstoryIds] top scores:`, scored.slice(0, 5).map((s) => ({ id: s.id, score: s.score })))
     return scored.map((s) => s.id)
   }
 
   // Balanced matching
   const { dimensions, groups } = computeCrossProduct(config.filters)
+  console.log(`[selectBackstoryIds] balanced, dimensions=${JSON.stringify(dimensions)}, groups=${groups.length}`)
 
   if (groups.length === 0) {
-    return shuffle(backstories).slice(0, config.sample_size).map((b) => b.id)
+    const selected = shuffle(backstories).slice(0, config.sample_size)
+    console.log(`[selectBackstoryIds] balanced, no filters → random sample of ${selected.length}`)
+    return selected.map((b) => b.id)
   }
 
   const slotAllocation =
     config.slot_allocation ??
     defaultSlotAllocation(groups, dimensions, config.sample_size)
+  console.log(`[selectBackstoryIds] slot allocation:`, slotAllocation)
 
   const results = hungarianMatch(slotAllocation, dimensions, backstories)
+  console.log(`[selectBackstoryIds] hungarian results:`, results.map((r) => ({ id: r.backstoryId, group: r.group, score: r.score })))
   return results.map((r) => r.backstoryId)
 }
 

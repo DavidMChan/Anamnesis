@@ -253,6 +253,7 @@ export function SurveyView() {
             run={displayRun}
             onViewResults={() => navigate(`/surveys/${survey.id}/results?run=${displayRun.id}`)}
             onRunAgain={runSurvey}
+            creatingRun={creatingRun}
             onCancel={async () => {
               await cancelSurveyRun(displayRun.id)
               refreshRuns()

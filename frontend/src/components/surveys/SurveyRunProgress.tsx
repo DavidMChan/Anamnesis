@@ -27,6 +27,7 @@ interface SurveyRunProgressProps {
   onViewResults?: () => void
   onRunAgain?: () => void
   onCancel?: () => Promise<void>
+  creatingRun?: boolean
 }
 
 const statusConfig: Record<
@@ -60,7 +61,7 @@ const statusConfig: Record<
   },
 }
 
-export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel }: SurveyRunProgressProps) {
+export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, creatingRun }: SurveyRunProgressProps) {
   const [cancelling, setCancelling] = useState(false)
   const status = statusConfig[run.status]
   const totalProcessed = run.completed_tasks + run.failed_tasks
@@ -166,8 +167,8 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel }: 
             </AlertDialog>
           )}
           {isComplete && onRunAgain && (
-            <Button variant="outline" onClick={onRunAgain}>
-              Run Again
+            <Button variant="outline" onClick={onRunAgain} disabled={creatingRun}>
+              {creatingRun ? 'Starting...' : 'Run Again'}
             </Button>
           )}
         </div>
