@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 import { useAuthContext } from '@/contexts/AuthContext'
 import { Button } from '@/components/ui/button'
-import { ClipboardList, BookOpen, Settings, LogOut, User } from 'lucide-react'
+import { ClipboardList, BookOpen, FlaskConical, Settings, LogOut, User } from 'lucide-react'
 
 export function Navbar() {
   const { user, profile, signOut } = useAuthContext()
@@ -29,6 +29,13 @@ export function Navbar() {
             >
               <ClipboardList className="h-4 w-4" />
               <span>My Surveys</span>
+            </Link>
+            <Link
+              to="/demographic-surveys"
+              className="flex items-center space-x-1 transition-colors hover:text-foreground/80 text-foreground/60"
+            >
+              <FlaskConical className="h-4 w-4" />
+              <span>Demographics</span>
             </Link>
             <Link
               to="/backstories"

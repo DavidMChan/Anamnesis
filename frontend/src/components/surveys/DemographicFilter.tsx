@@ -78,6 +78,7 @@ export function DemographicFilter({ value, onChange, sampleSize, onSampleSizeCha
     const { data, error } = await supabase
       .from('demographic_keys')
       .select('*')
+      .eq('status', 'finished')
       .order('display_name')
 
     if (error) {

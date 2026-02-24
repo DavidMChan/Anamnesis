@@ -31,6 +31,7 @@ export function Surveys() {
     const { data, error } = await supabase
       .from('surveys')
       .select('*')
+      .eq('type', 'survey')
       .order('created_at', { ascending: false })
 
     if (error) {
