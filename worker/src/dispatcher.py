@@ -117,10 +117,8 @@ class TaskDispatcher:
                 dispatched = self.dispatch_run(run)
                 total_dispatched += dispatched
 
-                # If running but no tasks to dispatch, check if run is complete
-                if dispatched == 0 and run.get("status") == "running":
-                    # Get status before completion check
-                    old_status = run.get("status")
+                # Sync counters and check completion for all running runs
+                if run.get("status") == "running" or (dispatched > 0 and run.get("status") == "pending"):
                     self.db.check_run_completion(run["id"])
 
                     # After completion check, see if the run just finished
