@@ -176,15 +176,41 @@ export function hungarianMatch(
 ): MatchResult[] {
   const targets = expandSlots(slotAllocation, dimensions)
   const K = targets.length
-  const M = backstories.length
 
-  if (K === 0 || M === 0) return []
+  if (K === 0 || backstories.length === 0) return []
 
-  const costMatrix = buildCostMatrix(targets, backstories)
+  // For each unique target group, keep only the top CANDIDATES_PER_GROUP backstories
+  // by score. Take the union across all groups. This bounds M to at most
+  // K * CANDIDATES_PER_GROUP, keeping the cost matrix small regardless of pool size.
+  const CANDIDATES_PER_GROUP = 50
+  const uniqueTargets = Array.from(
+    new Map(targets.map((t) => [JSON.stringify(t), t])).values()
+  )
+  const candidateSet = new Map<string, { id: string; demographics: Demographics }>()
+  for (const target of uniqueTargets) {
+    const scored = backstories
+      .map((b) => ({ b, score: scoreBackstoryOneHot(b.demographics, target) }))
+      .filter((x) => x.score > 0)
+      .sort((a, z) => z.score - a.score)
+      .slice(0, CANDIDATES_PER_GROUP)
+    for (const { b } of scored) {
+      candidateSet.set(b.id, b)
+    }
+  }
+  const candidates = Array.from(candidateSet.values())
+  if (candidates.length === 0) return []
 
-  // Munkres minimizes cost. We want to maximize score.
-  // Negate the scores (and we'll negate back in results).
-  const maxVal = Math.max(...costMatrix.flat(), 0)
+  const M = candidates.length
+
+  const costMatrix = buildCostMatrix(targets, candidates)
+
+  // Munkres minimizes cost. We want to maximize score — negate.
+  let maxVal = 0
+  for (const row of costMatrix) {
+    for (const val of row) {
+      if (val > maxVal) maxVal = val
+    }
+  }
   const negatedMatrix = costMatrix.map((row) =>
     row.map((val) => maxVal - val)
   )
@@ -198,9 +224,6 @@ export function hungarianMatch(
     }
   }
 
-  // If K < M, the matrix is K×M which is fine — Munkres handles non-square
-  // by internally padding. We want K assignments from M options.
-
   const assignments: [number, number][] = computeMunkres(negatedMatrix)
 
   const results: MatchResult[] = []
@@ -212,7 +235,7 @@ export function hungarianMatch(
     // Skip if slotIdx is out of range (shouldn't happen)
     if (slotIdx >= K) continue
 
-    const backstory = backstories[backstoryIdx]
+    const backstory = candidates[backstoryIdx]
     // Skip if already assigned (shouldn't happen with Hungarian)
     if (usedBackstories.has(backstory.id)) continue
 

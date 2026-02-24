@@ -73,9 +73,16 @@ export function DemographicFilter({ value, onChange, description }: DemographicF
     setPoolSize(count)
   }
 
+  const BALANCED_MAX_SAMPLE = 50
+
   // --- Mode ---
   const setMode = (newMode: DemographicSelectionMode) => {
-    onChange({ ...value, mode: newMode })
+    const updates: Partial<DemographicSelectionConfig> = { mode: newMode }
+    if (newMode === 'balanced' && value.sample_size > BALANCED_MAX_SAMPLE) {
+      updates.sample_size = BALANCED_MAX_SAMPLE
+      updates.slot_allocation = undefined
+    }
+    onChange({ ...value, ...updates })
     setShowSlotAllocation(false)
   }
 
@@ -192,10 +199,13 @@ export function DemographicFilter({ value, onChange, description }: DemographicF
                 className="w-32"
                 placeholder="e.g. 20"
                 min={1}
+                max={mode === 'balanced' ? BALANCED_MAX_SAMPLE : undefined}
                 value={sampleSize || ''}
                 onChange={(e) => {
                   const val = e.target.value
-                  setSampleSize(val === '' ? undefined : parseInt(val, 10))
+                  if (val === '') { setSampleSize(undefined); return }
+                  const n = parseInt(val, 10)
+                  setSampleSize(mode === 'balanced' ? Math.min(n, BALANCED_MAX_SAMPLE) : n)
                 }}
               />
               {sampleSize > 0 && (
@@ -340,9 +350,12 @@ export function DemographicFilter({ value, onChange, description }: DemographicF
                 >
                   <RadioGroupItem value="balanced" id="mode-balanced" className="mt-0.5" />
                   <div className="space-y-1">
-                    <span className="font-medium text-sm">Balanced Matching</span>
+                    <span className="font-medium text-sm">
+                      Balanced Matching
+                      <span className="ml-2 text-xs font-normal text-muted-foreground border rounded px-1 py-0.5">beta</span>
+                    </span>
                     <p className="text-xs text-muted-foreground">
-                      Ensures every selected demographic group is represented via optimal assignment.
+                      Ensures every selected demographic group is represented via optimal assignment. Sample size capped at {BALANCED_MAX_SAMPLE}.
                     </p>
                   </div>
                 </label>
