@@ -7,6 +7,7 @@ and frontend/src/lib/hungarianMatching.ts.
 from typing import Dict, List, Optional, Tuple
 from itertools import product as cartesian_product
 import math
+import random
 
 try:
     from scipy.optimize import linear_sum_assignment
@@ -300,6 +301,9 @@ def select_backstory_ids(
         backstories = filtered
 
     if mode == "top_k":
+        if not filters:
+            pool = backstories if sample_size <= 0 else random.sample(backstories, min(sample_size, len(backstories)))
+            return [b["id"] for b in pool]
         scored = rank_and_select_backstories(backstories, filters, sample_size)
         return [s["id"] for s in scored]
 
@@ -307,7 +311,8 @@ def select_backstory_ids(
     dimensions, groups = compute_cross_product(filters)
 
     if not groups:
-        return [b["id"] for b in backstories[:sample_size]]
+        pool = backstories if sample_size <= 0 else random.sample(backstories, min(sample_size, len(backstories)))
+        return [b["id"] for b in pool]
 
     slot_allocation = config.get("slot_allocation")
     if not slot_allocation:
