@@ -389,22 +389,6 @@ class DatabaseClient:
 
     # ==================== Demographic Survey Operations ====================
 
-    def get_survey_type(self, run_id: str) -> Optional[str]:
-        """
-        Get the survey type for a run (via join to surveys table).
-
-        Returns 'survey' or 'demographic', or None if not found.
-        """
-        data = self._safe_single_execute(
-            self.client.table("survey_runs")
-            .select("surveys(type)")
-            .eq("id", run_id)
-        )
-        if not data:
-            return None
-        surveys_data = data.get("surveys")
-        return surveys_data.get("type") if surveys_data else None
-
     def get_demographic_key_for_survey(self, run_id: str) -> Optional[Dict[str, Any]]:
         """
         Get the demographic key slug for a demographic survey run.
@@ -456,20 +440,6 @@ class DatabaseClient:
                 "p_demographic_key": demographic_key,
                 "p_value": value,
                 "p_distribution": distribution,
-            }
-        ).execute()
-
-    def finish_demographic_key(self, survey_id: str, status: str = "finished") -> None:
-        """
-        Update demographic_keys status when a demographic survey run finishes.
-
-        The RPC looks up the key via surveys.demographic_key.
-        """
-        self.client.rpc(
-            "finish_demographic_key",
-            {
-                "p_survey_id": survey_id,
-                "p_status": status,
             }
         ).execute()
 
