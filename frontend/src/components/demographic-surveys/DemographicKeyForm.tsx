@@ -212,8 +212,8 @@ export function DemographicKeyForm({ value, onChange, existingKeys = [], errors 
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="n_sample">N-Sample (any provider)</SelectItem>
-                    <SelectItem value="logprobs" disabled>
-                      Logprobs (vLLM only — coming soon)
+                    <SelectItem value="logprobs">
+                      Logprobs (vLLM only)
                     </SelectItem>
                   </SelectContent>
                 </Select>

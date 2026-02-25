@@ -87,6 +87,15 @@ export function DemographicSurveyCreate() {
       return
     }
 
+    // Logprobs mode requires vLLM (check effective provider, which may include run overrides)
+    if (formData.distributionMode === 'logprobs') {
+      const effectiveConfig = mergeEffectiveConfig(llmConfig, runOverrides)
+      if (effectiveConfig.provider !== 'vllm') {
+        toast({ title: 'Logprobs mode requires vLLM provider', variant: 'destructive' })
+        return
+      }
+    }
+
     setSubmitting(true)
 
     try {

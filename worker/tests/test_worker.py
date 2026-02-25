@@ -356,3 +356,64 @@ class TestTaskProcessorResult:
         assert result.success is False
         assert result.error is not None
         assert "API error" in result.error
+
+
+# ─── LogprobsSingle strategy tests ───────────────────────────────────────────
+
+class TestLogprobsSingle:
+    """Tests for the LogprobsSingle filling strategy."""
+
+    @pytest.mark.asyncio
+    async def test_logprobs_single_strategy(self):
+        """Mock async_complete_logprobs — verify fill() returns JSON-encoded letter distribution."""
+        import json
+        from src.worker import LogprobsSingle
+        from src.logprobs import LogprobsResult
+
+        # Build mock LLM with async_complete_logprobs
+        mock_llm = AsyncMock()
+        mock_llm.async_complete_logprobs.return_value = LogprobsResult(
+            generated_token="A",
+            top_logprobs={"A": -0.33, "B": -2.10, "C": -3.00},
+        )
+
+        backstory = "I am a 40-year-old engineer."
+        questions = [
+            Question(
+                qkey="q_politics",
+                type="mcq",
+                text="What is your political leaning?",
+                options=["Conservative", "Moderate", "Liberal"],
+            )
+        ]
+
+        strategy = LogprobsSingle()
+        results = await strategy.fill(backstory, questions, mock_llm)
+
+        assert "q_politics" in results
+        dist = json.loads(results["q_politics"])
+        assert set(dist.keys()) == {"A", "B", "C"}
+        # A should be most probable
+        assert dist["A"] > dist["B"] > dist["C"]
+        # Should be normalized
+        assert abs(sum(dist.values()) - 1.0) < 1e-3
+
+    @pytest.mark.asyncio
+    async def test_logprobs_single_rejects_non_mcq(self):
+        """LogprobsSingle raises NonRetryableError for open_response questions."""
+        from src.worker import LogprobsSingle
+
+        mock_llm = AsyncMock()
+        backstory = "I am a person."
+        questions = [
+            Question(
+                qkey="q_open",
+                type="open_response",
+                text="Tell me about yourself.",
+                options=None,
+            )
+        ]
+
+        strategy = LogprobsSingle()
+        with pytest.raises(NonRetryableError, match="MCQ"):
+            await strategy.fill(backstory, questions, mock_llm)

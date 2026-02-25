@@ -24,7 +24,7 @@ from src.response import NonRetryableError, MultimodalNotSupportedError
 from src.metrics import LatencyTracker, MetricsLogger
 from src.parser import ParserLLM
 from src.queue import AsyncQueueConsumer
-from src.worker import TaskProcessor, IndependentRepeat
+from src.worker import TaskProcessor, IndependentRepeat, LogprobsSingle
 
 # Configure logging
 logging.basicConfig(
@@ -234,9 +234,14 @@ async def main():
 
             strategy = None
             if is_demographic:
-                num_trials = demo_key_info.get("num_trials", 20)
-                strategy = IndependentRepeat(num_trials=num_trials)
-                logger.info(f"Task {task_id}: demographic survey, using IndependentRepeat(n={num_trials})")
+                distribution_mode = demo_key_info.get("distribution_mode", "n_sample")
+                if distribution_mode == "logprobs":
+                    strategy = LogprobsSingle()
+                    logger.info(f"Task {task_id}: demographic survey, using LogprobsSingle")
+                else:
+                    num_trials = demo_key_info.get("num_trials", 20)
+                    strategy = IndependentRepeat(num_trials=num_trials)
+                    logger.info(f"Task {task_id}: demographic survey, using IndependentRepeat(n={num_trials})")
 
             processor = TaskProcessor(
                 db=db,
@@ -256,6 +261,7 @@ async def main():
             if is_demographic and result.success and result.result:
                 demo_key = demo_key_info["key"]
                 backstory_id = task["backstory_id"]
+                distribution_mode = demo_key_info.get("distribution_mode", "n_sample")
 
                 # Fetch questions to map letter answers (A/B/C…) to option texts
                 questions_data = await asyncio.to_thread(
@@ -264,11 +270,6 @@ async def main():
                 questions_by_qkey = {q.get("qkey"): q for q in (questions_data or [])}
 
                 for qkey, raw_answers_str in result.result.items():
-                    # Parse the N answers (joined by '||')
-                    answers = [a for a in raw_answers_str.split("||") if a]
-                    if not answers:
-                        continue
-
                     # Map single letter → option text (MCQ answers come back as A/B/C…)
                     question_opts = questions_by_qkey.get(qkey, {}).get("options") or []
 
@@ -279,16 +280,31 @@ async def main():
                                 return question_opts[idx]
                         return letter
 
-                    # Compute frequency distribution over option texts
-                    counts: dict[str, int] = {}
-                    for ans in answers:
-                        text = letter_to_text(ans)
-                        counts[text] = counts.get(text, 0) + 1
-                    total = len(answers)
-                    distribution = {k: round(v / total, 4) for k, v in counts.items()}
-
-                    # Find mode (most frequent answer)
-                    value = max(counts, key=counts.get)  # type: ignore[arg-type]
+                    if distribution_mode == "logprobs":
+                        # raw_answers_str is a JSON-encoded letter distribution:
+                        # '{"A": 0.72, "B": 0.25, "C": 0.03}'
+                        letter_dist = json.loads(raw_answers_str)
+                        if not letter_dist:
+                            continue
+                        # Convert letter-keyed dist to option-text-keyed dist
+                        distribution = {letter_to_text(k): round(v, 4) for k, v in letter_dist.items()}
+                        # Find mode letter then convert to option text
+                        best_letter = max(letter_dist, key=letter_dist.get)  # type: ignore[arg-type]
+                        value = letter_to_text(best_letter)
+                    else:
+                        # n_sample mode: parse the N answers (joined by '||')
+                        answers = [a for a in raw_answers_str.split("||") if a]
+                        if not answers:
+                            continue
+                        # Compute frequency distribution over option texts
+                        counts: dict[str, int] = {}
+                        for ans in answers:
+                            text = letter_to_text(ans)
+                            counts[text] = counts.get(text, 0) + 1
+                        total = len(answers)
+                        distribution = {k: round(v / total, 4) for k, v in counts.items()}
+                        # Find mode (most frequent answer)
+                        value = max(counts, key=counts.get)  # type: ignore[arg-type]
 
                     logger.info(f"Task {task_id}: writing demographic result "
                                 f"{demo_key}={value} (dist={distribution})")
