@@ -171,7 +171,7 @@ export type SurveyTaskStatus = 'pending' | 'queued' | 'processing' | 'completed'
 export interface SurveyTask {
   id: string
   survey_run_id: string
-  backstory_id: string
+  backstory_id: string | null
   status: SurveyTaskStatus
   result: { [qkey: string]: string | string[] } | null
   error: string | null

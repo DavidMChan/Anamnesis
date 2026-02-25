@@ -260,7 +260,7 @@ function FailedTaskErrors({
                 <div key={err.id} className="text-xs rounded border border-destructive/10 bg-background p-2 flex items-start gap-2">
                   <div className="flex-1 min-w-0">
                     <span className="font-mono text-muted-foreground">
-                      {err.backstory_id.slice(0, 8)}...
+                      {err.backstory_id ? `${err.backstory_id.slice(0, 8)}...` : err.id.slice(0, 8)}
                     </span>
                     <span className="mx-2 text-destructive/40">|</span>
                     <span className="text-destructive">{err.error || 'Unknown error'}</span>
