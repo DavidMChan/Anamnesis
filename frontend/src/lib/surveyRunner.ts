@@ -3,7 +3,7 @@
  */
 import { supabase } from './supabase'
 import { applyDemographicFilters, isDemographicSelectionConfig, selectBackstoryIds } from './backstoryFilters'
-import type { LLMConfig, SurveyRun, DemographicFilter, DemographicSelectionConfig } from '@/types/database'
+import type { LLMConfig, SurveyRun, DemographicFilter, DemographicSelectionConfig, SurveyAlgorithm } from '@/types/database'
 
 interface CreateSurveyRunOptions {
   surveyId: string
@@ -88,6 +88,7 @@ export async function createSurveyRun(
         error_log: [],
         llm_config: llmConfig,
         demographics: rawDemographics,
+        algorithm: 'anthology',
       })
       .select()
       .single()
@@ -114,6 +115,64 @@ export async function createSurveyRun(
     // Mark survey as active (has been run at least once)
     await supabase.from('surveys').update({ status: 'active' }).eq('id', surveyId)
 
+    return { success: true, runId: run.id }
+  } catch (error) {
+    return { success: false, error: String(error) }
+  }
+}
+
+/**
+ * Create a new zero-shot baseline run.
+ *
+ * Creates N tasks (controlled by sample_size) with backstory_id = null.
+ * The worker constructs a short demographic prompt from the run's demographic filters
+ * and sends it N times independently.
+ */
+export async function createZeroShotBaselineRun(
+  options: CreateSurveyRunOptions
+): Promise<CreateSurveyRunResult> {
+  const { surveyId, llmConfig, demographics: rawDemographics } = options
+  const n = isDemographicSelectionConfig(rawDemographics) ? rawDemographics.sample_size : 10
+
+  if (!n || n <= 0) return { success: false, error: 'Number of trials must be > 0' }
+
+  try {
+    const { data: run, error: runError } = await supabase
+      .from('survey_runs')
+      .insert({
+        survey_id: surveyId,
+        status: 'pending',
+        total_tasks: n,
+        completed_tasks: 0,
+        failed_tasks: 0,
+        results: {},
+        error_log: [],
+        llm_config: llmConfig,
+        demographics: rawDemographics,
+        algorithm: 'zero_shot_baseline' as SurveyAlgorithm,
+      })
+      .select()
+      .single()
+
+    if (runError || !run) {
+      return { success: false, error: runError?.message ?? 'Failed to create run' }
+    }
+
+    // N tasks, all with backstory_id = null
+    const tasks = Array.from({ length: n }, () => ({
+      survey_run_id: run.id,
+      backstory_id: null,
+      status: 'pending',
+      attempts: 0,
+    }))
+
+    const { error: tasksError } = await supabase.from('survey_tasks').insert(tasks)
+    if (tasksError) {
+      await supabase.from('survey_runs').delete().eq('id', run.id)
+      return { success: false, error: tasksError.message }
+    }
+
+    await supabase.from('surveys').update({ status: 'active' }).eq('id', surveyId)
     return { success: true, runId: run.id }
   } catch (error) {
     return { success: false, error: String(error) }
