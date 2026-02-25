@@ -1,5 +1,5 @@
 import { Button } from '@/components/ui/button'
-import { ArrowLeft, Download } from 'lucide-react'
+import { ArrowLeft, Download, Loader2 } from 'lucide-react'
 import type { Survey, SurveyRun } from '@/types/database'
 import { getModelName } from '@/lib/llmConfig'
 
@@ -9,9 +9,10 @@ interface ResultsHeroProps {
     totalResponses: number
     onBack: () => void
     onDownloadCSV: () => void
+    isDownloadingCSV?: boolean
 }
 
-export function ResultsHero({ survey, run, totalResponses, onBack, onDownloadCSV }: ResultsHeroProps) {
+export function ResultsHero({ survey, run, totalResponses, onBack, onDownloadCSV, isDownloadingCSV }: ResultsHeroProps) {
     const modelName = run ? getModelName(run.llm_config) : undefined
 
     return (
@@ -26,9 +27,11 @@ export function ResultsHero({ survey, run, totalResponses, onBack, onDownloadCSV
                     {modelName && ` • ${modelName}`}
                 </p>
             </div>
-            <Button onClick={onDownloadCSV}>
-                <Download className="h-4 w-4 mr-2" />
-                Download CSV
+            <Button onClick={onDownloadCSV} disabled={isDownloadingCSV}>
+                {isDownloadingCSV
+                    ? <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    : <Download className="h-4 w-4 mr-2" />}
+                {isDownloadingCSV ? 'Downloading...' : 'Download CSV'}
             </Button>
         </div>
     )

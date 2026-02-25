@@ -124,6 +124,7 @@ export function SurveyResults() {
   const [demographicKeys, setDemographicKeys] = useState<DemographicKey[] | null>(null)
   const [selectedFilters, setSelectedFilters] = useState<{ key: string; value: string }[]>([])
   const [loadingDemographics, setLoadingDemographics] = useState(false)
+  const [downloadingCSV, setDownloadingCSV] = useState(false)
   const chartRefs = useRef<Map<string, HTMLDivElement>>(new Map())
 
   useEffect(() => {
@@ -512,14 +513,43 @@ export function SurveyResults() {
     return answer
   }
 
-  const downloadCSV = () => {
-    if (!survey || !run) return
+  const downloadCSV = async () => {
+    if (!survey || !run || downloadingCSV) return
+    setDownloadingCSV(true)
+
     const isZeroShot = run.algorithm === 'zero_shot_baseline'
-    const headers = [isZeroShot ? 'trial_index' : 'backstory_id', ...survey.questions.map((q) => q.qkey)]
+
+    // Fetch backstory demographics via RPC (single query with temp table join)
+    // Only relevant for anthology runs (zero_shot has no backstories)
+    let backstoryMap: Map<string, Record<string, unknown>> = new Map()
+    if (!isZeroShot) {
+      const backstoryIds = Object.keys(results)
+      if (backstoryIds.length > 0) {
+        const { data } = await supabase.rpc('get_backstory_demographics', {
+          backstory_ids: backstoryIds,
+        })
+        if (data) {
+          backstoryMap = new Map(
+            (data as { id: string; demographics: Record<string, unknown> }[]).map((b) => [b.id, b.demographics])
+          )
+        }
+      }
+    }
+
+    const questionHeaders = survey.questions.map((q) => `${q.qkey}: ${q.text}`)
+    const firstCol = isZeroShot ? 'trial_index' : 'backstory_id'
+    const headers = isZeroShot
+      ? [firstCol, ...questionHeaders]
+      : [firstCol, 'demographics', ...questionHeaders]
 
     const rows = Object.entries(results).map(([backstoryId, responses], index) => {
+      const firstColValue = isZeroShot ? `Trial ${index + 1}` : backstoryId
+      const demographics = backstoryMap.get(backstoryId)
+      const demographicsStr = demographics ? JSON.stringify(demographics) : ''
+
       return [
-        isZeroShot ? `Trial ${index + 1}` : backstoryId,
+        firstColValue,
+        ...(isZeroShot ? [] : [demographicsStr]),
         ...survey.questions.map((q) => {
           const answer = responses[q.qkey]
           if (!answer) return ''
@@ -555,16 +585,22 @@ export function SurveyResults() {
       ]
     })
 
+    const escape = (cell: string) => `"${cell.replace(/"/g, '""')}"`
     const csvContent = [
-      headers.join(','),
-      ...rows.map((row) => row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')),
+      headers.map(escape).join(','),
+      ...rows.map((row) => row.map((cell) => escape(String(cell))).join(',')),
     ].join('\n')
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
     const link = document.createElement('a')
     link.href = URL.createObjectURL(blob)
-    link.download = `${survey.name || 'survey'}_results.csv`
+    const sampleSize = Object.keys(results).length
+    const slugName = (survey.name || 'survey').replace(/\s+/g, '_')
+    link.download = `${slugName}_${run.algorithm}_sample_${sampleSize}.csv`
+    document.body.appendChild(link)
     link.click()
+    document.body.removeChild(link)
+    setDownloadingCSV(false)
   }
 
   if (loading) {
@@ -600,6 +636,7 @@ export function SurveyResults() {
           totalResponses={totalResponses}
           onBack={() => navigate(`/surveys/${survey.id}`)}
           onDownloadCSV={downloadCSV}
+          isDownloadingCSV={downloadingCSV}
         />
 
         <RunConfigCard run={run} />
