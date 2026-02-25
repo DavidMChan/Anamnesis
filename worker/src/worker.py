@@ -23,6 +23,7 @@ from .prompt import (
     build_multimodal_prompt,
 )
 from .llm import UnifiedLLMClient
+from .logprobs import parse_logprobs_to_distribution
 from .media import WasabiMediaClient
 from .response import LLMResponse, RetryableError, NonRetryableError
 from .parser import ParserLLM
@@ -237,6 +238,55 @@ class IndependentRepeat:
 
         logger.warning(f"IndependentRepeat trial {trial}: all retries failed for {question.qkey}")
         return "", raw
+
+
+class LogprobsSingle:
+    """
+    Logprobs mode for demographic surveys: asks each MCQ question once with
+    logprobs=True and computes the probability distribution from token
+    log-probabilities. ~20x cheaper than IndependentRepeat.
+
+    Only supports MCQ questions (raises NonRetryableError for other types).
+    Returns {qkey: JSON_string_of_letter_distribution} e.g. '{"A": 0.72, "B": 0.28}'.
+    """
+
+    async def fill(
+        self,
+        backstory: str,
+        questions: List[Question],
+        llm: UnifiedLLMClient,
+        parser_llm: Optional[ParserLLM] = None,
+        media_client: Optional[WasabiMediaClient] = None,
+    ) -> Dict[str, str]:
+        import json
+        results: Dict[str, str] = {}
+
+        for question in questions:
+            if question.type != "mcq":
+                raise NonRetryableError(
+                    f"LogprobsSingle only supports MCQ questions, got type='{question.type}' "
+                    f"for question '{question.qkey}'"
+                )
+
+            text_prompt = build_initial_prompt(backstory, question)
+            logprobs_result = await llm.async_complete_logprobs(text_prompt)
+
+            num_options = len(question.options) if question.options else 0
+            if num_options == 0:
+                raise NonRetryableError(
+                    f"LogprobsSingle requires MCQ options, but question '{question.qkey}' has none"
+                )
+
+            distribution = parse_logprobs_to_distribution(
+                logprobs_result.top_logprobs, num_options
+            )
+            results[question.qkey] = json.dumps(distribution)
+            logger.info(
+                f"LogprobsSingle: {question.qkey} distribution={distribution} "
+                f"(generated_token={logprobs_result.generated_token!r})"
+            )
+
+        return results
 
 
 # ─── TaskProcessor ────────────────────────────────────────────────────────────
