@@ -105,6 +105,7 @@ export function SurveyView() {
   const [questionsExpanded, setQuestionsExpanded] = useState(false)
   const [runDemographics, setRunDemographics] = useState<DemographicSelectionConfig>(defaultDemographicSelectionConfig())
   const [runAlgorithm, setRunAlgorithm] = useState<SurveyAlgorithm>('anthology')
+  const [runPromptText, setRunPromptText] = useState('')
 
   // Fetch survey run data
   const { run: latestRun, runs, isRunning, refresh: refreshRuns } = useSurveyRun({
@@ -130,6 +131,16 @@ export function SurveyView() {
       setRunDemographics(legacyToSelectionConfig(stored as DemographicFilterType & { _sample_size?: number[] }))
     }
   }, [survey?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-generate the zero-shot prompt whenever algorithm or demographics change.
+  // User can freely edit the generated text afterwards.
+  useEffect(() => {
+    if (runAlgorithm !== 'zero_shot_baseline') return
+    const filters = isDemographicSelectionConfig(runDemographics)
+      ? runDemographics.filters
+      : runDemographics
+    setRunPromptText(buildDemographicPromptText(filters))
+  }, [runAlgorithm, runDemographics]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const fetchSurvey = async () => {
     if (!id) return
@@ -197,7 +208,8 @@ export function SurveyView() {
 
     // Merge profile defaults + local overrides into run config snapshot
     const runLlmConfig = mergeEffectiveConfig(llmConfig, runOverrides)
-    const runId = await createRun(survey.id, runLlmConfig, runDemographics, runAlgorithm)
+    const promptText = runAlgorithm === 'zero_shot_baseline' ? runPromptText : undefined
+    const runId = await createRun(survey.id, runLlmConfig, runDemographics, runAlgorithm, promptText)
     if (runId) {
       refreshRuns()
       fetchSurvey()
@@ -452,28 +464,36 @@ export function SurveyView() {
                   : 'What will be sent to the LLM for each backstory (run once per backstory)'}
               </CardDescription>
             </CardHeader>
-            <CardContent>
-              <pre className="text-sm bg-muted rounded-lg p-4 whitespace-pre-wrap font-mono overflow-x-auto leading-relaxed">
-                {runAlgorithm === 'zero_shot_baseline' ? (
-                  buildDemographicPromptText(
-                    isDemographicSelectionConfig(runDemographics)
-                      ? runDemographics.filters
-                      : runDemographics
-                  )
-                ) : (
+            <CardContent className="space-y-2">
+              {runAlgorithm === 'zero_shot_baseline' ? (
+                <>
+                  <textarea
+                    className="w-full text-sm bg-muted rounded-lg p-4 font-mono leading-relaxed border-0 resize-none focus:outline-none focus:ring-1 focus:ring-ring"
+                    rows={3}
+                    value={runPromptText}
+                    onChange={(e) => setRunPromptText(e.target.value)}
+                  />
+                  <pre className="text-sm bg-muted rounded-lg p-4 whitespace-pre-wrap font-mono overflow-x-auto leading-relaxed text-muted-foreground">
+                    {'\n'}
+                    {formatQuestionPreview(survey.questions[0])}
+                    {survey.questions.length > 1 && (
+                      <>{'\n\n'}{`// + ${survey.questions.length - 1} more question(s)`}</>
+                    )}
+                  </pre>
+                </>
+              ) : (
+                <pre className="text-sm bg-muted rounded-lg p-4 whitespace-pre-wrap font-mono overflow-x-auto leading-relaxed">
                   <span className="text-muted-foreground italic">[backstory text]</span>
-                )}
-                {'\n\n'}
-                {formatQuestionPreview(survey.questions[0])}
-                {survey.questions.length > 1 && (
-                  <span className="text-muted-foreground">
-                    {'\n\n'}
-                    {runAlgorithm === 'anthology'
-                      ? `// + ${survey.questions.length - 1} more question(s) with context accumulation`
-                      : `// + ${survey.questions.length - 1} more question(s)`}
-                  </span>
-                )}
-              </pre>
+                  {'\n\n'}
+                  {formatQuestionPreview(survey.questions[0])}
+                  {survey.questions.length > 1 && (
+                    <span className="text-muted-foreground">
+                      {'\n\n'}
+                      {`// + ${survey.questions.length - 1} more question(s) with context accumulation`}
+                    </span>
+                  )}
+                </pre>
+              )}
             </CardContent>
           </Card>
         )}

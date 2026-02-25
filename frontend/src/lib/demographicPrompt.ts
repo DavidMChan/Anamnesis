@@ -1,53 +1,55 @@
 import type { DemographicFilter } from '@/types/database'
 
 /**
- * Build a zero-shot demographic prompt text from a DemographicFilter.
- *
- * Logic (identical to worker/src/prompt.py build_demographic_prompt):
- *   - Keys are processed in sorted order for determinism
- *   - "c_" prefix is stripped → dimension name
- *   - Keys containing "age" get "year old" suffix
- *   - {min, max} → "{min}-{max} year old" / "{min}-{max} {dimName}"
- *   - {min} only → "{min}+ year old" / "{min}+ {dimName}"
- *   - {max} only → "under {max} year old" / "under {max} {dimName}"
- *   - string[] single → value as-is
- *   - string[] multiple → joined with " or "
- *
- * Returns "You are a {descriptors}." or "You are a person." if empty.
+ * Fallback demographic prompt preview (mirrors worker/src/prompt.py build_demographic_prompt).
+ * No hardcoded keys or values — works with any user-defined demographics.
+ * The actual prompt at runtime is LLM-generated; this is for UI preview only.
  */
-export function buildDemographicPromptText(filters: DemographicFilter): string {
-  const keys = Object.keys(filters).sort()
-  const descriptors: string[] = []
 
-  for (const key of keys) {
+function keyToLabel(key: string): string {
+  const base = key.startsWith('c_') ? key.slice(2) : key
+  return base.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())
+}
+
+function parseFilters(filters: DemographicFilter): { pairs: [string, string][]; isGroup: boolean } {
+  const pairs: [string, string][] = []
+  let isGroup = false
+
+  for (const key of Object.keys(filters).sort()) {
     const value = filters[key]
-    if (value === undefined) continue
+    if (value === undefined || value === null) continue
 
-    const dimName = key.startsWith('c_') ? key.slice(2) : key
-    const isAge = dimName.includes('age')
+    const label = keyToLabel(key)
 
     if (Array.isArray(value)) {
-      if (value.length === 0) continue
-      if (value.length === 1) {
-        descriptors.push(value[0])
-      } else {
-        descriptors.push(value.join(' or '))
-      }
-    } else if (typeof value === 'object' && value !== null) {
+      const vals = value.map(String).filter((v) => v)
+      if (vals.length === 0) continue
+      if (vals.length > 1) isGroup = true
+      pairs.push([label, vals.join(' or ')])
+    } else if (typeof value === 'object') {
       const { min, max } = value as { min?: number; max?: number }
-      if (min !== undefined && max !== undefined) {
-        descriptors.push(isAge ? `${min}-${max} year old` : `${min}-${max} ${dimName}`)
-      } else if (min !== undefined) {
-        descriptors.push(isAge ? `${min}+ year old` : `${min}+ ${dimName}`)
-      } else if (max !== undefined) {
-        descriptors.push(isAge ? `under ${max} year old` : `under ${max} ${dimName}`)
-      }
+      if (min !== undefined && max !== undefined) pairs.push([label, `${min}-${max}`])
+      else if (min !== undefined) pairs.push([label, `${min}+`])
+      else if (max !== undefined) pairs.push([label, `under ${max}`])
+    } else {
+      pairs.push([label, String(value)])
     }
   }
 
-  if (descriptors.length === 0) {
-    return 'You are a person.'
-  }
+  return { pairs, isGroup }
+}
 
-  return `You are a ${descriptors.join(' ')}.`
+export function buildDemographicPromptText(filters: DemographicFilter): string {
+  const { pairs, isGroup } = parseFilters(filters)
+  if (pairs.length === 0) return 'You are a person.'
+
+  const desc = pairs.map(([label, val]) => `${label}: ${val}`).join(', ')
+
+  if (isGroup) {
+    return (
+      `You are one person from a group with these characteristics: ${desc}. ` +
+      'Answer as if you are one specific person from this group.'
+    )
+  }
+  return `You are a person with these characteristics: ${desc}.`
 }

@@ -9,6 +9,7 @@ interface CreateSurveyRunOptions {
   surveyId: string
   llmConfig: LLMConfig
   demographics: DemographicFilter | DemographicSelectionConfig
+  promptText?: string
 }
 
 interface CreateSurveyRunResult {
@@ -131,10 +132,16 @@ export async function createSurveyRun(
 export async function createZeroShotBaselineRun(
   options: CreateSurveyRunOptions
 ): Promise<CreateSurveyRunResult> {
-  const { surveyId, llmConfig, demographics: rawDemographics } = options
+  const { surveyId, llmConfig, demographics: rawDemographics, promptText } = options
   const n = isDemographicSelectionConfig(rawDemographics) ? rawDemographics.sample_size : 10
 
   if (!n || n <= 0) return { success: false, error: 'Number of trials must be > 0' }
+
+  // Embed the user-edited prompt text into the demographics object so the worker
+  // can read it directly without regenerating.
+  const demographicsWithPrompt = promptText
+    ? { ...rawDemographics, prompt_text: promptText }
+    : rawDemographics
 
   try {
     const { data: run, error: runError } = await supabase
@@ -148,7 +155,7 @@ export async function createZeroShotBaselineRun(
         results: {},
         error_log: [],
         llm_config: llmConfig,
-        demographics: rawDemographics,
+        demographics: demographicsWithPrompt,
         algorithm: 'zero_shot_baseline' as SurveyAlgorithm,
       })
       .select()

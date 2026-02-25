@@ -321,59 +321,73 @@ def get_response_schema(question: Question) -> dict:
 # ─── Demographic prompt builder ──────────────────────────────────────────────
 
 
-def build_demographic_prompt(filters: dict) -> str:
+def _key_to_label(key: str) -> str:
+    base = key[2:] if key.startswith("c_") else key
+    return base.replace("_", " ").title()
+
+
+def _parse_filters(filters: dict) -> tuple:
     """
-    Build a zero-shot demographic prompt text from a DemographicFilter dict.
-
-    Logic (identical to frontend/src/lib/demographicPrompt.ts):
-      - Keys processed in sorted order for determinism
-      - "c_" prefix stripped → dimension name
-      - Keys containing "age" get "year old" suffix
-      - {min, max} → "{min}-{max} year old" / "{min}-{max} {dim_name}"
-      - {min} only  → "{min}+ year old"     / "{min}+ {dim_name}"
-      - {max} only  → "under {max} year old" / "under {max} {dim_name}"
-      - list single → value as-is
-      - list multi  → joined with " or "
-
-    Returns "You are a {descriptors}." or "You are a person." if empty.
+    Return (pairs, is_group) where:
+      pairs    — list of (label, value_str), one entry per non-empty key
+      is_group — True if any key has more than one value selected
     """
-    descriptors = []
+    pairs = []
+    is_group = False
 
-    for key in sorted(filters.keys()):
-        value = filters[key]
+    for key, value in sorted(filters.items()):
         if value is None:
             continue
-
-        dim_name = key[2:] if key.startswith("c_") else key
-        is_age = "age" in dim_name
+        label = _key_to_label(key)
 
         if isinstance(value, list):
-            if not value:
+            vals = [str(v) for v in value if v is not None]
+            if not vals:
                 continue
-            if len(value) == 1:
-                descriptors.append(str(value[0]))
-            else:
-                descriptors.append(" or ".join(str(v) for v in value))
+            if len(vals) > 1:
+                is_group = True
+            v_str = " or ".join(vals)
         elif isinstance(value, dict):
-            min_val = value.get("min")
-            max_val = value.get("max")
-            if min_val is not None and max_val is not None:
-                descriptors.append(
-                    f"{min_val}-{max_val} year old" if is_age else f"{min_val}-{max_val} {dim_name}"
-                )
-            elif min_val is not None:
-                descriptors.append(
-                    f"{min_val}+ year old" if is_age else f"{min_val}+ {dim_name}"
-                )
-            elif max_val is not None:
-                descriptors.append(
-                    f"under {max_val} year old" if is_age else f"under {max_val} {dim_name}"
-                )
+            min_v, max_v = value.get("min"), value.get("max")
+            if min_v is not None and max_v is not None:
+                v_str = f"{min_v}-{max_v}"
+            elif min_v is not None:
+                v_str = f"{min_v}+"
+            elif max_v is not None:
+                v_str = f"under {max_v}"
+            else:
+                continue
+        else:
+            v_str = str(value)
 
-    if not descriptors:
+        pairs.append((label, v_str))
+
+    return pairs, is_group
+
+
+def build_demographic_prompt(filters: dict) -> str:
+    """
+    Build a demographic prompt from filters (used as fallback when no stored prompt_text).
+
+    Single values:  "You are a person with these characteristics: Age: 25-34, Gender: Female."
+    Multi-values:   "You are one person from a group with these characteristics: ...
+                     Answer as if you are one specific person from this group."
+
+    No hardcoded keys or values — works with any user-defined demographics.
+    Logic is mirrored in frontend/src/lib/demographicPrompt.ts.
+    """
+    pairs, is_group = _parse_filters(filters)
+    if not pairs:
         return "You are a person."
 
-    return f"You are a {' '.join(descriptors)}."
+    desc = ", ".join(f"{label}: {val}" for label, val in pairs)
+
+    if is_group:
+        return (
+            f"You are one person from a group with these characteristics: {desc}. "
+            "Answer as if you are one specific person from this group."
+        )
+    return f"You are a person with these characteristics: {desc}."
 
 
 # ─── Multimodal prompt building ──────────────────────────────────────────────

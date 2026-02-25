@@ -234,13 +234,15 @@ async def main():
                 run_demographics = await asyncio.to_thread(
                     db.get_run_demographics, task["survey_run_id"]
                 )
-                # DemographicSelectionConfig stores filters under "filters"; raw DemographicFilter used as-is
-                filters = (
-                    run_demographics.get("filters", run_demographics)
-                    if isinstance(run_demographics, dict)
-                    else {}
-                )
-                task["zero_shot_prompt_text"] = build_demographic_prompt(filters)
+                if isinstance(run_demographics, dict):
+                    # Use the user-edited prompt text if stored; otherwise fall back to auto-generated
+                    stored_prompt = run_demographics.get("prompt_text")
+                    if not stored_prompt:
+                        filters = run_demographics.get("filters", run_demographics)
+                        stored_prompt = build_demographic_prompt(filters)
+                else:
+                    stored_prompt = "You are a person."
+                task["zero_shot_prompt_text"] = stored_prompt
                 logger.info(
                     f"Task {task_id}: zero_shot_baseline, prompt={task['zero_shot_prompt_text']!r}"
                 )

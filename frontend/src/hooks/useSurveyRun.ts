@@ -134,12 +134,13 @@ export function useCreateSurveyRun() {
       llmConfig: import('@/types/database').LLMConfig,
       demographics: DemographicFilter | DemographicSelectionConfig,
       algorithm: SurveyAlgorithm = 'anthology',
+      promptText?: string,
     ): Promise<string | null> => {
       setLoading(true)
       setError(null)
 
       const fn = algorithm === 'zero_shot_baseline' ? createZeroShotBaselineRun : createSurveyRun
-      const result = await fn({ surveyId, llmConfig, demographics })
+      const result = await fn({ surveyId, llmConfig, demographics, promptText })
 
       setLoading(false)
 
