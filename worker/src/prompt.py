@@ -318,6 +318,64 @@ def get_response_schema(question: Question) -> dict:
         }
 
 
+# ─── Demographic prompt builder ──────────────────────────────────────────────
+
+
+def build_demographic_prompt(filters: dict) -> str:
+    """
+    Build a zero-shot demographic prompt text from a DemographicFilter dict.
+
+    Logic (identical to frontend/src/lib/demographicPrompt.ts):
+      - Keys processed in sorted order for determinism
+      - "c_" prefix stripped → dimension name
+      - Keys containing "age" get "year old" suffix
+      - {min, max} → "{min}-{max} year old" / "{min}-{max} {dim_name}"
+      - {min} only  → "{min}+ year old"     / "{min}+ {dim_name}"
+      - {max} only  → "under {max} year old" / "under {max} {dim_name}"
+      - list single → value as-is
+      - list multi  → joined with " or "
+
+    Returns "You are a {descriptors}." or "You are a person." if empty.
+    """
+    descriptors = []
+
+    for key in sorted(filters.keys()):
+        value = filters[key]
+        if value is None:
+            continue
+
+        dim_name = key[2:] if key.startswith("c_") else key
+        is_age = "age" in dim_name
+
+        if isinstance(value, list):
+            if not value:
+                continue
+            if len(value) == 1:
+                descriptors.append(str(value[0]))
+            else:
+                descriptors.append(" or ".join(str(v) for v in value))
+        elif isinstance(value, dict):
+            min_val = value.get("min")
+            max_val = value.get("max")
+            if min_val is not None and max_val is not None:
+                descriptors.append(
+                    f"{min_val}-{max_val} year old" if is_age else f"{min_val}-{max_val} {dim_name}"
+                )
+            elif min_val is not None:
+                descriptors.append(
+                    f"{min_val}+ year old" if is_age else f"{min_val}+ {dim_name}"
+                )
+            elif max_val is not None:
+                descriptors.append(
+                    f"under {max_val} year old" if is_age else f"under {max_val} {dim_name}"
+                )
+
+    if not descriptors:
+        return "You are a person."
+
+    return f"You are a {' '.join(descriptors)}."
+
+
 # ─── Multimodal prompt building ──────────────────────────────────────────────
 
 
