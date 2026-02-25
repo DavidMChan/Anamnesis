@@ -2,15 +2,19 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { Layout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { supabase } from '@/lib/supabase'
 import { useSurveyRun } from '@/hooks/useSurveyRun'
 import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
 import { cancelSurveyRun, rerunDemographicSurvey } from '@/lib/surveyRunner'
 import { toast } from '@/hooks/use-toast'
-import type { Survey, SurveyRun, DemographicKey, DemographicKeyStatus } from '@/types/database'
-import { ArrowLeft, History, RotateCcw } from 'lucide-react'
+import type { Survey, SurveyRun, DemographicKey, DemographicKeyStatus, DistributionMode } from '@/types/database'
+import { ArrowLeft, History, RotateCcw, Pencil, Check, X, Plus } from 'lucide-react'
 
 const statusVariants: Record<DemographicKeyStatus, 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info' | 'gold'> = {
   pending: 'outline',
@@ -20,7 +24,7 @@ const statusVariants: Record<DemographicKeyStatus, 'default' | 'secondary' | 'de
 }
 
 export function DemographicSurveyView() {
-  const { id } = useParams() // survey_id
+  const { id } = useParams()
   const navigate = useNavigate()
   const [survey, setSurvey] = useState<Survey | null>(null)
   const [demographicKey, setDemographicKey] = useState<DemographicKey | null>(null)
@@ -29,59 +33,108 @@ export function DemographicSurveyView() {
   const [selectedRun, setSelectedRun] = useState<SurveyRun | null>(null)
   const [rerunning, setRerunning] = useState(false)
 
+  // Question editing
+  const [editingQuestion, setEditingQuestion] = useState(false)
+  const [questionText, setQuestionText] = useState('')
+  const [questionOptions, setQuestionOptions] = useState<string[]>([])
+  const [newOption, setNewOption] = useState('')
+  const [savingQuestion, setSavingQuestion] = useState(false)
+
+  // Config for next re-run
+  const [nextDistributionMode, setNextDistributionMode] = useState<DistributionMode>('n_sample')
+  const [nextNumTrials, setNextNumTrials] = useState(20)
+
   const { run: latestRun, runs, isRunning, refresh: refreshRuns } = useSurveyRun({
     surveyId: id,
     autoPoll: true,
     pollInterval: 3000,
   })
 
-  useEffect(() => {
-    fetchData()
-  }, [id])
+  useEffect(() => { fetchData() }, [id])
 
-  // Refresh demographic key status when run completes
   useEffect(() => {
     if (latestRun && !isRunning && demographicKey?.status === 'running') {
       fetchDemographicKey(survey?.demographic_key)
     }
   }, [latestRun?.status])
 
+  useEffect(() => {
+    if (latestRun?.llm_config) {
+      setNextDistributionMode(latestRun.llm_config.distribution_mode || 'n_sample')
+      setNextNumTrials(latestRun.llm_config.num_trials || 20)
+    }
+  }, [latestRun?.id])
+
   const fetchData = async () => {
     if (!id) return
-
     const { data: surveyData, error: surveyError } = await supabase
-      .from('surveys')
-      .select('*')
-      .eq('id', id)
-      .single()
-
+      .from('surveys').select('*').eq('id', id).single()
     if (surveyError) {
-      console.error('Error fetching survey:', surveyError)
       navigate('/demographic-surveys')
       return
     }
-
     const s = surveyData as Survey
     setSurvey(s)
-
-    // Fetch the associated demographic key by slug
-    if (s.demographic_key) {
-      await fetchDemographicKey(s.demographic_key)
-    }
-
+    setQuestionText(s.questions[0]?.text || '')
+    setQuestionOptions(s.questions[0]?.options || [])
+    if (s.demographic_key) await fetchDemographicKey(s.demographic_key)
     setLoading(false)
   }
 
   const fetchDemographicKey = async (keySlug?: string | null) => {
     if (!keySlug) return
-    const { data } = await supabase
-      .from('demographic_keys')
-      .select('*')
-      .eq('key', keySlug)
-      .single()
+    const { data } = await supabase.from('demographic_keys').select('*').eq('key', keySlug).single()
+    if (data) setDemographicKey(data as DemographicKey)
+  }
 
-    if (data) {
-      setDemographicKey(data as DemographicKey)
+  const startEditing = () => {
+    const q = survey?.questions[0]
+    setQuestionText(q?.text || '')
+    setQuestionOptions(q?.options || [])
+    setEditingQuestion(true)
+  }
+
+  const cancelEditing = () => {
+    setEditingQuestion(false)
+    setNewOption('')
+  }
+
+  const addOption = () => {
+    const trimmed = newOption.trim()
+    if (!trimmed || questionOptions.includes(trimmed)) return
+    setQuestionOptions([...questionOptions, trimmed])
+    setNewOption('')
+  }
+
+  const removeOption = (val: string) => {
+    setQuestionOptions(questionOptions.filter((o) => o !== val))
+  }
+
+  const saveQuestion = async () => {
+    if (!survey || !demographicKey) return
+    if (questionOptions.length < 2) {
+      toast({ title: 'At least 2 options required', variant: 'destructive' })
+      return
+    }
+    setSavingQuestion(true)
+    try {
+      const updatedQuestion = { ...survey.questions[0], text: questionText, options: questionOptions }
+
+      const [surveyRes, dkRes] = await Promise.all([
+        supabase.from('surveys').update({ questions: [updatedQuestion] }).eq('id', survey.id),
+        supabase.from('demographic_keys').update({ enum_values: questionOptions }).eq('key', demographicKey.key),
+      ])
+      if (surveyRes.error) throw surveyRes.error
+      if (dkRes.error) throw dkRes.error
+
+      setSurvey({ ...survey, questions: [updatedQuestion] })
+      setDemographicKey({ ...demographicKey, enum_values: questionOptions })
+      setEditingQuestion(false)
+      toast({ title: 'Question saved' })
+    } catch (e) {
+      toast({ title: 'Save failed', description: String(e instanceof Error ? e.message : e), variant: 'destructive' })
+    } finally {
+      setSavingQuestion(false)
     }
   }
 
@@ -89,7 +142,12 @@ export function DemographicSurveyView() {
     if (!survey) return
     setRerunning(true)
     try {
-      const result = await rerunDemographicSurvey(survey.id)
+      const llmConfigOverride = {
+        ...latestRun?.llm_config,
+        distribution_mode: nextDistributionMode,
+        num_trials: nextNumTrials,
+      }
+      const result = await rerunDemographicSurvey(survey.id, llmConfigOverride)
       if (!result.success) {
         toast({ title: 'Re-run failed', description: result.error, variant: 'destructive' })
       } else {
@@ -104,13 +162,7 @@ export function DemographicSurveyView() {
   }
 
   const canRerun = !isRunning && !!latestRun && (latestRun.status === 'cancelled' || latestRun.status === 'failed')
-
   const displayRun = selectedRun || latestRun
-
-  // Get distribution_mode/num_trials from the latest run's llm_config
-  const runConfig = latestRun?.llm_config
-  const distributionMode = runConfig?.distribution_mode || 'n_sample'
-  const numTrials = runConfig?.num_trials || 20
 
   if (loading) {
     return (
@@ -158,8 +210,8 @@ export function DemographicSurveyView() {
               {' · '}
               {`${demographicKey?.enum_values?.length || 0} values`}
               {' · '}
-              {distributionMode === 'n_sample'
-                ? `${numTrials} trials per backstory`
+              {nextDistributionMode === 'n_sample'
+                ? `${nextNumTrials} trials per backstory`
                 : 'logprobs mode'}
               {runs.length > 0 && ` · ${runs.length} run${runs.length > 1 ? 's' : ''}`}
             </p>
@@ -201,62 +253,135 @@ export function DemographicSurveyView() {
           />
         )}
 
-        {/* Question Details */}
+        {/* Question */}
         {question && (
           <Card>
-            <CardHeader>
-              <CardTitle>Question</CardTitle>
-              <CardDescription>
-                {question.type === 'mcq' ? 'Multiple Choice' : 'Open Response'}
-              </CardDescription>
+            <CardHeader className="flex flex-row items-start justify-between space-y-0">
+              <div>
+                <CardTitle>Question</CardTitle>
+                <CardDescription>
+                  {question.type === 'mcq' ? 'Multiple Choice' : 'Open Response'}
+                </CardDescription>
+              </div>
+              {!editingQuestion ? (
+                <Button variant="ghost" size="icon" onClick={startEditing}>
+                  <Pencil className="h-4 w-4" />
+                </Button>
+              ) : (
+                <div className="flex gap-1">
+                  <Button variant="ghost" size="icon" onClick={saveQuestion} disabled={savingQuestion}>
+                    <Check className="h-4 w-4 text-green-600" />
+                  </Button>
+                  <Button variant="ghost" size="icon" onClick={cancelEditing}>
+                    <X className="h-4 w-4" />
+                  </Button>
+                </div>
+              )}
             </CardHeader>
-            <CardContent>
-              <p className="font-medium mb-3">{question.text}</p>
-              {question.options && question.options.length > 0 && (
-                <ul className="text-sm text-muted-foreground space-y-1 ml-4">
-                  {question.options.map((opt, i) => (
-                    <li key={i}>({String.fromCharCode(65 + i)}) {opt}</li>
-                  ))}
-                </ul>
+            <CardContent className="space-y-4">
+              {/* Question text */}
+              {editingQuestion ? (
+                <Textarea
+                  value={questionText}
+                  onChange={(e) => setQuestionText(e.target.value)}
+                  rows={2}
+                />
+              ) : (
+                <p className="font-medium">{question.text}</p>
+              )}
+
+              {/* Options */}
+              {editingQuestion ? (
+                <div className="space-y-2">
+                  <Label>Options</Label>
+                  <div className="flex flex-wrap gap-2">
+                    {questionOptions.map((opt, i) => (
+                      <Badge key={opt} variant="secondary" className="gap-1 pr-1">
+                        <span className="text-muted-foreground mr-0.5">({String.fromCharCode(65 + i)})</span>
+                        {opt}
+                        <button
+                          type="button"
+                          onClick={() => removeOption(opt)}
+                          className="ml-0.5 rounded-full hover:bg-destructive/20 hover:text-destructive p-0.5"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    ))}
+                  </div>
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="Add option..."
+                      value={newOption}
+                      onChange={(e) => setNewOption(e.target.value)}
+                      onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); addOption() } }}
+                    />
+                    <Button variant="outline" size="icon" onClick={addOption} disabled={!newOption.trim()}>
+                      <Plus className="h-4 w-4" />
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                question.options && question.options.length > 0 && (
+                  <ul className="text-sm text-muted-foreground space-y-1 ml-4">
+                    {question.options.map((opt, i) => (
+                      <li key={i}>({String.fromCharCode(65 + i)}) {opt}</li>
+                    ))}
+                  </ul>
+                )
               )}
             </CardContent>
           </Card>
         )}
 
         {/* Configuration */}
-        {demographicKey && (
-          <Card>
-            <CardHeader>
-              <CardTitle>Configuration</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <dl className="grid grid-cols-2 gap-4 text-sm">
-                <div>
-                  <dt className="text-muted-foreground">Key</dt>
-                  <dd className="font-mono">{demographicKey.key}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Distribution Mode</dt>
-                  <dd>{distributionMode === 'n_sample' ? 'N-Sample' : 'Logprobs'}</dd>
-                </div>
-                <div>
-                  <dt className="text-muted-foreground">Trials per Backstory</dt>
-                  <dd>{numTrials}</dd>
-                </div>
-                {demographicKey.enum_values && (
-                  <div className="col-span-2">
-                    <dt className="text-muted-foreground mb-1">Values</dt>
-                    <dd className="flex flex-wrap gap-1.5">
-                      {demographicKey.enum_values.map((val) => (
-                        <Badge key={val} variant="secondary">{val}</Badge>
-                      ))}
-                    </dd>
-                  </div>
+        <Card>
+          <CardHeader>
+            <CardTitle>Configuration</CardTitle>
+            {canRerun && (
+              <CardDescription>Changes apply on the next Re-run</CardDescription>
+            )}
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-1.5">
+              <Label>Distribution Mode</Label>
+              {canRerun ? (
+                <Select
+                  value={nextDistributionMode}
+                  onValueChange={(v) => setNextDistributionMode(v as DistributionMode)}
+                >
+                  <SelectTrigger className="w-64">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="n_sample">N-Sample (any provider)</SelectItem>
+                    <SelectItem value="logprobs">Logprobs (vLLM only)</SelectItem>
+                  </SelectContent>
+                </Select>
+              ) : (
+                <p className="text-sm">{nextDistributionMode === 'n_sample' ? 'N-Sample' : 'Logprobs (vLLM only)'}</p>
+              )}
+            </div>
+
+            {nextDistributionMode === 'n_sample' && (
+              <div className="space-y-1.5">
+                <Label>Trials per Backstory</Label>
+                {canRerun ? (
+                  <Input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={nextNumTrials}
+                    onChange={(e) => setNextNumTrials(Math.max(1, parseInt(e.target.value, 10) || 20))}
+                    className="w-24"
+                  />
+                ) : (
+                  <p className="text-sm">{nextNumTrials}</p>
                 )}
-              </dl>
-            </CardContent>
-          </Card>
-        )}
+              </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
     </Layout>
   )
