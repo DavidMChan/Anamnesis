@@ -276,9 +276,13 @@ export async function retryTask(taskId: string): Promise<void> {
  *
  * Returns the new run ID.
  */
-export async function rerunDemographicSurvey(surveyId: string): Promise<CreateSurveyRunResult> {
+export async function rerunDemographicSurvey(
+  surveyId: string,
+  llmConfig?: Record<string, unknown>,
+): Promise<CreateSurveyRunResult> {
   const { data, error } = await supabase.rpc('rerun_demographic_survey', {
     p_survey_id: surveyId,
+    p_llm_config: llmConfig ?? null,
   })
   if (error) return { success: false, error: error.message }
   return { success: true, runId: data as string }
