@@ -1,6 +1,7 @@
 """
 Database operations module using Supabase.
 """
+from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, List
 from supabase import create_client, Client
 from postgrest.exceptions import APIError
@@ -353,6 +354,28 @@ class DatabaseClient:
             .execute()
         )
         return result.count or 0
+
+    def reset_stale_tasks(self, run_id: str, timeout_minutes: int = 10) -> int:
+        """
+        Reset tasks stuck in 'queued' or 'processing' back to 'pending'.
+
+        A task is considered stale if it has been in queued/processing state
+        for longer than timeout_minutes (measured from queued_at).
+
+        Returns:
+            Number of tasks reset.
+        """
+        cutoff = (datetime.now(timezone.utc) - timedelta(minutes=timeout_minutes)).isoformat()
+
+        result = (
+            self.client.table("survey_tasks")
+            .update({"status": "pending", "queued_at": None})
+            .eq("survey_run_id", run_id)
+            .in_("status", ["queued", "processing"])
+            .lt("queued_at", cutoff)
+            .execute()
+        )
+        return len(result.data) if result.data else 0
 
     def get_pending_tasks_for_dispatch(self, run_id: str, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """

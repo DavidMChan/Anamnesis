@@ -114,6 +114,10 @@ class TaskDispatcher:
         total_dispatched = 0
         for run in pending_runs:
             try:
+                reset = self.db.reset_stale_tasks(run["id"])
+                if reset > 0:
+                    logger.warning(f"Reset {reset} stale tasks for run {run['id']}")
+
                 dispatched = self.dispatch_run(run)
                 total_dispatched += dispatched
 
