@@ -59,12 +59,6 @@ function RunConfigCard({ run }: { run: SurveyRun | null }) {
         <CardContent className="pt-0 pb-4">
           <div className="space-y-2 text-sm">
             <div className="flex items-center gap-2">
-              <span className="font-medium w-24">Algorithm:</span>
-              <Badge variant="outline">
-                {run.algorithm === 'zero_shot_baseline' ? 'Zero-Shot Baseline' : 'Anthology'}
-              </Badge>
-            </div>
-            <div className="flex items-center gap-2">
               <span className="font-medium w-24">Provider:</span>
               <Badge variant="outline">{config.provider || 'Not set'}</Badge>
             </div>
@@ -197,7 +191,7 @@ export function SurveyResults() {
     // Fetch results from survey_tasks (source of truth)
     const { data: tasksData, error: tasksError } = await supabase
       .from('survey_tasks')
-      .select('id, backstory_id, result')
+      .select('backstory_id, result')
       .eq('survey_run_id', surveyRun.id)
       .eq('status', 'completed')
 
@@ -210,8 +204,7 @@ export function SurveyResults() {
     const taskResults: SurveyResultsType = {}
     for (const task of tasksData || []) {
       if (task.result) {
-        // For zero_shot_baseline runs, backstory_id is null — key by task.id instead
-        taskResults[task.backstory_id ?? task.id] = task.result
+        taskResults[task.backstory_id] = task.result
       }
     }
     setResults(taskResults)
@@ -235,7 +228,7 @@ export function SurveyResults() {
 
     const { data: tasksData, error: tasksError } = await supabase
       .from('survey_tasks')
-      .select('id, backstory_id, result')
+      .select('backstory_id, result')
       .eq('survey_run_id', run.id)
       .eq('status', 'completed')
 
@@ -244,7 +237,7 @@ export function SurveyResults() {
     const taskResults: SurveyResultsType = {}
     for (const task of tasksData || []) {
       if (task.result) {
-        taskResults[task.backstory_id ?? task.id] = task.result
+        taskResults[task.backstory_id] = task.result
       }
     }
     setResults(taskResults)
@@ -514,12 +507,11 @@ export function SurveyResults() {
 
   const downloadCSV = () => {
     if (!survey || !run) return
-    const isZeroShot = run.algorithm === 'zero_shot_baseline'
-    const headers = [isZeroShot ? 'trial_index' : 'backstory_id', ...survey.questions.map((q) => q.qkey)]
+    const headers = ['backstory_id', ...survey.questions.map((q) => q.qkey)]
 
-    const rows = Object.entries(results).map(([backstoryId, responses], index) => {
+    const rows = Object.entries(results).map(([backstoryId, responses]) => {
       return [
-        isZeroShot ? `Trial ${index + 1}` : backstoryId,
+        backstoryId,
         ...survey.questions.map((q) => {
           const answer = responses[q.qkey]
           if (!answer) return ''
@@ -700,7 +692,7 @@ export function SurveyResults() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <ResultsTable survey={survey} results={results} algorithm={run.algorithm} />
+                <ResultsTable survey={survey} results={results} />
               </CardContent>
             </Card>
           </TabsContent>

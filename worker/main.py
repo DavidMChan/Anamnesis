@@ -25,7 +25,6 @@ from src.metrics import LatencyTracker, MetricsLogger
 from src.parser import ParserLLM
 from src.queue import AsyncQueueConsumer
 from src.worker import TaskProcessor, IndependentRepeat, LogprobsSingle
-from src.prompt import build_demographic_prompt
 
 # Configure logging
 logging.basicConfig(
@@ -226,24 +225,6 @@ async def main():
                 await asyncio.to_thread(db.fail_task, task_id, error_msg)
                 await message.ack()
                 return
-
-            # 4b. Detect algorithm; inject constructed prompt for zero_shot_baseline
-            algorithm = await asyncio.to_thread(db.get_survey_algorithm, task["survey_run_id"])
-
-            if algorithm == "zero_shot_baseline":
-                run_demographics = await asyncio.to_thread(
-                    db.get_run_demographics, task["survey_run_id"]
-                )
-                # DemographicSelectionConfig stores filters under "filters"; raw DemographicFilter used as-is
-                filters = (
-                    run_demographics.get("filters", run_demographics)
-                    if isinstance(run_demographics, dict)
-                    else {}
-                )
-                task["zero_shot_prompt_text"] = build_demographic_prompt(filters)
-                logger.info(
-                    f"Task {task_id}: zero_shot_baseline, prompt={task['zero_shot_prompt_text']!r}"
-                )
 
             # 5. Detect demographic survey and choose strategy
             demo_key_info = await asyncio.to_thread(

@@ -3,8 +3,8 @@
  */
 import { useState, useEffect, useCallback } from 'react'
 import { supabase } from '@/lib/supabase'
-import { createSurveyRun, createZeroShotBaselineRun } from '@/lib/surveyRunner'
-import type { SurveyRun, DemographicFilter, DemographicSelectionConfig, SurveyAlgorithm } from '@/types/database'
+import { createSurveyRun } from '@/lib/surveyRunner'
+import type { SurveyRun, DemographicFilter, DemographicSelectionConfig } from '@/types/database'
 
 interface UseSurveyRunOptions {
   /** Survey ID to fetch runs for */
@@ -129,17 +129,11 @@ export function useCreateSurveyRun() {
   const [error, setError] = useState<string | null>(null)
 
   const createRun = useCallback(
-    async (
-      surveyId: string,
-      llmConfig: import('@/types/database').LLMConfig,
-      demographics: DemographicFilter | DemographicSelectionConfig,
-      algorithm: SurveyAlgorithm = 'anthology',
-    ): Promise<string | null> => {
+    async (surveyId: string, llmConfig: import('@/types/database').LLMConfig, demographics: DemographicFilter | DemographicSelectionConfig): Promise<string | null> => {
       setLoading(true)
       setError(null)
 
-      const fn = algorithm === 'zero_shot_baseline' ? createZeroShotBaselineRun : createSurveyRun
-      const result = await fn({ surveyId, llmConfig, demographics })
+      const result = await createSurveyRun({ surveyId, llmConfig, demographics })
 
       setLoading(false)
 

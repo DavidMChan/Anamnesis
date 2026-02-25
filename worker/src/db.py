@@ -534,28 +534,6 @@ class DatabaseClient:
 
         return result.data if result.data else None
 
-    def get_survey_algorithm(self, run_id: str) -> str:
-        """
-        Returns 'anthology' or 'zero_shot_baseline'. Reads from survey_runs directly.
-        Falls back to 'anthology' if the column is missing or record not found.
-        """
-        data = self._safe_single_execute(
-            self.client.table("survey_runs").select("algorithm").eq("id", run_id)
-        )
-        if not data:
-            return "anthology"
-        return data.get("algorithm") or "anthology"
-
-    def get_run_demographics(self, run_id: str) -> dict:
-        """
-        Returns the DemographicSelectionConfig or DemographicFilter stored on the run.
-        DemographicSelectionConfig has a "filters" key; raw DemographicFilter is used as-is.
-        """
-        data = self._safe_single_execute(
-            self.client.table("survey_runs").select("demographics").eq("id", run_id)
-        )
-        return (data or {}).get("demographics") or {}
-
     def get_run_llm_context(self, run_id: str) -> Optional[Dict[str, Any]]:
         """
         Get llm_config snapshot and owning user_id for a survey run.

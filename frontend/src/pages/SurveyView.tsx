@@ -9,15 +9,13 @@ import { useSurveyRun, useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
 import { cancelSurveyRun } from '@/lib/surveyRunner'
 import { useAuthContext } from '@/contexts/AuthContext'
-import type { Survey, SurveyRun, MediaAttachment, LLMConfig, DemographicSelectionConfig, DemographicFilter as DemographicFilterType, SurveyAlgorithm, Question } from '@/types/database'
+import type { Survey, SurveyRun, MediaAttachment, LLMConfig, DemographicSelectionConfig, DemographicFilter as DemographicFilterType } from '@/types/database'
 import { MediaPreview } from '@/components/surveys/MediaPreview'
 import { DemographicFilter, defaultDemographicSelectionConfig, legacyToSelectionConfig } from '@/components/surveys/DemographicFilter'
 import { getMediaUrl } from '@/lib/media'
 import { mergeEffectiveConfig } from '@/lib/llmConfig'
 import { RunConfigCard } from '@/components/surveys/RunConfigCard'
-import { isDemographicSelectionConfig } from '@/lib/backstoryFilters'
-import { buildDemographicPromptText } from '@/lib/demographicPrompt'
-import { ArrowLeft, Edit, Play, History, ChevronDown, ChevronRight, Eye } from 'lucide-react'
+import { ArrowLeft, Edit, Play, History, ChevronDown, ChevronRight } from 'lucide-react'
 
 /** Standalone audio player that loads its own URL from a media key */
 function AudioPlayer({ media }: { media: MediaAttachment }) {
@@ -69,28 +67,6 @@ const questionTypeLabels: Record<string, string> = {
   ranking: 'Ranking',
 }
 
-/** Format a question for the prompt preview, mirroring worker/src/prompt.py formatting. */
-function formatQuestionPreview(q: Question): string {
-  const letters = (q.options || []).map((_, i) => String.fromCharCode(65 + i))
-  const choiceLines = (q.options || []).map((opt, i) => `(${letters[i]}) ${opt}`)
-
-  if (q.type === 'mcq') {
-    const answerForcing =
-      letters.length > 1
-        ? `Answer with ${letters.slice(0, -1).map((l) => `(${l})`).join(', ')}, or (${letters[letters.length - 1]}).`
-        : `Answer with (${letters[0]}).`
-    return `Question: ${q.text}\n${choiceLines.join('\n')}\n${answerForcing}\nAnswer:`
-  }
-  if (q.type === 'multiple_select') {
-    return `Question: ${q.text}\n${choiceLines.join('\n')}\nSelect all that apply. Answer with comma-separated letters (e.g., A, C, D).\nAnswer:`
-  }
-  if (q.type === 'ranking') {
-    return `Question: ${q.text}\n${choiceLines.join('\n')}\nRank all options from most to least preferred (e.g., A, C, B, D).\nAnswer:`
-  }
-  // open_response
-  return `Question: ${q.text}\nAnswer:`
-}
-
 export function SurveyView() {
   const { id } = useParams()
   const navigate = useNavigate()
@@ -104,7 +80,6 @@ export function SurveyView() {
   const [runOverrides, setRunOverrides] = useState<Partial<LLMConfig>>({})
   const [questionsExpanded, setQuestionsExpanded] = useState(false)
   const [runDemographics, setRunDemographics] = useState<DemographicSelectionConfig>(defaultDemographicSelectionConfig())
-  const [runAlgorithm, setRunAlgorithm] = useState<SurveyAlgorithm>('anthology')
 
   // Fetch survey run data
   const { run: latestRun, runs, isRunning, refresh: refreshRuns } = useSurveyRun({
@@ -197,7 +172,7 @@ export function SurveyView() {
 
     // Merge profile defaults + local overrides into run config snapshot
     const runLlmConfig = mergeEffectiveConfig(llmConfig, runOverrides)
-    const runId = await createRun(survey.id, runLlmConfig, runDemographics, runAlgorithm)
+    const runId = await createRun(survey.id, runLlmConfig, runDemographics)
     if (runId) {
       refreshRuns()
       fetchSurvey()
@@ -392,91 +367,12 @@ export function SurveyView() {
           onChangeOverrides={setRunOverrides}
         />
 
-        {/* Algorithm Selector */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Algorithm</CardTitle>
-            <CardDescription>
-              How the LLM will be prompted for each response
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-6">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="run-algorithm"
-                  value="anthology"
-                  checked={runAlgorithm === 'anthology'}
-                  onChange={() => setRunAlgorithm('anthology')}
-                  className="accent-primary"
-                />
-                <span className="font-medium">Anthology</span>
-                <span className="text-muted-foreground text-sm">(run once per backstory)</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="run-algorithm"
-                  value="zero_shot_baseline"
-                  checked={runAlgorithm === 'zero_shot_baseline'}
-                  onChange={() => setRunAlgorithm('zero_shot_baseline')}
-                  className="accent-primary"
-                />
-                <span className="font-medium">Zero-Shot Baseline</span>
-                <span className="text-muted-foreground text-sm">(demographic description, N independent trials)</span>
-              </label>
-            </div>
-          </CardContent>
-        </Card>
-
         {/* Demographic Filters (editable per-run) */}
         <DemographicFilter
           value={runDemographics}
           onChange={setRunDemographics}
           description="Settings for the next run (empty = inherit from initial survey settings)"
-          sampleSizeLabel={runAlgorithm === 'zero_shot_baseline' ? 'Number of trials' : undefined}
         />
-
-        {/* Prompt Preview */}
-        {survey.questions.length > 0 && (
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Eye className="h-4 w-4" />
-                <CardTitle>Prompt Preview</CardTitle>
-              </div>
-              <CardDescription>
-                {runAlgorithm === 'zero_shot_baseline'
-                  ? `What will be sent to the LLM for each trial (repeated ${runDemographics.sample_size ?? '?'} times independently)`
-                  : 'What will be sent to the LLM for each backstory (run once per backstory)'}
-              </CardDescription>
-            </CardHeader>
-            <CardContent>
-              <pre className="text-sm bg-muted rounded-lg p-4 whitespace-pre-wrap font-mono overflow-x-auto leading-relaxed">
-                {runAlgorithm === 'zero_shot_baseline' ? (
-                  buildDemographicPromptText(
-                    isDemographicSelectionConfig(runDemographics)
-                      ? runDemographics.filters
-                      : runDemographics
-                  )
-                ) : (
-                  <span className="text-muted-foreground italic">[backstory text]</span>
-                )}
-                {'\n\n'}
-                {formatQuestionPreview(survey.questions[0])}
-                {survey.questions.length > 1 && (
-                  <span className="text-muted-foreground">
-                    {'\n\n'}
-                    {runAlgorithm === 'anthology'
-                      ? `// + ${survey.questions.length - 1} more question(s) with context accumulation`
-                      : `// + ${survey.questions.length - 1} more question(s)`}
-                  </span>
-                )}
-              </pre>
-            </CardContent>
-          </Card>
-        )}
       </div>
     </Layout>
   )

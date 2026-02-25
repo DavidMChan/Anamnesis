@@ -141,7 +141,6 @@ export interface Survey {
 
 // Survey Run Types
 export type SurveyRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
-export type SurveyAlgorithm = 'anthology' | 'zero_shot_baseline'
 
 export interface SurveyRunErrorLog {
   backstory_id: string
@@ -160,7 +159,6 @@ export interface SurveyRun {
   error_log?: SurveyRunErrorLog[]
   llm_config: LLMConfig
   demographics?: DemographicFilter | DemographicSelectionConfig
-  algorithm: SurveyAlgorithm
   started_at: string | null
   completed_at: string | null
   created_at: string

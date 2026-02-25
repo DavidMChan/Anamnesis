@@ -25,11 +25,9 @@ interface DemographicFilterProps {
   onChange: (value: DemographicSelectionConfig) => void
   /** Override the card description text */
   description?: string
-  /** Override the "Sample Size" label (e.g. "Number of trials" for zero-shot baseline) */
-  sampleSizeLabel?: string
 }
 
-export function DemographicFilter({ value, onChange, description, sampleSizeLabel }: DemographicFilterProps) {
+export function DemographicFilter({ value, onChange, description }: DemographicFilterProps) {
   const [demographicKeys, setDemographicKeys] = useState<DemographicKey[]>([])
   const [loading, setLoading] = useState(true)
   const [poolSize, setPoolSize] = useState<number | null>(null)
@@ -194,7 +192,7 @@ export function DemographicFilter({ value, onChange, description, sampleSizeLabe
         {/* =================== Sample Size =================== */}
         <div className="space-y-1">
           <div className="flex items-center justify-between">
-            <Label className="text-base">{sampleSizeLabel ?? 'Sample Size'}</Label>
+            <Label className="text-base">Sample Size</Label>
             <div className="flex items-center gap-2">
               <Input
                 type="number"

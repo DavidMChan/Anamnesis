@@ -534,16 +534,14 @@ class TaskProcessor:
         """
         task_id = task["id"]
         run_id = task["survey_run_id"]
-        backstory_id = task.get("backstory_id")  # None for zero_shot_baseline
+        backstory_id = task["backstory_id"]
 
-        if backstory_id:
-            backstory_data = await asyncio.to_thread(self.db.get_backstory, backstory_id)
-            if not backstory_data:
-                raise NonRetryableError(f"Backstory {backstory_id} not found")
-            backstory_text = backstory_data.get("backstory_text", "")
-        else:
-            # zero_shot_baseline: handle_message pre-builds and injects the prompt text
-            backstory_text = task.get("zero_shot_prompt_text", "")
+        # Get backstory and questions
+        backstory_data = await asyncio.to_thread(self.db.get_backstory, backstory_id)
+        if not backstory_data:
+            raise NonRetryableError(f"Backstory {backstory_id} not found")
+
+        backstory_text = backstory_data.get("backstory_text", "")
 
         questions_data = await asyncio.to_thread(self.db.get_survey_questions, run_id)
         if not questions_data:
