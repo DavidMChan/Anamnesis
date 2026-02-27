@@ -469,7 +469,7 @@ export function DemographicFilter({ value, onChange, description, sampleSizeLabe
 export function defaultDemographicSelectionConfig(): DemographicSelectionConfig {
   return {
     mode: 'top_k',
-    sample_size: 0,
+    sample_size: 100,
     filters: {},
   }
 }

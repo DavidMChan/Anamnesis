@@ -57,3 +57,5 @@ worker/venv/
 .supabase/
 
 CLAUDE.md
+CRITERIA.md
+.claude
