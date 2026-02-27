@@ -1,22 +1,22 @@
 # Anamnesis
 
-**Anamnesis** is a web-based research platform for running opinion surveys on LLM-simulated human personas. Researchers define survey instruments, execute them against large pools of naturalistic backstories via LLM inference, and analyze the resulting response distributions — all through a unified interface.
+**Anamnesis** is a web-based research platform for running opinion surveys on LLM-simulated human personas. Researchers define survey instruments, execute them against large pools of naturalistic backstories via LLM inference, and analyze the resulting response distributions - all through a unified interface.
 
-The platform operationalizes the *Virtual Personas* methodology from our EACL 2024 paper, enabling systematic, large-scale evaluation of persona simulation at the level of individual response distributions rather than aggregate population statistics.
+The platform operationalizes the *Virtual Personas* methodology, Anthology, enabling systematic, large-scale evaluation of persona simulation at the level of individual response distributions rather than aggregate population statistics.
 
-> *Anamnesis* (ἀνάμνησις): the Platonic concept of recollection — recovering knowledge from within. Here, backstories serve as that inner context, eliciting a specific human perspective from within the model.
+> *Anamnesis* (ἀνάμνησις): the Platonic concept of recollection - recovering knowledge from within. Here, backstories serve as that inner context, eliciting a specific human perspective from within the model.
 
 ---
 
 ## Key Features
 
-- **Survey Builder** — Create surveys with MCQ, multi-select, open-response, and ranking questions; attach image/audio media to questions and answer options
-- **Persona Targeting** — Filter backstories by demographic dimensions (age, gender, political affiliation, education, etc.) with distribution-balanced or top-K sampling
-- **Two Inference Algorithms** — *Anthology* (backstory-conditioned, sequential context accumulation) and *Zero-Shot Baseline* (demographic prompt, N-sample averaging)
-- **Demographic Survey Tool** — Define custom demographic dimensions; populate them across the backstory pool using LLM inference (N-sample or logprobs mode)
-- **Real-Time Progress** — Monitor active runs with live progress and per-task status
-- **Results & Export** — Bar/pie charts, response tables, Borda-score ranking summaries, CSV export with demographic breakdowns
-- **API Key Vault** — Per-user encrypted API key storage (Supabase Vault); supports OpenRouter and self-hosted vLLM
+- **Survey Builder** - Create surveys with MCQ, multi-select, open-response, and ranking questions; attach image/audio media to questions and answer options
+- **Persona Targeting** - Filter backstories by demographic dimensions (age, gender, political affiliation, education, etc.) with distribution-balanced or top-K sampling
+- **Two Inference Algorithms** - *Anthology* (backstory-conditioned, sequential context accumulation) and *Zero-Shot Baseline* (demographic prompt, N-sample averaging)
+- **Demographic Survey Tool** - Define custom demographic dimensions; populate them across the backstory pool using LLM inference (N-sample or logprobs mode)
+- **Real-Time Progress** - Monitor active runs with live progress and per-task status
+- **Results & Export** - Bar/pie charts, response tables, Borda-score ranking summaries, CSV export with demographic breakdowns
+- **API Key Vault** - Per-user encrypted API key storage (Supabase Vault); supports OpenRouter and self-hosted vLLM
 
 ---
 
@@ -119,7 +119,7 @@ Replicates the backstory-conditioned approach from our EACL 2024 paper:
 3. For each subsequent question, prepend all prior Q&A pairs (context accumulation)
 4. Parse answers using structured output (Tier 1) + parser LLM fallback (Tier 2)
 
-This promotes response consistency across questions — the LLM "remembers" what it has said.
+This promotes response consistency across questions - the LLM "remembers" what it has said.
 
 ### Zero-Shot Baseline
 
@@ -132,7 +132,7 @@ Constructs a short demographic description from the backstory's structured attri
 Anamnesis can populate custom demographic attributes across the backstory pool by running dedicated demographic surveys:
 
 1. Define a dimension (e.g., `political_affiliation` with options `Democrat / Republican / Independent`)
-2. Run in **N-sample mode** (ask N times, compute frequency distribution) or **logprobs mode** (extract token probability distribution in a single call — ~20× cheaper, requires vLLM)
+2. Run in **N-sample mode** (ask N times, compute frequency distribution) or **logprobs mode** (extract token probability distribution in a single call - ~20× cheaper, requires vLLM)
 3. The resulting distribution is stored in each backstory's `demographics` JSONB field
 4. Future opinion surveys can filter and sample backstories by this dimension
 
@@ -169,8 +169,8 @@ This platform is part of the **Virtual Personas** research program at UC Berkele
 
 ### Related Work
 
-- **Anthology** (`../anthology/`) — Original implementation for *"Virtual Personas for Language Models via an Anthology of Backstories"* (EACL 2024, arXiv:2407.06576)
-- **Alterity** (`../alterity-private-main/`) — Follow-up research on belief consistency using LLM-interview-generated backstories
+- **Anthology** (`../anthology/`) - Original implementation for *"Virtual Personas for Language Models via an Anthology of Backstories"* (EACL 2024, arXiv:2407.06576)
+- **Alterity** (`../alterity-private-main/`) - Follow-up research on belief consistency using LLM-interview-generated backstories
 
 ---
 
@@ -191,3 +191,5 @@ cd worker && pytest
 ```
 
 See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for production deployment on Ubuntu 24.04.
+
+Updated: 2/27/2026
