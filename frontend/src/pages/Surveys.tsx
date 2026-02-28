@@ -14,11 +14,13 @@ import { Plus, Eye, BarChart3, Trash2, ClipboardList, Copy } from 'lucide-react'
 const statusVariants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info' | 'gold'> = {
   draft: 'secondary',
   active: 'gold',
+  finished: 'success',
 }
 
 export function Surveys() {
   const { user } = useAuthContext()
   const [surveys, setSurveys] = useState<Survey[]>([])
+  const [latestRunStatus, setLatestRunStatus] = useState<Record<string, string>>({})
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
@@ -36,9 +38,33 @@ export function Surveys() {
 
     if (error) {
       console.error('Error fetching surveys:', error)
-    } else {
-      setSurveys(data || [])
+      setLoading(false)
+      return
     }
+
+    const fetchedSurveys = data || []
+    setSurveys(fetchedSurveys)
+
+    if (fetchedSurveys.length > 0) {
+      const surveyIds = fetchedSurveys.map((s) => s.id)
+      const { data: runs } = await supabase
+        .from('survey_runs')
+        .select('survey_id, status, created_at')
+        .in('survey_id', surveyIds)
+        .order('created_at', { ascending: false })
+
+      if (runs) {
+        // Pick the latest run per survey
+        const latestByRun: Record<string, string> = {}
+        for (const run of runs) {
+          if (!latestByRun[run.survey_id]) {
+            latestByRun[run.survey_id] = run.status
+          }
+        }
+        setLatestRunStatus(latestByRun)
+      }
+    }
+
     setLoading(false)
   }
 
@@ -166,11 +192,21 @@ export function Surveys() {
                 <CardHeader className="pb-3">
                   <div className="flex items-start justify-between gap-2">
                     <CardTitle className="text-base line-clamp-1">
-                      {survey.name || 'Untitled Survey'}
+                      <Link to={`/surveys/${survey.id}`} className="hover:underline">
+                        {survey.name || 'Untitled Survey'}
+                      </Link>
                     </CardTitle>
-                    <Badge variant={statusVariants[survey.status]}>
-                      {survey.status}
-                    </Badge>
+                    {(() => {
+                      const displayStatus =
+                        survey.status === 'active' && latestRunStatus[survey.id] === 'completed'
+                          ? 'finished'
+                          : survey.status
+                      return (
+                        <Badge variant={statusVariants[displayStatus]}>
+                          {displayStatus}
+                        </Badge>
+                      )
+                    })()}
                   </div>
                   <CardDescription className="text-xs">
                     {survey.questions.length} questions
