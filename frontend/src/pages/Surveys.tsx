@@ -10,6 +10,7 @@ import type { Survey, Question, MediaAttachment } from '@/types/database'
 import { toast } from '@/hooks/use-toast'
 import { copyMedia, deleteMedia } from '@/lib/media'
 import { Plus, Eye, BarChart3, Trash2, ClipboardList, Copy } from 'lucide-react'
+import { BatchUploadDialog } from '@/components/surveys/BatchUploadDialog'
 
 const statusVariants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info' | 'gold'> = {
   draft: 'secondary',
@@ -159,12 +160,15 @@ export function Surveys() {
             <h1 className="text-2xl font-bold">Surveys</h1>
             <p className="text-muted-foreground">Create and manage your research surveys</p>
           </div>
-          <Link to="/surveys/new">
-            <Button className="gap-2">
-              <Plus className="h-4 w-4" />
-              New Survey
-            </Button>
-          </Link>
+          <div className="flex items-center gap-2">
+            <BatchUploadDialog onSurveysCreated={fetchSurveys} />
+            <Link to="/surveys/new">
+              <Button className="gap-2">
+                <Plus className="h-4 w-4" />
+                New Survey
+              </Button>
+            </Link>
+          </div>
         </div>
 
         {surveys.length === 0 ? (
