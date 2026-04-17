@@ -234,7 +234,8 @@ class UnifiedLLMClient:
                 choice = response.choices[0]
                 content = choice.text or ""
                 finish_reason = choice.finish_reason
-            if finish_reason == "length":
+            is_open = question and question.type == "open_response"
+            if finish_reason == "length" and self._effective_max_tokens(question) == self.max_tokens and not is_open:
                 if params:
                     logger.warning(
                         f"Response truncated (finish_reason=length, max_tokens={self.max_tokens}), "
@@ -334,7 +335,8 @@ class UnifiedLLMClient:
                 choice = response.choices[0]
                 content = choice.text or ""
                 finish_reason = choice.finish_reason
-            if finish_reason == "length":
+            is_open = question and question.type == "open_response"
+            if finish_reason == "length" and self._effective_max_tokens(question) == self.max_tokens and not is_open:
                 if params:
                     logger.warning(
                         f"Response truncated (finish_reason=length, max_tokens={self.max_tokens}), "

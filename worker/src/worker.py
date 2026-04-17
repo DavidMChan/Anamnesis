@@ -266,6 +266,7 @@ class LogprobsSingle:
         llm: UnifiedLLMClient,
         parser_llm: Optional[ParserLLM] = None,
         media_client: Optional[WasabiMediaClient] = None,
+        task_id: Optional[str] = None,
     ) -> Dict[str, str]:
         import json
         results: Dict[str, str] = {}

@@ -49,7 +49,7 @@ services:
     deploy:
       # Concurrency is controlled per-run via max_concurrent_tasks in Settings.
       # PREFETCH_COUNT controls RabbitMQ prefetch (operational tuning).
-      replicas: 1
+      replicas: 2
 
 volumes:
   rabbitmq_data:
