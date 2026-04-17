@@ -20,7 +20,7 @@ from src.config import get_config, LLMConfig
 from src.db import DatabaseClient
 from src.llm import UnifiedLLMClient
 from src.media import WasabiMediaClient
-from src.response import NonRetryableError, MultimodalNotSupportedError
+from src.response import NonRetryableError, MultimodalNotSupportedError, TruncationError
 from src.metrics import LatencyTracker, MetricsLogger
 from src.parser import ParserLLM
 from src.queue import AsyncQueueConsumer
@@ -32,6 +32,7 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
+logging.getLogger("httpx").setLevel(logging.WARNING)
 logger = logging.getLogger(__name__)
 
 
@@ -342,6 +343,11 @@ async def main():
         except json.JSONDecodeError as e:
             logger.error(f"Invalid JSON message: {e}")
             await message.nack(requeue=False)
+        except TruncationError as e:
+            logger.error(f"Task {task_id} truncation error: {e}")
+            if task_id:
+                await asyncio.to_thread(db.fail_task, task_id, str(e))
+            await message.ack()
         except MultimodalNotSupportedError as e:
             # Multimodal not supported → fail entire run, not just this task
             logger.error(f"Task {task_id} multimodal not supported: {e}")

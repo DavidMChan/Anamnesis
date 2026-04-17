@@ -45,6 +45,7 @@ class FillingStrategy(Protocol):
         llm: UnifiedLLMClient,
         parser_llm: Optional[ParserLLM] = None,
         media_client: Optional[WasabiMediaClient] = None,
+        task_id: Optional[str] = None,
     ) -> Dict[str, str]:
         """Fill all questions and return qkey -> answer mapping."""
         ...
@@ -67,9 +68,11 @@ class SeriesWithContext:
         llm: UnifiedLLMClient,
         parser_llm: Optional[ParserLLM] = None,
         media_client: Optional[WasabiMediaClient] = None,
+        task_id: Optional[str] = None,
     ) -> Dict[str, str]:
         results: Dict[str, str] = {}
         context = ""
+        short_id = (task_id or "")[:8]
 
         llm_max_tokens = getattr(llm, "max_tokens", None)
         open_response_max_words = int(llm_max_tokens * 2 / 3) if isinstance(llm_max_tokens, (int, float)) else None
@@ -96,7 +99,7 @@ class SeriesWithContext:
 
             prompt: Prompt = build_multimodal_prompt(text_prompt, question_media)
 
-            answer, raw = await self._ask_with_retry(prompt, question, llm, parser_llm)
+            answer, raw = await self._ask_with_retry(prompt, question, llm, parser_llm, label=f"{short_id}/{question.qkey}")
             results[question.qkey] = answer
             # Context accumulation stays text-only (no re-sending images)
             context = append_answer_to_context(text_prompt, raw)
@@ -109,14 +112,14 @@ class SeriesWithContext:
         question: Question,
         llm: UnifiedLLMClient,
         parser_llm: Optional[ParserLLM],
+        label: str = "",
     ) -> tuple:
         """Ask question with compliance retries + Tier 1/2 parsing."""
         raw = ""
+        tag = f"[{label}]" if label else f"[{question.qkey}]"
         for retry in range(self.max_compliance_retries):
-            if retry == 0:
-                logger.debug(f"Asking question: {question.qkey}")
-            else:
-                logger.debug(f"Compliance retry {retry}/{self.max_compliance_retries} for {question.qkey}")
+            if retry > 0:
+                logger.debug(f"{tag} compliance retry {retry}/{self.max_compliance_retries}")
 
             response = await llm.async_complete(prompt, question=question)
             raw = response.raw or ""
@@ -130,10 +133,10 @@ class SeriesWithContext:
             if question.type == "open_response":
                 if answer:
                     tier = "tier1_text"
-                    logger.info(f"[{tier}] {question.qkey}={repr(answer[:200])}")
+                    logger.info(f"{tag} [{tier}] answer={repr(answer)}")
                     return answer, raw
                 else:
-                    logger.warning(f"[parse_fail] {question.qkey} open_response empty, retrying")
+                    logger.warning(f"{tag} [parse_fail] open_response empty, retrying")
                     continue
 
             # Tier 2: parser LLM fallback (MCQ, multiple_select, ranking)
@@ -143,12 +146,12 @@ class SeriesWithContext:
                     tier = "tier2_parser"
 
             if answer:
-                logger.info(f"[{tier}] {question.qkey}={answer} (raw={repr(raw[:200])})")
+                logger.info(f"{tag} [{tier}] answer={answer} raw={repr(raw)}")
                 return answer, raw
             else:
-                logger.warning(f"[parse_fail] {question.qkey} raw={repr(raw[:200])}")
+                logger.warning(f"{tag} [parse_fail] raw={repr(raw)}")
 
-        logger.warning(f"All {self.max_compliance_retries} retries failed for {question.qkey}, marking as non-compliant")
+        logger.warning(f"{tag} all {self.max_compliance_retries} retries failed, marking as non-compliant")
         return "", raw
 
 
@@ -171,6 +174,7 @@ class IndependentRepeat:
         llm: UnifiedLLMClient,
         parser_llm: Optional[ParserLLM] = None,
         media_client: Optional[WasabiMediaClient] = None,
+        task_id: Optional[str] = None,
     ) -> Dict[str, str]:
         """
         Ask each question N times independently. Returns a special result:
@@ -178,6 +182,7 @@ class IndependentRepeat:
         joined by '||' for downstream distribution computation.
         """
         results: Dict[str, str] = {}
+        short_id = (task_id or "")[:8]
 
         for question in questions:
             answers: List[str] = []
@@ -197,12 +202,12 @@ class IndependentRepeat:
                     )
 
                 prompt: Prompt = build_multimodal_prompt(text_prompt, question_media)
-                answer, _ = await self._ask_with_retry(prompt, question, llm, parser_llm, trial)
+                label = f"{short_id}/{question.qkey}#{trial}"
+                answer, _ = await self._ask_with_retry(prompt, question, llm, parser_llm, trial, label=label)
                 answers.append(answer)
 
-            # Join all N answers with separator for downstream processing
             results[question.qkey] = "||".join(answers)
-            logger.info(f"IndependentRepeat: {question.qkey} collected {len(answers)} answers")
+            logger.info(f"[{short_id}/{question.qkey}] collected {len(answers)} answers")
 
         return results
 
@@ -213,10 +218,15 @@ class IndependentRepeat:
         llm: UnifiedLLMClient,
         parser_llm: Optional[ParserLLM],
         trial: int,
+        label: str = "",
     ) -> tuple:
         """Ask question with compliance retries + Tier 1/2 parsing."""
         raw = ""
+        tag = f"[{label}]" if label else f"[{question.qkey}#{trial}]"
         for retry in range(self.max_compliance_retries):
+            if retry > 0:
+                logger.debug(f"{tag} compliance retry {retry}/{self.max_compliance_retries}")
+
             response = await llm.async_complete(prompt, question=question)
             raw = response.raw or ""
             answer = response.answer
@@ -232,11 +242,10 @@ class IndependentRepeat:
                 answer = await parser_llm.async_parse(raw, question)
 
             if answer:
-                if trial == 0 and retry == 0:
-                    logger.debug(f"IndependentRepeat trial {trial}: {question.qkey}={answer}")
+                logger.debug(f"{tag} answer={answer} raw={repr(raw)}")
                 return answer, raw
 
-        logger.warning(f"IndependentRepeat trial {trial}: all retries failed for {question.qkey}")
+        logger.warning(f"{tag} all retries failed")
         return "", raw
 
 
@@ -391,7 +400,7 @@ class TaskProcessor:
                 if question.type == "open_response":
                     if answer:
                         tier = "tier1_text"
-                        logger.info(f"[{tier}] {question.qkey}={repr(answer[:200])} (raw={repr(raw_answer[:200])})")
+                        logger.info(f"[{tier}] {question.qkey}={repr(answer)}")
                         break
                     else:
                         logger.warning(f"[parse_fail] {question.qkey} open_response empty, retrying")
@@ -404,9 +413,9 @@ class TaskProcessor:
                         tier = "tier2_parser"
 
                 if answer:
-                    logger.info(f"[{tier}] {question.qkey}={answer} (raw={repr(raw_answer[:200])})")
+                    logger.info(f"[{tier}] {question.qkey}={answer} raw={repr(raw_answer)}")
                 else:
-                    logger.warning(f"[parse_fail] {question.qkey} raw={repr(raw_answer[:200])}")
+                    logger.warning(f"[parse_fail] {question.qkey} raw={repr(raw_answer)}")
 
                 if answer:
                     break
@@ -415,7 +424,6 @@ class TaskProcessor:
                 logger.warning(f"All {max_compliance_retries} retries failed for {question.qkey}, marking as non-compliant")
 
             results[question.qkey] = answer
-            logger.info(f"Parsed answer for {question.qkey}: {answer} (raw: {repr(raw_answer[:100]) if raw_answer else 'None'})")
 
             # Context accumulation stays text-only (no re-sending images)
             context = append_answer_to_context(text_prompt, raw_answer)
@@ -511,6 +519,7 @@ class TaskProcessor:
         self,
         backstory: str,
         questions: List[Question],
+        task_id: Optional[str] = None,
     ) -> Dict[str, str]:
         """
         Async version — delegates to the filling strategy.
@@ -518,7 +527,7 @@ class TaskProcessor:
         Questions are still processed sequentially (context accumulation),
         but LLM calls use async I/O to avoid blocking the event loop.
         """
-        return await self.strategy.fill(backstory, questions, self.llm, self.parser_llm, self.media_client)
+        return await self.strategy.fill(backstory, questions, self.llm, self.parser_llm, self.media_client, task_id=task_id)
 
     async def async_process_task(self, task: Dict[str, Any]) -> TaskProcessorResult:
         """
@@ -553,7 +562,7 @@ class TaskProcessor:
 
         # Process questions using strategy
         logger.info(f"Processing {len(questions)} questions for backstory {backstory_id}")
-        results = await self.async_process_questions_in_series(backstory_text, questions)
+        results = await self.async_process_questions_in_series(backstory_text, questions, task_id=task_id)
 
         # Complete task atomically
         await asyncio.to_thread(self.store_result, task_id, results)

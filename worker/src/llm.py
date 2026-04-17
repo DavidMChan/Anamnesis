@@ -220,7 +220,9 @@ class UnifiedLLMClient:
                     max_tokens=self._effective_max_tokens(question),
                     **params,
                 )
-                content = response.choices[0].message.content or ""
+                choice = response.choices[0]
+                content = choice.message.content or ""
+                finish_reason = choice.finish_reason
             else:
                 response = self._sync_client.completions.create(
                     model=self.model,
@@ -229,7 +231,20 @@ class UnifiedLLMClient:
                     max_tokens=self._effective_max_tokens(question),
                     **params,
                 )
-                content = response.choices[0].text or ""
+                choice = response.choices[0]
+                content = choice.text or ""
+                finish_reason = choice.finish_reason
+            if finish_reason == "length":
+                if params:
+                    logger.warning(
+                        f"Response truncated (finish_reason=length, max_tokens={self.max_tokens}), "
+                        "falling back to text mode"
+                    )
+                    return self._complete_text_fallback(prompt, question, truncated=True)
+                raise TruncationError(
+                    f"Response truncated at max_tokens={self.max_tokens}. "
+                    "Increase max_tokens in Settings (thinking models like Gemini 2.5 Pro need ≥1024)."
+                )
             return self._parse_response(content, question)
         except openai.BadRequestError as e:
             error_str = str(e).lower()
@@ -250,11 +265,15 @@ class UnifiedLLMClient:
                 raise RetryableError(str(e))
             raise NonRetryableError(str(e))
 
-    def _complete_text_fallback(self, prompt: str, question: "Optional[Question]") -> LLMResponse:
+    def _complete_text_fallback(self, prompt, question: "Optional[Question]", truncated: bool = False) -> LLMResponse:
         """Retry without structured output (text mode)."""
-        text_prompt = prompt + "\n\nRespond with ONLY the letter of your answer (A, B, C, D, etc.) and nothing else."
+        suffix = "\n\nRespond with ONLY the letter of your answer (A, B, C, D, etc.) and nothing else."
+        if isinstance(prompt, list):
+            text_prompt = prompt + [{"type": "text", "text": suffix}]
+        else:
+            text_prompt = prompt + suffix
         try:
-            if self.use_chat_template:
+            if self.use_chat_template or isinstance(prompt, list):
                 messages = [{"role": "user", "content": text_prompt}]
                 response = self._sync_client.chat.completions.create(
                     model=self.model,
@@ -262,7 +281,9 @@ class UnifiedLLMClient:
                     temperature=self.temperature,
                     max_tokens=self._effective_max_tokens(question),
                 )
-                content = response.choices[0].message.content or ""
+                choice = response.choices[0]
+                content = choice.message.content or ""
+                finish_reason = choice.finish_reason
             else:
                 response = self._sync_client.completions.create(
                     model=self.model,
@@ -270,8 +291,17 @@ class UnifiedLLMClient:
                     temperature=self.temperature,
                     max_tokens=self._effective_max_tokens(question),
                 )
-                content = response.choices[0].text or ""
+                choice = response.choices[0]
+                content = choice.text or ""
+                finish_reason = choice.finish_reason
+            if finish_reason == "length":
+                raise TruncationError(
+                    f"Response truncated at max_tokens={self.max_tokens} even in text mode. "
+                    "Increase max_tokens in Settings (thinking models like Gemini 2.5 Pro need ≥1024)."
+                )
             return LLMResponse.from_text(content)
+        except TruncationError:
+            raise
         except Exception as e:
             raise NonRetryableError(f"Text fallback also failed: {e}")
 
@@ -290,7 +320,9 @@ class UnifiedLLMClient:
                     max_tokens=self._effective_max_tokens(question),
                     **params,
                 )
-                content = response.choices[0].message.content or ""
+                choice = response.choices[0]
+                content = choice.message.content or ""
+                finish_reason = choice.finish_reason
             else:
                 response = await self._async_client.completions.create(
                     model=self.model,
@@ -299,7 +331,20 @@ class UnifiedLLMClient:
                     max_tokens=self._effective_max_tokens(question),
                     **params,
                 )
-                content = response.choices[0].text or ""
+                choice = response.choices[0]
+                content = choice.text or ""
+                finish_reason = choice.finish_reason
+            if finish_reason == "length":
+                if params:
+                    logger.warning(
+                        f"Response truncated (finish_reason=length, max_tokens={self.max_tokens}), "
+                        "falling back to text mode"
+                    )
+                    return await self._async_complete_text_fallback(prompt, question, truncated=True)
+                raise TruncationError(
+                    f"Response truncated at max_tokens={self.max_tokens}. "
+                    "Increase max_tokens in Settings (thinking models like Gemini 2.5 Pro need ≥1024)."
+                )
             return self._parse_response(content, question)
         except openai.BadRequestError as e:
             error_str = str(e).lower()
@@ -320,11 +365,15 @@ class UnifiedLLMClient:
                 raise RetryableError(str(e))
             raise NonRetryableError(str(e))
 
-    async def _async_complete_text_fallback(self, prompt: str, question: "Optional[Question]") -> LLMResponse:
+    async def _async_complete_text_fallback(self, prompt, question: "Optional[Question]", truncated: bool = False) -> LLMResponse:
         """Retry without structured output (text mode, async)."""
-        text_prompt = prompt + "\n\nRespond with ONLY the letter of your answer (A, B, C, D, etc.) and nothing else."
+        suffix = "\n\nRespond with ONLY the letter of your answer (A, B, C, D, etc.) and nothing else."
+        if isinstance(prompt, list):
+            text_prompt = prompt + [{"type": "text", "text": suffix}]
+        else:
+            text_prompt = prompt + suffix
         try:
-            if self.use_chat_template:
+            if self.use_chat_template or isinstance(prompt, list):
                 messages = [{"role": "user", "content": text_prompt}]
                 response = await self._async_client.chat.completions.create(
                     model=self.model,
@@ -332,7 +381,9 @@ class UnifiedLLMClient:
                     temperature=self.temperature,
                     max_tokens=self._effective_max_tokens(question),
                 )
-                content = response.choices[0].message.content or ""
+                choice = response.choices[0]
+                content = choice.message.content or ""
+                finish_reason = choice.finish_reason
             else:
                 response = await self._async_client.completions.create(
                     model=self.model,
@@ -340,8 +391,17 @@ class UnifiedLLMClient:
                     temperature=self.temperature,
                     max_tokens=self._effective_max_tokens(question),
                 )
-                content = response.choices[0].text or ""
+                choice = response.choices[0]
+                content = choice.text or ""
+                finish_reason = choice.finish_reason
+            if finish_reason == "length":
+                raise TruncationError(
+                    f"Response truncated at max_tokens={self.max_tokens} even in text mode. "
+                    "Increase max_tokens in Settings (thinking models like Gemini 2.5 Pro need ≥1024)."
+                )
             return LLMResponse.from_text(content)
+        except TruncationError:
+            raise
         except Exception as e:
             raise NonRetryableError(f"Text fallback also failed: {e}")
 
