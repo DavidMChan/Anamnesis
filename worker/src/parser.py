@@ -14,7 +14,7 @@ from typing import Optional
 from openai import OpenAI, AsyncOpenAI
 
 from .prompt import Question
-from .response import LLMResponse
+from .response import LLMResponse, LLMUsage
 
 logger = logging.getLogger(__name__)
 
@@ -136,16 +136,30 @@ class ParserLLM:
         else:
             return self._parse_single_letter(content, question)
 
-    def parse(self, raw_response: str, question: Question) -> str:
-        """
-        Parse a verbose LLM response into an answer (sync).
+    @staticmethod
+    def _extract_usage(response) -> Optional[LLMUsage]:
+        usage = getattr(response, "usage", None)
+        if not usage:
+            return None
 
-        For MCQ: returns single letter (A, B, C, ...)
-        For multiple_select: returns comma-separated letters (A,C,D)
-        For ranking: returns comma-separated letters in order (B,A,C,D)
-        """
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        completion_details = getattr(usage, "completion_tokens_details", None)
+
+        return LLMUsage(
+            prompt_tokens=getattr(usage, "prompt_tokens", None),
+            completion_tokens=getattr(usage, "completion_tokens", None),
+            total_tokens=getattr(usage, "total_tokens", None),
+            cost=getattr(usage, "cost", None),
+            reasoning_tokens=getattr(completion_details, "reasoning_tokens", None) if completion_details else None,
+            cached_tokens=getattr(prompt_details, "cached_tokens", None) if prompt_details else None,
+            cache_write_tokens=getattr(prompt_details, "cache_write_tokens", None) if prompt_details else None,
+            audio_tokens=getattr(prompt_details, "audio_tokens", None) if prompt_details else None,
+        )
+
+    def parse_response(self, raw_response: str, question: Question) -> LLMResponse:
+        """Parse a verbose LLM response into an answer plus usage metadata (sync)."""
         if not self.is_configured:
-            return ""
+            return LLMResponse(answer="")
 
         prompt = self._build_prompt(raw_response, question)
 
@@ -157,15 +171,29 @@ class ParserLLM:
                 max_tokens=self._effective_max_tokens(question),
             )
             content = response.choices[0].message.content or ""
-            return self._extract_answer(content, question)
+            return LLMResponse(
+                answer=self._extract_answer(content, question),
+                raw=content,
+                usage=self._extract_usage(response),
+            )
         except Exception as e:
             logger.warning(f"Parser LLM error: {e}")
-            return ""
+            return LLMResponse(answer="")
 
-    async def async_parse(self, raw_response: str, question: Question) -> str:
-        """Async version of parse()."""
+    def parse(self, raw_response: str, question: Question) -> str:
+        """
+        Parse a verbose LLM response into an answer (sync).
+
+        For MCQ: returns single letter (A, B, C, ...)
+        For multiple_select: returns comma-separated letters (A,C,D)
+        For ranking: returns comma-separated letters in order (B,A,C,D)
+        """
+        return self.parse_response(raw_response, question).answer
+
+    async def async_parse_response(self, raw_response: str, question: Question) -> LLMResponse:
+        """Async version of parse_response()."""
         if not self.is_configured:
-            return ""
+            return LLMResponse(answer="")
 
         prompt = self._build_prompt(raw_response, question)
 
@@ -177,10 +205,18 @@ class ParserLLM:
                 max_tokens=self._effective_max_tokens(question),
             )
             content = response.choices[0].message.content or ""
-            return self._extract_answer(content, question)
+            return LLMResponse(
+                answer=self._extract_answer(content, question),
+                raw=content,
+                usage=self._extract_usage(response),
+            )
         except Exception as e:
             logger.warning(f"Parser LLM error: {e}")
-            return ""
+            return LLMResponse(answer="")
+
+    async def async_parse(self, raw_response: str, question: Question) -> str:
+        """Async version of parse()."""
+        return (await self.async_parse_response(raw_response, question)).answer
 
     def _parse_single_letter(self, content: str, question: Question) -> str:
         """Parse a single letter answer for MCQ."""
