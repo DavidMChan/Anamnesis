@@ -158,7 +158,14 @@ class TaskDispatcher:
         if not state.should_stop:
             return False
 
-        self.db.complete_run_early(run_id)
+        stop_summary = {
+            "sample_count": state.sample_count,
+            "eligible_questions": state.eligible_questions,
+            "confidence_lower_bound": state.confidence_lower_bound,
+            "epsilon": epsilon,
+            "min_samples": min_samples,
+        }
+        self.db.complete_run_early(run_id, stop_summary)
         logger.info(
             f"Adaptive sampling completed run {run_id} early: "
             f"samples={state.sample_count}, eligible_questions={state.eligible_questions}, "

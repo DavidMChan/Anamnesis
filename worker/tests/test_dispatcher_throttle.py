@@ -255,4 +255,7 @@ class TestAdaptiveSampling:
         ]
 
         assert dispatcher.maybe_complete_adaptive_run(run) is True
-        mock_db.complete_run_early.assert_called_once_with(run["id"])
+        mock_db.complete_run_early.assert_called_once()
+        args = mock_db.complete_run_early.call_args.args
+        assert args[0] == run["id"]
+        assert args[1]["sample_count"] == 101

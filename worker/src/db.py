@@ -348,14 +348,17 @@ class DatabaseClient:
         rows = result.data or []
         return [row["result"] for row in rows if row.get("result")]
 
-    def complete_run_early(self, run_id: str) -> None:
+    def complete_run_early(self, run_id: str, stop_summary: Optional[Dict[str, Any]] = None) -> None:
         """
         Mark a run completed and cancel work that has not started.
 
         The RPC cancels pending, queued, and processing tasks so no additional
         results are stored after the adaptive stopping decision.
         """
-        self.client.rpc("complete_run_early", {"p_run_id": run_id}).execute()
+        self.client.rpc(
+            "complete_run_early",
+            {"p_run_id": run_id, "p_stop_summary": stop_summary or {}},
+        ).execute()
 
     def get_in_flight_count(self, run_id: str) -> int:
         """

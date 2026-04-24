@@ -48,6 +48,16 @@ export interface AdaptiveSamplingConfig {
   enabled: boolean
   epsilon: number
   min_samples: number
+  stop_summary?: AdaptiveSamplingStopSummary
+}
+
+export interface AdaptiveSamplingStopSummary {
+  sample_count: number
+  eligible_questions: number
+  confidence_lower_bound: number
+  epsilon: number
+  min_samples: number
+  stopped_at?: string
 }
 
 export interface Backstory {
