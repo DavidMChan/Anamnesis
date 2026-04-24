@@ -32,11 +32,22 @@ export interface LLMConfig {
   // Concurrency control (enforced by dispatcher)
   max_concurrent_tasks?: number  // Default: 10
 
+  // Adaptive sampling control. When enabled, the dispatcher may finish a run
+  // before all pre-created tasks are consumed once closed-choice answers have
+  // a stable posterior ranking.
+  adaptive_sampling?: AdaptiveSamplingConfig
+
   // Demographic survey execution params (stored in run snapshot)
   distribution_mode?: 'n_sample' | 'logprobs'
   num_trials?: number  // N-sample mode: how many times per backstory
 
   // Note: API keys are stored securely in Supabase Vault, not in this config
+}
+
+export interface AdaptiveSamplingConfig {
+  enabled: boolean
+  epsilon: number
+  min_samples: number
 }
 
 export interface Backstory {

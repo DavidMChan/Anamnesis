@@ -330,11 +330,32 @@ class DatabaseClient:
         # Get runs with status 'pending' or 'running' — only fetch columns used by the dispatcher
         result = (
             self.client.table("survey_runs")
-            .select("id, status, llm_config")
+            .select("id, status, llm_config, completed_tasks, total_tasks")
             .in_("status", ["pending", "running"])
             .execute()
         )
         return result.data or []
+
+    def get_completed_results_for_run(self, run_id: str) -> List[Dict[str, Any]]:
+        """Return completed task result payloads for a run."""
+        result = (
+            self.client.table("survey_tasks")
+            .select("result")
+            .eq("survey_run_id", run_id)
+            .eq("status", "completed")
+            .execute()
+        )
+        rows = result.data or []
+        return [row["result"] for row in rows if row.get("result")]
+
+    def complete_run_early(self, run_id: str) -> None:
+        """
+        Mark a run completed and cancel work that has not started.
+
+        The RPC cancels pending, queued, and processing tasks so no additional
+        results are stored after the adaptive stopping decision.
+        """
+        self.client.rpc("complete_run_early", {"p_run_id": run_id}).execute()
 
     def get_in_flight_count(self, run_id: str) -> int:
         """

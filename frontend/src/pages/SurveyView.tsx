@@ -4,6 +4,9 @@ import { Layout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { supabase } from '@/lib/supabase'
 import { useSurveyRun, useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
@@ -69,6 +72,12 @@ const questionTypeLabels: Record<string, string> = {
   ranking: 'Ranking',
 }
 
+const DEFAULT_ADAPTIVE_SAMPLING = {
+  enabled: false,
+  epsilon: 0.01,
+  min_samples: 30,
+}
+
 /** Format a question for the prompt preview, mirroring worker/src/prompt.py formatting. */
 function formatQuestionPreview(q: Question): string {
   const letters = (q.options || []).map((_, i) => String.fromCharCode(65 + i))
@@ -106,6 +115,7 @@ export function SurveyView() {
   const [runDemographics, setRunDemographics] = useState<DemographicSelectionConfig>(defaultDemographicSelectionConfig())
   const [runAlgorithm, setRunAlgorithm] = useState<SurveyAlgorithm>('anthology')
   const [runPromptText, setRunPromptText] = useState('')
+  const [adaptiveSampling, setAdaptiveSampling] = useState(DEFAULT_ADAPTIVE_SAMPLING)
 
   // Fetch survey run data
   const { run: latestRun, runs, isRunning, refresh: refreshRuns } = useSurveyRun({
@@ -207,7 +217,10 @@ export function SurveyView() {
     }
 
     // Merge profile defaults + local overrides into run config snapshot
-    const runLlmConfig = mergeEffectiveConfig(llmConfig, runOverrides)
+    const runLlmConfig = {
+      ...mergeEffectiveConfig(llmConfig, runOverrides),
+      ...(adaptiveSampling.enabled ? { adaptive_sampling: adaptiveSampling } : {}),
+    }
     const promptText = runAlgorithm === 'zero_shot_baseline' ? runPromptText : undefined
     const runId = await createRun(survey.id, runLlmConfig, runDemographics, runAlgorithm, promptText)
     if (runId) {
@@ -397,6 +410,77 @@ export function SurveyView() {
           </CardContent>}
         </Card>
 
+        {/* Adaptive Sampling */}
+        <Card>
+          <CardHeader>
+            <CardTitle>Sample Stopping</CardTitle>
+            <CardDescription>
+              Optionally stop the run once closed-choice answers are statistically stable.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <label className="flex items-start gap-3 cursor-pointer">
+              <Checkbox
+                checked={adaptiveSampling.enabled}
+                onCheckedChange={(checked) =>
+                  setAdaptiveSampling((current) => ({ ...current, enabled: checked === true }))
+                }
+                className="mt-0.5"
+              />
+              <div className="space-y-1">
+                <span className="text-sm font-medium">Run until stable</span>
+                <p className="text-sm text-muted-foreground">
+                  Uses the sample size below as a maximum and finishes early when MCQ answer rankings are stable.
+                </p>
+              </div>
+            </label>
+
+            {adaptiveSampling.enabled && (
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-2">
+                  <Label htmlFor="adaptive-epsilon">Epsilon</Label>
+                  <Input
+                    id="adaptive-epsilon"
+                    type="number"
+                    min={0.0001}
+                    max={0.5}
+                    step={0.001}
+                    value={adaptiveSampling.epsilon}
+                    onChange={(event) => {
+                      const value = Number(event.target.value)
+                      if (Number.isFinite(value)) {
+                        setAdaptiveSampling((current) => ({ ...current, epsilon: value }))
+                      }
+                    }}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    0.01 stops when the lower-bound probability of the current adjacent ordering is at least 99%.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="adaptive-min-samples">Minimum samples</Label>
+                  <Input
+                    id="adaptive-min-samples"
+                    type="number"
+                    min={2}
+                    step={1}
+                    value={adaptiveSampling.min_samples}
+                    onChange={(event) => {
+                      const value = parseInt(event.target.value, 10)
+                      if (Number.isFinite(value)) {
+                        setAdaptiveSampling((current) => ({ ...current, min_samples: Math.max(2, value) }))
+                      }
+                    }}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    Prevents stopping from very small early samples.
+                  </p>
+                </div>
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
         {/* Run Configuration — local state, applied when "Run Survey" is clicked */}
         <RunConfigCard
           profileConfig={profile?.llm_config}
@@ -447,7 +531,13 @@ export function SurveyView() {
           value={runDemographics}
           onChange={setRunDemographics}
           description="Settings for the next run (empty = inherit from initial survey settings)"
-          sampleSizeLabel={runAlgorithm === 'zero_shot_baseline' ? 'Number of trials' : undefined}
+          sampleSizeLabel={
+            adaptiveSampling.enabled
+              ? 'Maximum samples'
+              : runAlgorithm === 'zero_shot_baseline'
+                ? 'Number of trials'
+                : undefined
+          }
         />
 
         {/* Prompt Preview */}
@@ -460,7 +550,7 @@ export function SurveyView() {
               </div>
               <CardDescription>
                 {runAlgorithm === 'zero_shot_baseline'
-                  ? `What will be sent to the LLM for each trial (repeated ${runDemographics.sample_size ?? '?'} times independently)`
+                  ? `What will be sent to the LLM for each trial (${adaptiveSampling.enabled ? 'up to ' : 'repeated '}${runDemographics.sample_size ?? '?'} times independently)`
                   : 'What will be sent to the LLM for each backstory (run once per backstory)'}
               </CardDescription>
             </CardHeader>

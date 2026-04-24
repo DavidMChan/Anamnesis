@@ -18,6 +18,12 @@ import { ResultsTable } from '@/components/results/ResultsTable'
 import { DemographicsSummary } from '@/components/results/DemographicsSummary'
 import { DemographicFilter } from '@/components/results/DemographicFilter'
 import type { Backstory, DemographicKey } from '@/types/database'
+import {
+  computeAdaptiveSamplingSummary,
+  computeDistributionWithIntervals,
+  type AdaptiveSamplingSummary,
+  type DistributionDatum,
+} from '@/lib/bayesianStability'
 
 // Chart colors (vibrant for data visualization)
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
@@ -163,7 +169,7 @@ function aggregateUsage(results: SurveyResultsType): SurveyTaskUsage | null {
 interface QuestionStats {
   qkey: string
   question: Question
-  distribution: { option: string; count: number; percentage: number }[]
+  distribution: DistributionDatum[]
   openResponses?: string[]
   // Ranking-specific stats
   rankingStats?: {
@@ -172,6 +178,40 @@ interface QuestionStats {
     bordaScore: number
     firstPlaceCount: number
   }[]
+}
+
+function AdaptiveSamplingCard({ summary }: { summary: AdaptiveSamplingSummary | null }) {
+  if (!summary) return null
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-sm font-semibold">Adaptive Sampling Stability</div>
+          <p className="text-sm text-muted-foreground">
+            {summary.eligibleQuestions} eligible question{summary.eligibleQuestions > 1 ? 's' : ''} evaluated from {summary.sampleCount} response{summary.sampleCount === 1 ? '' : 's'}.
+          </p>
+        </div>
+        <Badge variant={summary.shouldStop ? 'default' : 'outline'}>
+          {summary.shouldStop ? 'Stable' : 'Collecting'}
+        </Badge>
+      </div>
+      <div className="mt-3 grid gap-3 text-sm md:grid-cols-3">
+        <div>
+          <div className="text-muted-foreground">Confidence lower bound</div>
+          <div className="font-medium">{Math.round(summary.confidenceLowerBound * 1000) / 10}%</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Epsilon</div>
+          <div className="font-medium">{summary.epsilon}</div>
+        </div>
+        <div>
+          <div className="text-muted-foreground">Minimum samples</div>
+          <div className="font-medium">{summary.minSamples}</div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 export function SurveyResults() {
@@ -510,11 +550,7 @@ export function SurveyResults() {
         }
       })
 
-      const distribution = Object.entries(counts).map(([option, count]) => ({
-        option,
-        count: Math.round(count * 10) / 10,
-        percentage: totalWeight > 0 ? Math.round((count / totalWeight) * 100) : 0,
-      }))
+      const distribution = computeDistributionWithIntervals(counts, totalWeight, filters.length === 0)
 
       return {
         qkey: question.qkey,
@@ -715,6 +751,13 @@ export function SurveyResults() {
 
   const totalResponses = Object.keys(results).length
   const usageSummary = aggregateUsage(results)
+  const adaptiveConfig = run.llm_config.adaptive_sampling
+  const adaptiveSummary = adaptiveConfig?.enabled
+    ? computeAdaptiveSamplingSummary(survey.questions, results, {
+      epsilon: adaptiveConfig.epsilon,
+      minSamples: adaptiveConfig.min_samples,
+    })
+    : null
 
   return (
     <Layout>
@@ -730,6 +773,7 @@ export function SurveyResults() {
 
         <RunConfigCard run={run} />
         <CostSummaryCard usage={usageSummary} responseCount={totalResponses} />
+        <AdaptiveSamplingCard summary={adaptiveSummary} />
 
         {isRunning && run && (
           <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-3">
