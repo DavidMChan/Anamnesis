@@ -9,7 +9,7 @@ import { supabase } from '@/lib/supabase'
 import { useSurveyRun } from '@/hooks/useSurveyRun'
 import type { Survey, SurveyRun, Question, SurveyResults as SurveyResultsType, SurveyTaskUsage } from '@/types/database'
 import { getModelName } from '@/lib/llmConfig'
-import { BarChart2, Table, ImageDown, RefreshCw, ChevronDown, Settings } from 'lucide-react'
+import { BarChart2, Table, ImageDown, RefreshCw, ChevronDown, Settings, Wallet, Gauge, Layers3 } from 'lucide-react'
 import { ResultsHero } from '@/components/results/ResultsHero'
 import { OpenResponseList } from '@/components/results/OpenResponseList'
 import { DistributionChart } from '@/components/results/DistributionChart'
@@ -87,54 +87,45 @@ function RunConfigCard({ run }: { run: SurveyRun | null }) {
   )
 }
 
-function UsageSummaryCard({ usage, responseCount }: { usage: SurveyTaskUsage | null; responseCount: number }) {
+function CostSummaryCard({ usage, responseCount }: { usage: SurveyTaskUsage | null; responseCount: number }) {
   if (!usage) return null
 
   const avgCost = responseCount > 0 ? usage.cost / responseCount : 0
-  const fmtInt = (n: number) => n.toLocaleString()
   const fmtUsd = (n: number) => `$${n.toFixed(4)}`
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle className="text-base">Usage Summary</CardTitle>
-        <CardDescription>Aggregated from completed task results</CardDescription>
-      </CardHeader>
-      <CardContent className="grid grid-cols-2 gap-4 text-sm md:grid-cols-4">
+    <div className="rounded-xl border border-border/70 bg-gradient-to-r from-card to-muted/40 p-4">
+      <div className="mb-3 flex items-start justify-between gap-4">
         <div>
-          <div className="text-muted-foreground">Total Cost</div>
-          <div className="font-medium">{fmtUsd(usage.cost)}</div>
+          <div className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Run Cost</div>
+          <div className="mt-1 text-2xl font-semibold leading-none">{fmtUsd(usage.cost)}</div>
+          <div className="mt-1 text-sm text-muted-foreground">across {responseCount} completed responses</div>
         </div>
-        <div>
-          <div className="text-muted-foreground">Avg Cost / Response</div>
-          <div className="font-medium">{fmtUsd(avgCost)}</div>
+      </div>
+      <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2 xl:grid-cols-3">
+        <div className="rounded-lg border border-border/60 bg-background/80 p-3">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Wallet className="h-4 w-4" />
+            <span>Total spend</span>
+          </div>
+          <div className="mt-2 text-lg font-medium">{fmtUsd(usage.cost)}</div>
         </div>
-        <div>
-          <div className="text-muted-foreground">Audio Tokens</div>
-          <div className="font-medium">{fmtInt(usage.audio_tokens)}</div>
+        <div className="rounded-lg border border-border/60 bg-background/80 p-3">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Gauge className="h-4 w-4" />
+            <span>Per response</span>
+          </div>
+          <div className="mt-2 text-lg font-medium">{fmtUsd(avgCost)}</div>
         </div>
-        <div>
-          <div className="text-muted-foreground">API Calls</div>
-          <div className="font-medium">{fmtInt(usage.api_calls)}</div>
+        <div className="rounded-lg border border-border/60 bg-background/80 p-3">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Layers3 className="h-4 w-4" />
+            <span>Parser share</span>
+          </div>
+          <div className="mt-2 text-lg font-medium">{fmtUsd(usage.parser_model_cost)}</div>
         </div>
-        <div>
-          <div className="text-muted-foreground">Prompt Tokens</div>
-          <div className="font-medium">{fmtInt(usage.prompt_tokens)}</div>
-        </div>
-        <div>
-          <div className="text-muted-foreground">Completion Tokens</div>
-          <div className="font-medium">{fmtInt(usage.completion_tokens)}</div>
-        </div>
-        <div>
-          <div className="text-muted-foreground">Reasoning Tokens</div>
-          <div className="font-medium">{fmtInt(usage.reasoning_tokens)}</div>
-        </div>
-        <div>
-          <div className="text-muted-foreground">Parser Cost</div>
-          <div className="font-medium">{fmtUsd(usage.parser_model_cost)}</div>
-        </div>
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   )
 }
 
@@ -737,7 +728,7 @@ export function SurveyResults() {
         />
 
         <RunConfigCard run={run} />
-        <UsageSummaryCard usage={usageSummary} responseCount={totalResponses} />
+        <CostSummaryCard usage={usageSummary} responseCount={totalResponses} />
 
         {isRunning && run && (
           <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-3">
