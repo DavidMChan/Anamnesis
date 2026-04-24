@@ -167,13 +167,13 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, cr
           <div className="rounded-xl border border-border/70 bg-gradient-to-r from-card to-muted/40 p-4">
             <div className="mb-3 flex items-start justify-between gap-4">
               <div>
-                <div className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Cost</div>
+                <div className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Estimated Cost</div>
                 <div className="mt-1 text-2xl font-semibold leading-none">
                   {formatUsd((costSummary.cost / run.completed_tasks) * run.total_tasks)}
                 </div>
-                <div className="mt-1 text-sm text-muted-foreground">
+                {/* <div className="mt-1 text-sm text-muted-foreground">
                   pace for the full run
-                </div>
+                </div> */}
               </div>
               <Badge variant="outline" className="shrink-0">
                 {run.completed_tasks} task{run.completed_tasks > 1 ? 's' : ''} sampled
@@ -183,17 +183,17 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, cr
               <div className="rounded-lg border border-border/60 bg-background/80 p-3">
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <Wallet className="h-4 w-4" />
-                  <span>Current spend</span>
+                  <span>Current cost</span>
                 </div>
                 <div className="mt-2 text-lg font-medium">{formatUsd(costSummary.cost)}</div>
               </div>
               <div className="rounded-lg border border-border/60 bg-background/80 p-3">
                 <div className="flex items-center gap-2 text-muted-foreground">
                   <Gauge className="h-4 w-4" />
-                  <span>Current pace</span>
+                  <span>Cost per completed task</span>
                 </div>
                 <div className="mt-2 text-lg font-medium">{formatUsd(costSummary.cost / run.completed_tasks)}</div>
-                <div className="text-xs text-muted-foreground">per completed task</div>
+                {/* <div className="text-xs text-muted-foreground">per completed task</div> */}
               </div>
             </div>
             {isInProgress && (

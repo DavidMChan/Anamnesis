@@ -99,10 +99,12 @@ function CostSummaryCard({ usage, responseCount }: { usage: SurveyTaskUsage | nu
         <div>
           <div className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Run Cost</div>
           <div className="mt-1 text-2xl font-semibold leading-none">{fmtUsd(usage.cost)}</div>
-          <div className="mt-1 text-sm text-muted-foreground">across {responseCount} completed responses</div>
         </div>
+        <Badge variant="outline" className="shrink-0">
+          {responseCount} responses
+        </Badge>
       </div>
-      <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2 xl:grid-cols-3">
+      <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
         <div className="rounded-lg border border-border/60 bg-background/80 p-3">
           <div className="flex items-center gap-2 text-muted-foreground">
             <Wallet className="h-4 w-4" />
