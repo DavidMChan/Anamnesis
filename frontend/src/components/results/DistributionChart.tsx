@@ -49,6 +49,8 @@ export function DistributionChart({ distribution, colors, onRef }: DistributionC
                     <XAxis
                         type="number"
                         domain={[0, 100]}
+                        allowDataOverflow
+                        ticks={[0, 25, 50, 75, 100]}
                         tickFormatter={(v) => `${v}%`}
                         stroke="var(--color-muted-foreground)"
                         fontSize={12}
