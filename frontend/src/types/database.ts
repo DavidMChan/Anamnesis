@@ -118,13 +118,42 @@ export interface Question {
   option_media?: (MediaAttachment | null)[]  // Per-option, parallel to options[]
 }
 
+export interface SurveyTaskUsage {
+  api_calls: number
+  main_model_calls: number
+  parser_model_calls: number
+  prompt_tokens: number
+  completion_tokens: number
+  total_tokens: number
+  reasoning_tokens: number
+  cached_tokens: number
+  cache_write_tokens: number
+  audio_tokens: number
+  cost: number
+  main_model_cost: number
+  parser_model_cost: number
+}
+
+export interface SurveyTaskMeta {
+  llm?: {
+    provider?: string | null
+    model?: string | null
+  } | null
+  parser_llm?: {
+    model?: string | null
+  } | null
+  usage?: SurveyTaskUsage | null
+}
+
+export type SurveyTaskResult = Record<string, string | string[] | undefined> & {
+  __meta__?: SurveyTaskMeta
+}
+
 export type SurveyStatus = 'draft' | 'active'
 export type SurveyType = 'survey' | 'demographic'
 
 export interface SurveyResults {
-  [backstory_id: string]: {
-    [qkey: string]: string | string[]
-  }
+  [backstory_id: string]: SurveyTaskResult
 }
 
 export interface Survey {
@@ -173,7 +202,7 @@ export interface SurveyTask {
   survey_run_id: string
   backstory_id: string | null
   status: SurveyTaskStatus
-  result: { [qkey: string]: string | string[] } | null
+  result: SurveyTaskResult | null
   error: string | null
   attempts: number
   created_at: string

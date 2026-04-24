@@ -18,10 +18,10 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
-import { RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, Square, ChevronDown, RotateCcw } from 'lucide-react'
+import { RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, Square, ChevronDown, RotateCcw, Wallet, Gauge, Flag } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { retryTask } from '@/lib/surveyRunner'
-import type { SurveyRun, SurveyRunStatus } from '@/types/database'
+import type { SurveyRun, SurveyRunStatus, SurveyTaskUsage, SurveyTaskResult } from '@/types/database'
 
 interface SurveyRunProgressProps {
   run: SurveyRun
@@ -66,6 +66,7 @@ const statusConfig: Record<
 
 export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, creatingRun, onTaskRetried }: SurveyRunProgressProps) {
   const [cancelling, setCancelling] = useState(false)
+  const [costSummary, setCostSummary] = useState<SurveyTaskUsage | null>(null)
   const status = statusConfig[run.status]
   const totalProcessed = run.completed_tasks + run.failed_tasks
   const progress = run.total_tasks > 0 ? Math.round((totalProcessed / run.total_tasks) * 100) : 0
@@ -82,6 +83,36 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, cr
       setCancelling(false)
     }
   }
+
+  useEffect(() => {
+    let cancelled = false
+
+    const fetchCostSummary = async () => {
+      const { data, error } = await supabase
+        .from('survey_tasks')
+        .select('result')
+        .eq('survey_run_id', run.id)
+        .eq('status', 'completed')
+
+      if (cancelled || error) return
+
+      const totals = aggregateUsageFromResults((data || []).map((row) => row.result as SurveyTaskResult | null))
+      setCostSummary(totals)
+    }
+
+    fetchCostSummary()
+    if (isInProgress) {
+      const intervalId = setInterval(fetchCostSummary, 5000)
+      return () => {
+        cancelled = true
+        clearInterval(intervalId)
+      }
+    }
+
+    return () => {
+      cancelled = true
+    }
+  }, [run.id, run.completed_tasks, isInProgress])
 
   return (
     <Card>
@@ -132,6 +163,48 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, cr
           </div>
         </div>
 
+        {costSummary && run.completed_tasks > 0 && (
+          <div className="rounded-xl border border-border/70 bg-gradient-to-r from-card to-muted/40 p-4">
+            <div className="mb-3 flex items-start justify-between gap-4">
+              <div>
+                <div className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Estimated Cost</div>
+                <div className="mt-1 text-2xl font-semibold leading-none">
+                  {formatUsd((costSummary.cost / run.completed_tasks) * run.total_tasks)}
+                </div>
+                {/* <div className="mt-1 text-sm text-muted-foreground">
+                  pace for the full run
+                </div> */}
+              </div>
+              <Badge variant="outline" className="shrink-0">
+                {run.completed_tasks} task{run.completed_tasks > 1 ? 's' : ''} sampled
+              </Badge>
+            </div>
+            <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+              <div className="rounded-lg border border-border/60 bg-background/80 p-3">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Wallet className="h-4 w-4" />
+                  <span>Current cost</span>
+                </div>
+                <div className="mt-2 text-lg font-medium">{formatUsd(costSummary.cost)}</div>
+              </div>
+              <div className="rounded-lg border border-border/60 bg-background/80 p-3">
+                <div className="flex items-center gap-2 text-muted-foreground">
+                  <Gauge className="h-4 w-4" />
+                  <span>Cost per completed task</span>
+                </div>
+                <div className="mt-2 text-lg font-medium">{formatUsd(costSummary.cost / run.completed_tasks)}</div>
+                {/* <div className="text-xs text-muted-foreground">per completed task</div> */}
+              </div>
+            </div>
+            {isInProgress && (
+              <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+                <Flag className="h-3.5 w-3.5" />
+                This line moves with each completed task that reports usage metadata.
+              </p>
+            )}
+          </div>
+        )}
+
         {/* Error summary */}
         {run.failed_tasks > 0 && (
           <FailedTaskErrors runId={run.id} failedCount={run.failed_tasks} onTaskRetried={onTaskRetried} />
@@ -178,6 +251,40 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, cr
       </CardContent>
     </Card>
   )
+}
+
+function aggregateUsageFromResults(results: Array<SurveyTaskResult | null>): SurveyTaskUsage | null {
+  const totals: SurveyTaskUsage = {
+    api_calls: 0,
+    main_model_calls: 0,
+    parser_model_calls: 0,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    reasoning_tokens: 0,
+    cached_tokens: 0,
+    cache_write_tokens: 0,
+    audio_tokens: 0,
+    cost: 0,
+    main_model_cost: 0,
+    parser_model_cost: 0,
+  }
+
+  let seen = false
+  for (const result of results) {
+    const usage = result?.__meta__?.usage
+    if (!usage) continue
+    seen = true
+    ;(Object.keys(totals) as (keyof SurveyTaskUsage)[]).forEach((key) => {
+      totals[key] += usage[key] || 0
+    })
+  }
+
+  return seen ? totals : null
+}
+
+function formatUsd(value: number): string {
+  return `$${value.toFixed(4)}`
 }
 
 const MAX_DISPLAYED_ERRORS = 20

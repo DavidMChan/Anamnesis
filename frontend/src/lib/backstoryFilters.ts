@@ -34,24 +34,90 @@ function shuffle<T>(arr: T[]): T[] {
   return a
 }
 
-/**
- * Fetch all public backstories with demographics (excluding anthology).
- * Returns id + demographics for client-side scoring.
- */
-async function fetchBackstoriesWithDemographics(): Promise<
-  { id: string; demographics: Demographics }[]
-> {
+const BACKSTORY_PAGE_SIZE = 5000
+const SIMPLE_DEMOGRAPHIC_KEY = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+function getActiveDemographicKeys(filters: DemographicFilter): string[] {
+  const keys = new Set<string>()
+
+  for (const [key, filterValue] of Object.entries(filters)) {
+    if (key === '_sample_size') continue
+    if (!filterValue || !Array.isArray(filterValue) || filterValue.length === 0) continue
+
+    keys.add(key.startsWith('custom_') ? key.replace('custom_', '') : key)
+  }
+
+  return Array.from(keys)
+}
+
+async function fetchAllPublicBackstoryIds(): Promise<string[]> {
   const { data, error } = await supabase
     .from('backstories')
-    .select('id, demographics')
+    .select('id')
     .eq('is_public', true)
     .neq('source_type', 'anthology')
+    .order('id', { ascending: true })
 
   if (error) throw new Error(error.message)
-  return (data || []).filter((b) => b.demographics) as {
-    id: string
-    demographics: Demographics
-  }[]
+  return (data || []).map((b) => b.id)
+}
+
+/**
+ * Fetch all public backstories with demographics (excluding anthology).
+ * Returns id + only the demographic keys needed for client-side scoring.
+ */
+async function fetchBackstoriesWithDemographics(
+  demographicKeys: string[]
+): Promise<{ id: string; demographics: Demographics }[]> {
+  const uniqueKeys = Array.from(new Set(demographicKeys)).filter(Boolean)
+
+  // PostgREST JSON-path projection needs simple aliases. Fall back to the full
+  // JSONB column for unusual user-defined keys rather than generating bad SQL.
+  const canProjectKeys = uniqueKeys.every((key) => SIMPLE_DEMOGRAPHIC_KEY.test(key))
+  const selectClause = canProjectKeys && uniqueKeys.length > 0
+    ? ['id', ...uniqueKeys.map((key) => `${key}:demographics->${key}`)].join(', ')
+    : 'id, demographics'
+
+  const backstories: { id: string; demographics: Demographics }[] = []
+
+  for (let from = 0; ; from += BACKSTORY_PAGE_SIZE) {
+    const to = from + BACKSTORY_PAGE_SIZE - 1
+    const { data, error } = await supabase
+      .from('backstories')
+      .select(selectClause)
+      .eq('is_public', true)
+      .neq('source_type', 'anthology')
+      .order('id', { ascending: true })
+      .range(from, to)
+
+    if (error) throw new Error(error.message)
+    if (!data || data.length === 0) break
+
+    const rows = data as unknown as Array<Record<string, unknown> & { id: string; demographics?: Demographics }>
+    backstories.push(
+      ...rows.map((row) => {
+        if (!canProjectKeys) {
+          return {
+            id: row.id,
+            demographics: (row.demographics || {}) as Demographics,
+          }
+        }
+
+        const demographics: Demographics = {}
+        for (const key of uniqueKeys) {
+          const value = row[key]
+          if (value) {
+            demographics[key] = value as Demographics[string]
+          }
+        }
+        return { id: row.id, demographics }
+      })
+    )
+
+    if (data.length < BACKSTORY_PAGE_SIZE) break
+  }
+
+  return backstories
 }
 
 /**
@@ -86,12 +152,22 @@ function applyCustomFilters(
 export async function selectBackstoryIds(
   config: DemographicSelectionConfig
 ): Promise<string[]> {
-  let backstories = await fetchBackstoriesWithDemographics()
+  const activeKeys = getActiveDemographicKeys(config.filters)
+
+  if (activeKeys.length === 0) {
+    const ids = await fetchAllPublicBackstoryIds()
+    const selected = shuffle(ids).slice(0, config.sample_size)
+    console.log(`[selectBackstoryIds] pool size: ${ids.length}`)
+    console.log(`[selectBackstoryIds] ${config.mode}, no filters -> random sample of ${selected.length}`)
+    return selected
+  }
+
+  let backstories = await fetchBackstoriesWithDemographics(activeKeys)
   console.log(`[selectBackstoryIds] pool size: ${backstories.length}`)
 
   // Apply custom_ filters first (exact match)
   backstories = applyCustomFilters(backstories, config.filters)
-  if (backstories.length !== backstories.length) {
+  if (activeKeys.some((key) => config.filters[`custom_${key}`])) {
     console.log(`[selectBackstoryIds] after custom filters: ${backstories.length}`)
   }
 

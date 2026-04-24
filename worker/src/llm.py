@@ -15,6 +15,7 @@ from openai import AsyncOpenAI, OpenAI
 from .logprobs import LogprobsResult
 from .response import (
     LLMResponse,
+    LLMUsage,
     RetryableError,
     NonRetryableError,
     TruncationError,
@@ -200,6 +201,32 @@ class UnifiedLLMClient:
         return LLMResponse.from_text(content)
 
     @staticmethod
+    def _extract_usage(response) -> Optional[LLMUsage]:
+        """Normalize usage details from OpenAI-compatible responses."""
+        usage = getattr(response, "usage", None)
+        if not usage:
+            return None
+
+        prompt_details = getattr(usage, "prompt_tokens_details", None)
+        completion_details = getattr(usage, "completion_tokens_details", None)
+
+        return LLMUsage(
+            prompt_tokens=getattr(usage, "prompt_tokens", None),
+            completion_tokens=getattr(usage, "completion_tokens", None),
+            total_tokens=getattr(usage, "total_tokens", None),
+            cost=getattr(usage, "cost", None),
+            reasoning_tokens=getattr(completion_details, "reasoning_tokens", None) if completion_details else None,
+            cached_tokens=getattr(prompt_details, "cached_tokens", None) if prompt_details else None,
+            cache_write_tokens=getattr(prompt_details, "cache_write_tokens", None) if prompt_details else None,
+            audio_tokens=getattr(prompt_details, "audio_tokens", None) if prompt_details else None,
+        )
+
+    @staticmethod
+    def _attach_usage(parsed: LLMResponse, response) -> LLMResponse:
+        parsed.usage = UnifiedLLMClient._extract_usage(response)
+        return parsed
+
+    @staticmethod
     def _is_multimodal_error(error_str: str) -> bool:
         """Check if an error is about unsupported multimodal content."""
         keywords = ("content type", "image", "multimodal", "vision", "audio", "media")
@@ -246,7 +273,7 @@ class UnifiedLLMClient:
                     f"Response truncated at max_tokens={self.max_tokens}. "
                     "Increase max_tokens in Settings (thinking models like Gemini 2.5 Pro need ≥1024)."
                 )
-            return self._parse_response(content, question)
+            return self._attach_usage(self._parse_response(content, question), response)
         except openai.BadRequestError as e:
             error_str = str(e).lower()
             if is_multimodal and self._is_multimodal_error(error_str):
@@ -300,7 +327,7 @@ class UnifiedLLMClient:
                     f"Response truncated at max_tokens={self.max_tokens} even in text mode. "
                     "Increase max_tokens in Settings (thinking models like Gemini 2.5 Pro need ≥1024)."
                 )
-            return LLMResponse.from_text(content)
+            return self._attach_usage(LLMResponse.from_text(content), response)
         except TruncationError:
             raise
         except Exception as e:
@@ -347,7 +374,7 @@ class UnifiedLLMClient:
                     f"Response truncated at max_tokens={self.max_tokens}. "
                     "Increase max_tokens in Settings (thinking models like Gemini 2.5 Pro need ≥1024)."
                 )
-            return self._parse_response(content, question)
+            return self._attach_usage(self._parse_response(content, question), response)
         except openai.BadRequestError as e:
             error_str = str(e).lower()
             if is_multimodal and self._is_multimodal_error(error_str):
@@ -401,7 +428,7 @@ class UnifiedLLMClient:
                     f"Response truncated at max_tokens={self.max_tokens} even in text mode. "
                     "Increase max_tokens in Settings (thinking models like Gemini 2.5 Pro need ≥1024)."
                 )
-            return LLMResponse.from_text(content)
+            return self._attach_usage(LLMResponse.from_text(content), response)
         except TruncationError:
             raise
         except Exception as e:

@@ -8,7 +8,7 @@ import html
 import logging
 import re
 from dataclasses import dataclass
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 
 logger = logging.getLogger(__name__)
 
@@ -37,11 +37,37 @@ class MultimodalNotSupportedError(NonRetryableError):
 # ─── LLMResponse ─────────────────────────────────────────────────────────────
 
 @dataclass
+class LLMUsage:
+    """Normalized usage/cost metadata from an LLM API response."""
+    prompt_tokens: Optional[int] = None
+    completion_tokens: Optional[int] = None
+    total_tokens: Optional[int] = None
+    cost: Optional[float] = None
+    reasoning_tokens: Optional[int] = None
+    cached_tokens: Optional[int] = None
+    cache_write_tokens: Optional[int] = None
+    audio_tokens: Optional[int] = None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "cost": self.cost,
+            "reasoning_tokens": self.reasoning_tokens,
+            "cached_tokens": self.cached_tokens,
+            "cache_write_tokens": self.cache_write_tokens,
+            "audio_tokens": self.audio_tokens,
+        }
+
+
+@dataclass
 class LLMResponse:
     """Parsed LLM response."""
     answer: str
     reasoning: Optional[str] = None
     raw: Optional[str] = None
+    usage: Optional[LLMUsage] = None
 
     @classmethod
     def from_comma_separated(

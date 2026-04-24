@@ -29,6 +29,83 @@ from .response import LLMResponse, RetryableError, NonRetryableError
 from .parser import ParserLLM
 
 logger = logging.getLogger(__name__)
+META_KEY = "__meta__"
+
+
+def _empty_usage_totals() -> Dict[str, Any]:
+    return {
+        "api_calls": 0,
+        "main_model_calls": 0,
+        "parser_model_calls": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "total_tokens": 0,
+        "reasoning_tokens": 0,
+        "cached_tokens": 0,
+        "cache_write_tokens": 0,
+        "audio_tokens": 0,
+        "cost": 0.0,
+        "main_model_cost": 0.0,
+        "parser_model_cost": 0.0,
+    }
+
+
+def _merge_usage(totals: Dict[str, Any], usage, source: str) -> None:
+    if not usage:
+        return
+
+    totals["api_calls"] += 1
+    if source == "main":
+        totals["main_model_calls"] += 1
+    elif source == "parser":
+        totals["parser_model_calls"] += 1
+
+    for key in (
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "reasoning_tokens",
+        "cached_tokens",
+        "cache_write_tokens",
+        "audio_tokens",
+    ):
+        value = getattr(usage, key, None)
+        if value is not None:
+            totals[key] += value
+
+    cost = getattr(usage, "cost", None)
+    if cost is not None:
+        totals["cost"] += cost
+        if source == "main":
+            totals["main_model_cost"] += cost
+        elif source == "parser":
+            totals["parser_model_cost"] += cost
+
+
+def _combine_usage_totals(target: Dict[str, Any], delta: Dict[str, Any]) -> None:
+    for key, value in delta.items():
+        if isinstance(value, (int, float)):
+            target[key] += value
+
+
+def _build_task_metadata(llm: UnifiedLLMClient, parser_llm: Optional[ParserLLM], usage: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "llm": {
+            "provider": getattr(llm, "provider", None),
+            "model": getattr(llm, "model", None),
+        },
+        "parser_llm": (
+            {"model": getattr(parser_llm, "model", None)}
+            if parser_llm and getattr(parser_llm, "is_configured", False)
+            else None
+        ),
+        "usage": {
+            **usage,
+            "cost": round(usage["cost"], 8),
+            "main_model_cost": round(usage["main_model_cost"], 8),
+            "parser_model_cost": round(usage["parser_model_cost"], 8),
+        },
+    }
 
 
 # ─── Filling Strategy ────────────────────────────────────────────────────────
@@ -46,7 +123,7 @@ class FillingStrategy(Protocol):
         parser_llm: Optional[ParserLLM] = None,
         media_client: Optional[WasabiMediaClient] = None,
         task_id: Optional[str] = None,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         """Fill all questions and return qkey -> answer mapping."""
         ...
 
@@ -69,10 +146,11 @@ class SeriesWithContext:
         parser_llm: Optional[ParserLLM] = None,
         media_client: Optional[WasabiMediaClient] = None,
         task_id: Optional[str] = None,
-    ) -> Dict[str, str]:
-        results: Dict[str, str] = {}
+    ) -> Dict[str, Any]:
+        results: Dict[str, Any] = {}
         context = ""
         short_id = (task_id or "")[:8]
+        task_usage = _empty_usage_totals()
 
         llm_max_tokens = getattr(llm, "max_tokens", None)
         open_response_max_words = int(llm_max_tokens * 2 / 3) if isinstance(llm_max_tokens, (int, float)) else None
@@ -99,11 +177,15 @@ class SeriesWithContext:
 
             prompt: Prompt = build_multimodal_prompt(text_prompt, question_media)
 
-            answer, raw = await self._ask_with_retry(prompt, question, llm, parser_llm, label=f"{short_id}/{question.qkey}")
+            answer, raw, question_usage = await self._ask_with_retry(
+                prompt, question, llm, parser_llm, label=f"{short_id}/{question.qkey}"
+            )
             results[question.qkey] = answer
+            _combine_usage_totals(task_usage, question_usage)
             # Context accumulation stays text-only (no re-sending images)
             context = append_answer_to_context(text_prompt, raw)
 
+        results[META_KEY] = _build_task_metadata(llm, parser_llm, task_usage)
         return results
 
     async def _ask_with_retry(
@@ -113,10 +195,11 @@ class SeriesWithContext:
         llm: UnifiedLLMClient,
         parser_llm: Optional[ParserLLM],
         label: str = "",
-    ) -> tuple:
+    ) -> tuple[str, str, Dict[str, Any]]:
         """Ask question with compliance retries + Tier 1/2 parsing."""
         raw = ""
         tag = f"[{label}]" if label else f"[{question.qkey}]"
+        usage_totals = _empty_usage_totals()
         for retry in range(self.max_compliance_retries):
             if retry > 0:
                 logger.debug(f"{tag} compliance retry {retry}/{self.max_compliance_retries}")
@@ -125,6 +208,7 @@ class SeriesWithContext:
             raw = response.raw or ""
             answer = response.answer
             tier = ""
+            _merge_usage(usage_totals, response.usage, "main")
 
             if answer:
                 tier = "tier1_guided"
@@ -134,25 +218,27 @@ class SeriesWithContext:
                 if answer:
                     tier = "tier1_text"
                     logger.info(f"{tag} [{tier}] answer={repr(answer)}")
-                    return answer, raw
+                    return answer, raw, usage_totals
                 else:
                     logger.warning(f"{tag} [parse_fail] open_response empty, retrying")
                     continue
 
             # Tier 2: parser LLM fallback (MCQ, multiple_select, ranking)
             if not answer and question.type in ("mcq", "multiple_select", "ranking") and parser_llm and raw:
-                answer = await parser_llm.async_parse(raw, question)
+                parser_response = await parser_llm.async_parse_response(raw, question)
+                _merge_usage(usage_totals, parser_response.usage, "parser")
+                answer = parser_response.answer
                 if answer:
                     tier = "tier2_parser"
 
             if answer:
                 logger.info(f"{tag} [{tier}] answer={answer} raw={repr(raw)}")
-                return answer, raw
+                return answer, raw, usage_totals
             else:
                 logger.warning(f"{tag} [parse_fail] raw={repr(raw)}")
 
         logger.warning(f"{tag} all {self.max_compliance_retries} retries failed, marking as non-compliant")
-        return "", raw
+        return "", raw, usage_totals
 
 
 class IndependentRepeat:
@@ -175,14 +261,15 @@ class IndependentRepeat:
         parser_llm: Optional[ParserLLM] = None,
         media_client: Optional[WasabiMediaClient] = None,
         task_id: Optional[str] = None,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         """
         Ask each question N times independently. Returns a special result:
         {qkey: "answer1||answer2||...||answerN"} with all N raw answers
         joined by '||' for downstream distribution computation.
         """
-        results: Dict[str, str] = {}
+        results: Dict[str, Any] = {}
         short_id = (task_id or "")[:8]
+        task_usage = _empty_usage_totals()
 
         for question in questions:
             answers: List[str] = []
@@ -203,12 +290,16 @@ class IndependentRepeat:
 
                 prompt: Prompt = build_multimodal_prompt(text_prompt, question_media)
                 label = f"{short_id}/{question.qkey}#{trial}"
-                answer, _ = await self._ask_with_retry(prompt, question, llm, parser_llm, trial, label=label)
+                answer, _, trial_usage = await self._ask_with_retry(
+                    prompt, question, llm, parser_llm, trial, label=label
+                )
                 answers.append(answer)
+                _combine_usage_totals(task_usage, trial_usage)
 
             results[question.qkey] = "||".join(answers)
             logger.info(f"[{short_id}/{question.qkey}] collected {len(answers)} answers")
 
+        results[META_KEY] = _build_task_metadata(llm, parser_llm, task_usage)
         return results
 
     async def _ask_with_retry(
@@ -219,10 +310,11 @@ class IndependentRepeat:
         parser_llm: Optional[ParserLLM],
         trial: int,
         label: str = "",
-    ) -> tuple:
+    ) -> tuple[str, str, Dict[str, Any]]:
         """Ask question with compliance retries + Tier 1/2 parsing."""
         raw = ""
         tag = f"[{label}]" if label else f"[{question.qkey}#{trial}]"
+        usage_totals = _empty_usage_totals()
         for retry in range(self.max_compliance_retries):
             if retry > 0:
                 logger.debug(f"{tag} compliance retry {retry}/{self.max_compliance_retries}")
@@ -230,23 +322,26 @@ class IndependentRepeat:
             response = await llm.async_complete(prompt, question=question)
             raw = response.raw or ""
             answer = response.answer
+            _merge_usage(usage_totals, response.usage, "main")
 
             # Open response: accept any non-empty text
             if question.type == "open_response":
                 if answer:
-                    return answer, raw
+                    return answer, raw, usage_totals
                 continue
 
             # Tier 2: parser LLM fallback
             if not answer and question.type in ("mcq", "multiple_select", "ranking") and parser_llm and raw:
-                answer = await parser_llm.async_parse(raw, question)
+                parser_response = await parser_llm.async_parse_response(raw, question)
+                _merge_usage(usage_totals, parser_response.usage, "parser")
+                answer = parser_response.answer
 
             if answer:
                 logger.debug(f"{tag} answer={answer} raw={repr(raw)}")
-                return answer, raw
+                return answer, raw, usage_totals
 
         logger.warning(f"{tag} all retries failed")
-        return "", raw
+        return "", raw, usage_totals
 
 
 class LogprobsSingle:
@@ -267,9 +362,9 @@ class LogprobsSingle:
         parser_llm: Optional[ParserLLM] = None,
         media_client: Optional[WasabiMediaClient] = None,
         task_id: Optional[str] = None,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         import json
-        results: Dict[str, str] = {}
+        results: Dict[str, Any] = {}
 
         for question in questions:
             if question.type != "mcq":
@@ -296,6 +391,7 @@ class LogprobsSingle:
                 f"(generated_token={logprobs_result.generated_token!r})"
             )
 
+        results[META_KEY] = _build_task_metadata(llm, parser_llm, _empty_usage_totals())
         return results
 
 
@@ -345,7 +441,7 @@ class TaskProcessor:
         self,
         backstory: str,
         questions: List[Question],
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         """
         Process questions in series with context accumulation (sync).
 
@@ -357,8 +453,9 @@ class TaskProcessor:
 
         Two-tier parsing: structured output (Tier 1) + parser LLM fallback (Tier 2).
         """
-        results: Dict[str, str] = {}
+        results: Dict[str, Any] = {}
         context = ""
+        task_usage = _empty_usage_totals()
 
         llm_max_tokens = getattr(self.llm, "max_tokens", None)
         open_response_max_words = int(llm_max_tokens * 2 / 3) if isinstance(llm_max_tokens, (int, float)) else None
@@ -390,6 +487,7 @@ class TaskProcessor:
 
                 response = self.llm.complete(prompt, question=question)
                 raw_answer = response.raw if response.raw else ""
+                _merge_usage(task_usage, response.usage, "main")
 
                 answer = response.answer
                 tier = ""
@@ -409,7 +507,9 @@ class TaskProcessor:
 
                 # Tier 2: parser LLM fallback (MCQ, multiple_select, ranking)
                 if not answer and question.type in ("mcq", "multiple_select", "ranking") and self.parser_llm and response.raw:
-                    answer = self.parser_llm.parse(response.raw, question)
+                    parser_response = self.parser_llm.parse_response(response.raw, question)
+                    _merge_usage(task_usage, parser_response.usage, "parser")
+                    answer = parser_response.answer
                     if answer:
                         tier = "tier2_parser"
 
@@ -429,6 +529,7 @@ class TaskProcessor:
             # Context accumulation stays text-only (no re-sending images)
             context = append_answer_to_context(text_prompt, raw_answer)
 
+        results[META_KEY] = _build_task_metadata(self.llm, self.parser_llm, task_usage)
         return results
 
     def store_result(self, task_id: str, result: Dict[str, Any]) -> bool:
@@ -521,7 +622,7 @@ class TaskProcessor:
         backstory: str,
         questions: List[Question],
         task_id: Optional[str] = None,
-    ) -> Dict[str, str]:
+    ) -> Dict[str, Any]:
         """
         Async version — delegates to the filling strategy.
 

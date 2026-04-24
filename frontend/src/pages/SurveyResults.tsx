@@ -7,9 +7,9 @@ import { Badge } from '@/components/ui/badge'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { supabase } from '@/lib/supabase'
 import { useSurveyRun } from '@/hooks/useSurveyRun'
-import type { Survey, SurveyRun, Question, SurveyResults as SurveyResultsType } from '@/types/database'
+import type { Survey, SurveyRun, Question, SurveyResults as SurveyResultsType, SurveyTaskUsage } from '@/types/database'
 import { getModelName } from '@/lib/llmConfig'
-import { BarChart2, Table, ImageDown, RefreshCw, ChevronDown, Settings } from 'lucide-react'
+import { BarChart2, Table, ImageDown, RefreshCw, ChevronDown, Settings, Wallet, Gauge, Layers3 } from 'lucide-react'
 import { ResultsHero } from '@/components/results/ResultsHero'
 import { OpenResponseList } from '@/components/results/OpenResponseList'
 import { DistributionChart } from '@/components/results/DistributionChart'
@@ -85,6 +85,80 @@ function RunConfigCard({ run }: { run: SurveyRun | null }) {
       )}
     </Card>
   )
+}
+
+function CostSummaryCard({ usage, responseCount }: { usage: SurveyTaskUsage | null; responseCount: number }) {
+  if (!usage) return null
+
+  const avgCost = responseCount > 0 ? usage.cost / responseCount : 0
+  const fmtUsd = (n: number) => `$${n.toFixed(4)}`
+
+  return (
+    <div className="rounded-xl border border-border/70 bg-gradient-to-r from-card to-muted/40 p-4">
+      <div className="mb-3 flex items-start justify-between gap-4">
+        <div>
+          <div className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Run Cost</div>
+          <div className="mt-1 text-2xl font-semibold leading-none">{fmtUsd(usage.cost)}</div>
+        </div>
+        <Badge variant="outline" className="shrink-0">
+          {responseCount} responses
+        </Badge>
+      </div>
+      <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-3">
+        <div className="rounded-lg border border-border/60 bg-background/80 p-3">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Wallet className="h-4 w-4" />
+            <span>Total spend</span>
+          </div>
+          <div className="mt-2 text-lg font-medium">{fmtUsd(usage.cost)}</div>
+        </div>
+        <div className="rounded-lg border border-border/60 bg-background/80 p-3">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Gauge className="h-4 w-4" />
+            <span>Per response</span>
+          </div>
+          <div className="mt-2 text-lg font-medium">{fmtUsd(avgCost)}</div>
+        </div>
+        <div className="rounded-lg border border-border/60 bg-background/80 p-3">
+          <div className="flex items-center gap-2 text-muted-foreground">
+            <Layers3 className="h-4 w-4" />
+            <span>Parser share</span>
+          </div>
+          <div className="mt-2 text-lg font-medium">{fmtUsd(usage.parser_model_cost)}</div>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function aggregateUsage(results: SurveyResultsType): SurveyTaskUsage | null {
+  const totals: SurveyTaskUsage = {
+    api_calls: 0,
+    main_model_calls: 0,
+    parser_model_calls: 0,
+    prompt_tokens: 0,
+    completion_tokens: 0,
+    total_tokens: 0,
+    reasoning_tokens: 0,
+    cached_tokens: 0,
+    cache_write_tokens: 0,
+    audio_tokens: 0,
+    cost: 0,
+    main_model_cost: 0,
+    parser_model_cost: 0,
+  }
+
+  let seen = false
+  Object.values(results).forEach((response) => {
+    const usage = response.__meta__?.usage
+    if (!usage) return
+    seen = true
+    ;(Object.keys(totals) as (keyof SurveyTaskUsage)[]).forEach((key) => {
+      totals[key] += usage[key] || 0
+    })
+  })
+
+  return seen ? totals : null
 }
 
 interface QuestionStats {
@@ -538,18 +612,33 @@ export function SurveyResults() {
 
     const questionHeaders = survey.questions.map((q) => `${q.qkey}: ${q.text}`)
     const firstCol = isZeroShot ? 'trial_index' : 'backstory_id'
+    const usageHeaders = [
+      'usage_cost_usd',
+      'usage_audio_tokens',
+      'usage_prompt_tokens',
+      'usage_completion_tokens',
+      'usage_total_tokens',
+      'usage_api_calls',
+    ]
     const headers = isZeroShot
-      ? [firstCol, ...questionHeaders]
-      : [firstCol, 'demographics', ...questionHeaders]
+      ? [firstCol, ...usageHeaders, ...questionHeaders]
+      : [firstCol, 'demographics', ...usageHeaders, ...questionHeaders]
 
     const rows = Object.entries(results).map(([backstoryId, responses], index) => {
       const firstColValue = isZeroShot ? `Trial ${index + 1}` : backstoryId
       const demographics = backstoryMap.get(backstoryId)
       const demographicsStr = demographics ? JSON.stringify(demographics) : ''
+      const usage = responses.__meta__?.usage
 
       return [
         firstColValue,
         ...(isZeroShot ? [] : [demographicsStr]),
+        usage?.cost ?? '',
+        usage?.audio_tokens ?? '',
+        usage?.prompt_tokens ?? '',
+        usage?.completion_tokens ?? '',
+        usage?.total_tokens ?? '',
+        usage?.api_calls ?? '',
         ...survey.questions.map((q) => {
           const answer = responses[q.qkey]
           if (!answer) return ''
@@ -626,6 +715,7 @@ export function SurveyResults() {
   }
 
   const totalResponses = Object.keys(results).length
+  const usageSummary = aggregateUsage(results)
 
   return (
     <Layout>
@@ -640,6 +730,7 @@ export function SurveyResults() {
         />
 
         <RunConfigCard run={run} />
+        <CostSummaryCard usage={usageSummary} responseCount={totalResponses} />
 
         {isRunning && run && (
           <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-3">
