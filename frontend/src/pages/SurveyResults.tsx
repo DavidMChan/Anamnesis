@@ -9,7 +9,7 @@ import { supabase } from '@/lib/supabase'
 import { useSurveyRun } from '@/hooks/useSurveyRun'
 import type { Survey, SurveyRun, Question, SurveyResults as SurveyResultsType, SurveyTaskUsage } from '@/types/database'
 import { getModelName } from '@/lib/llmConfig'
-import { BarChart2, Table, ImageDown, RefreshCw, ChevronDown, Settings, Wallet, Gauge, Layers3 } from 'lucide-react'
+import { BarChart2, Table, ImageDown, RefreshCw, ChevronDown, Settings, Wallet, Gauge, Layers3, CheckCircle2 } from 'lucide-react'
 import { ResultsHero } from '@/components/results/ResultsHero'
 import { OpenResponseList } from '@/components/results/OpenResponseList'
 import { DistributionChart } from '@/components/results/DistributionChart'
@@ -47,6 +47,8 @@ function RunConfigCard({ run }: { run: SurveyRun | null }) {
 
   const config = run.llm_config
   const modelName = getModelName(config)
+  const maxSamples = getMaxSamplesLabel(run)
+  const adaptiveConfig = config.adaptive_sampling
 
   return (
     <Card>
@@ -86,11 +88,40 @@ function RunConfigCard({ run }: { run: SurveyRun | null }) {
               <span className="font-medium w-24">Max Tokens:</span>
               <span className="text-muted-foreground">{config.max_tokens ?? 'Not set'}</span>
             </div>
+            {adaptiveConfig?.enabled && (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium w-24">Early Stop:</span>
+                  <Badge variant="outline">Enabled</Badge>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium w-24">Epsilon:</span>
+                  <span className="text-muted-foreground">{adaptiveConfig.epsilon}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium w-24">Min Samples:</span>
+                  <span className="text-muted-foreground">{adaptiveConfig.min_samples}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium w-24">Max Samples:</span>
+                  <span className="text-muted-foreground">{maxSamples}</span>
+                </div>
+              </>
+            )}
           </div>
         </CardContent>
       )}
     </Card>
   )
+}
+
+function getMaxSamplesLabel(run: SurveyRun): string {
+  const demographics = run.demographics
+  if (demographics && 'sample_size' in demographics) {
+    const sampleSize = demographics.sample_size
+    return typeof sampleSize === 'number' && sampleSize > 0 ? String(sampleSize) : 'All available'
+  }
+  return run.algorithm === 'zero_shot_baseline' ? String(run.total_tasks) : 'All available'
 }
 
 function CostSummaryCard({ usage, responseCount }: { usage: SurveyTaskUsage | null; responseCount: number }) {
@@ -100,7 +131,7 @@ function CostSummaryCard({ usage, responseCount }: { usage: SurveyTaskUsage | nu
   const fmtUsd = (n: number) => `$${n.toFixed(4)}`
 
   return (
-    <div className="rounded-xl border border-border/70 bg-gradient-to-r from-card to-muted/40 p-4">
+    <div className="h-full rounded-xl border border-border/70 bg-gradient-to-r from-card to-muted/40 p-4">
       <div className="mb-3 flex items-start justify-between gap-4">
         <div>
           <div className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Run Cost</div>
@@ -180,35 +211,42 @@ interface QuestionStats {
   }[]
 }
 
-function AdaptiveSamplingCard({ summary }: { summary: AdaptiveSamplingSummary | null }) {
-  if (!summary) return null
+function AdaptiveSamplingCard({
+  summary,
+  isRunComplete,
+  stopSummary,
+}: {
+  summary: AdaptiveSamplingSummary | null
+  isRunComplete: boolean
+  stopSummary?: {
+    sample_count: number
+    eligible_questions: number
+    confidence_lower_bound: number
+    epsilon: number
+    min_samples: number
+  }
+}) {
+  if (!summary && !stopSummary) return null
+
+  const confidenceLowerBound = stopSummary?.confidence_lower_bound ?? summary?.confidenceLowerBound ?? 0
+  const shouldStop = stopSummary ? true : summary?.shouldStop ?? false
 
   return (
-    <div className="rounded-lg border border-border bg-card p-4">
+    <div className="h-full rounded-xl border border-border/70 bg-gradient-to-r from-card to-muted/40 p-4">
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
-          <div className="text-sm font-semibold">Adaptive Sampling Stability</div>
-          <p className="text-sm text-muted-foreground">
-            {summary.eligibleQuestions} eligible question{summary.eligibleQuestions > 1 ? 's' : ''} evaluated from {summary.sampleCount} response{summary.sampleCount === 1 ? '' : 's'}.
-          </p>
+          <div className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Early Stopping</div>
         </div>
-        <Badge variant={summary.shouldStop ? 'default' : 'outline'}>
-          {summary.shouldStop ? 'Stable' : 'Collecting'}
+        <Badge variant={isRunComplete || shouldStop ? 'default' : 'outline'}>
+          {isRunComplete ? 'Completed' : shouldStop ? 'Stable' : 'Collecting'}
         </Badge>
       </div>
-      <div className="mt-3 grid gap-3 text-sm md:grid-cols-3">
-        <div>
-          <div className="text-muted-foreground">Confidence lower bound</div>
-          <div className="font-medium">{Math.round(summary.confidenceLowerBound * 1000) / 10}%</div>
+      <div className="mt-3 rounded-lg border border-border/60 bg-background/80 p-3 text-sm">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <CheckCircle2 className="h-4 w-4" />
+          <span>Confidence lower bound</span>
         </div>
-        <div>
-          <div className="text-muted-foreground">Epsilon</div>
-          <div className="font-medium">{summary.epsilon}</div>
-        </div>
-        <div>
-          <div className="text-muted-foreground">Minimum samples</div>
-          <div className="font-medium">{summary.minSamples}</div>
-        </div>
+        <div className="mt-2 text-lg font-medium">{Math.round(confidenceLowerBound * 1000) / 10}%</div>
       </div>
     </div>
   )
@@ -772,8 +810,16 @@ export function SurveyResults() {
         />
 
         <RunConfigCard run={run} />
-        <CostSummaryCard usage={usageSummary} responseCount={totalResponses} />
-        <AdaptiveSamplingCard summary={adaptiveSummary} />
+        <div className={`grid gap-4 ${adaptiveConfig?.enabled ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
+          <CostSummaryCard usage={usageSummary} responseCount={totalResponses} />
+          {adaptiveConfig?.enabled && (
+            <AdaptiveSamplingCard
+              summary={adaptiveSummary}
+              stopSummary={adaptiveConfig?.stop_summary}
+              isRunComplete={run.status === 'completed'}
+            />
+          )}
+        </div>
 
         {isRunning && run && (
           <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-3">
