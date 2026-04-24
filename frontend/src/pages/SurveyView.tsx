@@ -173,6 +173,16 @@ export function SurveyView() {
     if (!survey || !user) return
     setConfigError(null)
 
+    const sampleSize = runDemographics.sample_size
+    if (runAlgorithm === 'zero_shot_baseline' && (!sampleSize || sampleSize <= 0)) {
+      setConfigError('Number of trials must be greater than 0 before running a zero-shot baseline.')
+      return
+    }
+    if (adaptiveSampling.enabled && sampleSize > 0 && sampleSize < adaptiveSampling.min_samples) {
+      setConfigError('Maximum samples must be at least the minimum samples for run-until-stable mode.')
+      return
+    }
+
     // Validate LLM config before creating tasks
     const llmConfig = profile?.llm_config
     if (!llmConfig?.provider) {
@@ -430,7 +440,7 @@ export function SurveyView() {
               <div className="space-y-1">
                 <span className="text-sm font-medium">Run until stable</span>
                 <p className="text-sm text-muted-foreground">
-                  Uses the sample size below as a maximum and finishes early when MCQ answer rankings are stable.
+                  Uses the sample size below as a maximum; leave it blank to use all available backstories.
                 </p>
               </div>
             </label>

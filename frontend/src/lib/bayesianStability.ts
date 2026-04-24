@@ -198,7 +198,10 @@ export function computeDistributionWithIntervals(
       ciLower,
       ciUpper,
       errorRange: ci
-        ? [Math.max(0, percentageExact - ciLower), Math.max(0, ciUpper - percentageExact)]
+        ? [
+          Math.min(percentageExact, Math.max(0, percentageExact - ciLower)),
+          Math.min(100 - percentageExact, Math.max(0, ciUpper - percentageExact)),
+        ]
         : undefined,
     }
   })
