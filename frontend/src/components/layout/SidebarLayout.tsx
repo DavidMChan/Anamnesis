@@ -14,7 +14,7 @@ export function SidebarLayout({ children }: SidebarLayoutProps) {
         {/* Main content area with left margin for sidebar */}
         <main className="lg:ml-[280px] min-h-screen">
           {/* Add top padding on mobile to account for fixed menu button */}
-          <div className="container max-w-6xl py-6 px-4 lg:px-8 pt-16 lg:pt-6">
+          <div className="container max-w-screen-2xl py-6 px-4 lg:px-8 pt-16 lg:pt-6">
             {children}
           </div>
         </main>
