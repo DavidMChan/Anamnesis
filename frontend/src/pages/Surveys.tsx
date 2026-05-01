@@ -6,11 +6,14 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { supabase } from '@/lib/supabase'
 import { useAuthContext } from '@/contexts/AuthContext'
-import type { Survey, Question, MediaAttachment } from '@/types/database'
+import type { Survey, SurveyRun, Question, MediaAttachment } from '@/types/database'
 import { toast } from '@/hooks/use-toast'
 import { copyMedia, deleteMedia } from '@/lib/media'
-import { Plus, Eye, BarChart3, Trash2, ClipboardList, Copy } from 'lucide-react'
+import { Plus, Eye, BarChart3, Trash2, ClipboardList, Copy, LayoutGrid, List } from 'lucide-react'
 import { BatchUploadDialog } from '@/components/surveys/BatchUploadDialog'
+import { SurveyListTable } from '@/components/surveys/SurveyListTable'
+import { BatchActionToolbar } from '@/components/surveys/BatchActionToolbar'
+import { useBatchSelection } from '@/hooks/useBatchSelection'
 
 const statusVariants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info' | 'gold'> = {
   draft: 'secondary',
@@ -19,16 +22,29 @@ const statusVariants: Record<string, 'default' | 'secondary' | 'destructive' | '
 }
 
 export function Surveys() {
-  const { user } = useAuthContext()
+  const { user, profile, maskedApiKeys } = useAuthContext()
   const [surveys, setSurveys] = useState<Survey[]>([])
   const [latestRunStatus, setLatestRunStatus] = useState<Record<string, string>>({})
+  const [latestRuns, setLatestRuns] = useState<Record<string, SurveyRun>>({})
   const [loading, setLoading] = useState(true)
+  const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
+    return (localStorage.getItem('surveys-view-mode') as 'grid' | 'list') || 'grid'
+  })
+
+  const { selectedIds, toggle, selectAll, clearSelection, selectedCount } =
+    useBatchSelection<Survey>()
 
   useEffect(() => {
     if (user) {
       fetchSurveys()
     }
   }, [user])
+
+  const switchViewMode = (mode: 'grid' | 'list') => {
+    setViewMode(mode)
+    localStorage.setItem('surveys-view-mode', mode)
+    if (mode === 'grid') clearSelection()
+  }
 
   const fetchSurveys = async () => {
     const { data, error } = await supabase
@@ -50,19 +66,21 @@ export function Surveys() {
       const surveyIds = fetchedSurveys.map((s) => s.id)
       const { data: runs } = await supabase
         .from('survey_runs')
-        .select('survey_id, status, created_at')
+        .select('*')
         .in('survey_id', surveyIds)
         .order('created_at', { ascending: false })
 
       if (runs) {
-        // Pick the latest run per survey
-        const latestByRun: Record<string, string> = {}
-        for (const run of runs) {
-          if (!latestByRun[run.survey_id]) {
-            latestByRun[run.survey_id] = run.status
+        const latestByStatus: Record<string, string> = {}
+        const latestByRun: Record<string, SurveyRun> = {}
+        for (const run of runs as SurveyRun[]) {
+          if (!latestByStatus[run.survey_id]) {
+            latestByStatus[run.survey_id] = run.status
+            latestByRun[run.survey_id] = run
           }
         }
-        setLatestRunStatus(latestByRun)
+        setLatestRunStatus(latestByStatus)
+        setLatestRuns(latestByRun)
       }
     }
 
@@ -72,7 +90,6 @@ export function Surveys() {
   const deleteSurvey = async (id: string) => {
     if (!confirm('Are you sure you want to delete this survey?')) return
 
-    // Grab media keys before deleting from DB
     const survey = surveys.find((s) => s.id === id)
 
     const { error } = await supabase.from('surveys').delete().eq('id', id)
@@ -80,7 +97,6 @@ export function Surveys() {
     if (error) {
       console.error('Error deleting survey:', error)
     } else {
-      // Clean up Wasabi media after successful DB delete
       if (survey) {
         for (const q of survey.questions) {
           if (q.media?.key) deleteMedia(q.media.key)
@@ -94,7 +110,6 @@ export function Surveys() {
   const duplicateSurvey = async (survey: Survey) => {
     if (!user) return
 
-    // Deep-copy all media so the duplicate owns independent Wasabi objects
     let copyFailed = false
     const copiedQuestions: Question[] = await Promise.all(
       survey.questions.map(async (q) => {
@@ -112,7 +127,6 @@ export function Surveys() {
           }
         } catch {
           copyFailed = true
-          // On failure, strip media to avoid shared references
           return { ...q, media: undefined, option_media: undefined }
         }
       })
@@ -153,7 +167,7 @@ export function Surveys() {
 
   return (
     <Layout>
-      <div className="space-y-8">
+      <div className="space-y-8 pb-24">
         {/* Page Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div>
@@ -161,6 +175,28 @@ export function Surveys() {
             <p className="text-muted-foreground">Create and manage your research surveys</p>
           </div>
           <div className="flex items-center gap-2">
+            {surveys.length > 0 && (
+              <div className="flex items-center rounded-lg border border-border p-0.5 gap-0.5">
+                <Button
+                  variant={viewMode === 'grid' ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="h-7 w-7 p-0"
+                  onClick={() => switchViewMode('grid')}
+                  title="Grid view"
+                >
+                  <LayoutGrid className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  variant={viewMode === 'list' ? 'secondary' : 'ghost'}
+                  size="sm"
+                  className="h-7 w-7 p-0"
+                  onClick={() => switchViewMode('list')}
+                  title="List view"
+                >
+                  <List className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            )}
             <BatchUploadDialog onSurveysCreated={fetchSurveys} />
             <Link to="/surveys/new">
               <Button className="gap-2">
@@ -189,6 +225,18 @@ export function Surveys() {
               </Link>
             </CardContent>
           </Card>
+        ) : viewMode === 'list' ? (
+          <SurveyListTable
+            surveys={surveys}
+            latestRunStatus={latestRunStatus}
+            latestRuns={latestRuns}
+            selectedIds={selectedIds}
+            onToggleSelect={toggle}
+            onSelectAll={() => selectAll(surveys)}
+            onClearSelection={clearSelection}
+            onDeleteSurvey={deleteSurvey}
+            onDuplicateSurvey={duplicateSurvey}
+          />
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             {surveys.map((survey) => (
@@ -261,6 +309,18 @@ export function Surveys() {
           </div>
         )}
       </div>
+
+      {viewMode === 'list' && selectedCount > 0 && (
+        <BatchActionToolbar
+          surveys={surveys}
+          selectedIds={selectedIds}
+          latestRuns={latestRuns}
+          profileConfig={profile?.llm_config}
+          maskedApiKeys={maskedApiKeys}
+          onClearSelection={clearSelection}
+          onRunsStarted={fetchSurveys}
+        />
+      )}
     </Layout>
   )
 }
