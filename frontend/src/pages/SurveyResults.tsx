@@ -655,7 +655,7 @@ export function SurveyResults() {
     if (!survey || !run || downloadingCSV) return
     setDownloadingCSV(true)
     try {
-      await downloadSurveyCSV(survey, run, results)
+      await downloadSurveyCSV(survey, run)
     } finally {
       setDownloadingCSV(false)
     }

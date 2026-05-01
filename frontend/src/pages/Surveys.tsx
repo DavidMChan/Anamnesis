@@ -314,7 +314,6 @@ export function Surveys() {
         <BatchActionToolbar
           surveys={surveys}
           selectedIds={selectedIds}
-          latestRuns={latestRuns}
           profileConfig={profile?.llm_config}
           maskedApiKeys={maskedApiKeys}
           onClearSelection={clearSelection}
