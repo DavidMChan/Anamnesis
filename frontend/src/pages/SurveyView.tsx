@@ -265,7 +265,7 @@ export function SurveyView() {
 
   return (
     <Layout>
-      <div className="w-full max-w-screen-2xl mx-auto space-y-6">
+      <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="icon" onClick={() => navigate('/surveys')}>
@@ -449,7 +449,7 @@ export function SurveyView() {
               <CardHeader>
                 <CardTitle>Early Stopping</CardTitle>
                 <CardDescription>
-                  Stop once MCQ answer rankings are statistically stable.
+                  Beta posterior on MCQ counts. Stops when P(ranking is wrong) &lt; ε.
                 </CardDescription>
               </CardHeader>
               <CardContent className="space-y-4">
@@ -464,7 +464,7 @@ export function SurveyView() {
                   <div className="space-y-1">
                     <span className="text-sm font-medium">Run until stable</span>
                     <p className="text-sm text-muted-foreground">
-                      Uses the sample size above as a maximum; leave it blank to use all available backstories.
+                      Sample size above acts as a cap.
                     </p>
                   </div>
                 </label>
@@ -489,7 +489,7 @@ export function SurveyView() {
                           }}
                         />
                         <p className="text-xs text-muted-foreground">
-                          0.01 targets at least 99% lower-bound confidence.
+                          Misranking tolerance. 0.01 ⇒ ≥ 99% confidence.
                         </p>
                       </div>
                       <div className="space-y-2">
@@ -508,7 +508,7 @@ export function SurveyView() {
                           }}
                         />
                         <p className="text-xs text-muted-foreground">
-                          Prevents very early stopping.
+                          Floor before stability is checked.
                         </p>
                       </div>
                     </div>
