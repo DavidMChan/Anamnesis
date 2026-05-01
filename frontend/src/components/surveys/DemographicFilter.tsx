@@ -222,6 +222,9 @@ export function DemographicFilter({ value, onChange, description, sampleSizeLabe
             {poolSize !== null && (
               <>
                 Pool: <span className="font-semibold text-foreground">{poolSize} backstories</span>
+                {sampleSize <= 0 && (
+                  <span> — blank means all available</span>
+                )}
                 {sampleSize > 0 && sampleSize > poolSize && (
                   <span className="text-destructive"> — only {poolSize} available</span>
                 )}

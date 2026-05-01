@@ -1,14 +1,14 @@
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, ErrorBar } from 'recharts'
 
 interface DistributionChartProps {
-    distribution: { option: string; count: number; percentage: number }[]
+    distribution: { option: string; count: number; percentage: number; ciLower?: number; ciUpper?: number; errorRange?: [number, number] }[]
     colors: string[]
     onRef?: (el: HTMLDivElement | null) => void
 }
 
 interface CustomTooltipProps {
     active?: boolean
-    payload?: { value: number; payload: { option: string; count: number; percentage: number } }[]
+    payload?: { value: number; payload: { option: string; count: number; percentage: number; ciLower?: number; ciUpper?: number; errorRange?: [number, number] } }[]
     label?: string
 }
 
@@ -25,6 +25,11 @@ const CustomTooltip = ({ active, payload }: CustomTooltipProps) => {
                     <p>
                         <span className="font-medium">Percentage:</span> {data.percentage}%
                     </p>
+                    {data.errorRange !== undefined && data.ciLower !== undefined && data.ciUpper !== undefined && (
+                        <p>
+                            <span className="font-medium">95% CI:</span> {data.ciLower}% - {data.ciUpper}%
+                        </p>
+                    )}
                 </div>
             </div>
         )
@@ -35,14 +40,17 @@ const CustomTooltip = ({ active, payload }: CustomTooltipProps) => {
 export function DistributionChart({ distribution, colors, onRef }: DistributionChartProps) {
     // Compute the height of the chart based on the number of options
     const height = distribution.length * 80 + 50
+
     return (
         <div ref={onRef}>
             <ResponsiveContainer width="100%" height={height}>
-                <BarChart data={distribution} layout="vertical" margin={{ left: 10, right: 10 }}>
+                <BarChart data={distribution} layout="vertical" margin={{ left: 10, right: 28 }}>
                     <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="var(--color-border)" />
                     <XAxis
                         type="number"
                         domain={[0, 100]}
+                        allowDataOverflow
+                        ticks={[0, 25, 50, 75, 100]}
                         tickFormatter={(v) => `${v}%`}
                         stroke="var(--color-muted-foreground)"
                         fontSize={12}
@@ -63,6 +71,7 @@ export function DistributionChart({ distribution, colors, onRef }: DistributionC
                         animationDuration={200}
                     />
                     <Bar dataKey="percentage" radius={[0, 4, 4, 0]} animationDuration={500}>
+                        <ErrorBar dataKey="errorRange" direction="x" stroke="var(--color-foreground)" width={5} strokeWidth={1.5} />
                         {distribution.map((_, i) => (
                             <Cell key={i} fill={colors[i % colors.length]} />
                         ))}

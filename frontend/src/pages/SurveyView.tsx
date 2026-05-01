@@ -4,6 +4,9 @@ import { Layout } from '@/components/layout/Layout'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
 import { supabase } from '@/lib/supabase'
 import { useSurveyRun, useCreateSurveyRun } from '@/hooks/useSurveyRun'
 import { SurveyRunProgress, SurveyRunHistory } from '@/components/surveys/SurveyRunProgress'
@@ -17,7 +20,7 @@ import { mergeEffectiveConfig } from '@/lib/llmConfig'
 import { RunConfigCard } from '@/components/surveys/RunConfigCard'
 import { isDemographicSelectionConfig } from '@/lib/backstoryFilters'
 import { buildDemographicPromptText } from '@/lib/demographicPrompt'
-import { ArrowLeft, Edit, Play, History, ChevronDown, ChevronRight, Eye } from 'lucide-react'
+import { AlertTriangle, ArrowLeft, Edit, Play, History, ChevronDown, ChevronRight, Eye } from 'lucide-react'
 
 /** Standalone audio player that loads its own URL from a media key */
 function AudioPlayer({ media }: { media: MediaAttachment }) {
@@ -69,6 +72,12 @@ const questionTypeLabels: Record<string, string> = {
   ranking: 'Ranking',
 }
 
+const DEFAULT_ADAPTIVE_SAMPLING = {
+  enabled: false,
+  epsilon: 0.01,
+  min_samples: 30,
+}
+
 /** Format a question for the prompt preview, mirroring worker/src/prompt.py formatting. */
 function formatQuestionPreview(q: Question): string {
   const letters = (q.options || []).map((_, i) => String.fromCharCode(65 + i))
@@ -106,6 +115,7 @@ export function SurveyView() {
   const [runDemographics, setRunDemographics] = useState<DemographicSelectionConfig>(defaultDemographicSelectionConfig())
   const [runAlgorithm, setRunAlgorithm] = useState<SurveyAlgorithm>('anthology')
   const [runPromptText, setRunPromptText] = useState('')
+  const [adaptiveSampling, setAdaptiveSampling] = useState(DEFAULT_ADAPTIVE_SAMPLING)
 
   // Fetch survey run data
   const { run: latestRun, runs, isRunning, refresh: refreshRuns } = useSurveyRun({
@@ -163,6 +173,16 @@ export function SurveyView() {
     if (!survey || !user) return
     setConfigError(null)
 
+    const sampleSize = runDemographics.sample_size
+    if (runAlgorithm === 'zero_shot_baseline' && (!sampleSize || sampleSize <= 0)) {
+      setConfigError('Number of trials must be greater than 0 before running a zero-shot baseline.')
+      return
+    }
+    if (adaptiveSampling.enabled && sampleSize > 0 && sampleSize < adaptiveSampling.min_samples) {
+      setConfigError('Maximum samples must be at least the minimum samples for run-until-stable mode.')
+      return
+    }
+
     // Validate LLM config before creating tasks
     const llmConfig = profile?.llm_config
     if (!llmConfig?.provider) {
@@ -207,7 +227,10 @@ export function SurveyView() {
     }
 
     // Merge profile defaults + local overrides into run config snapshot
-    const runLlmConfig = mergeEffectiveConfig(llmConfig, runOverrides)
+    const runLlmConfig = {
+      ...mergeEffectiveConfig(llmConfig, runOverrides),
+      ...(adaptiveSampling.enabled ? { adaptive_sampling: adaptiveSampling } : {}),
+    }
     const promptText = runAlgorithm === 'zero_shot_baseline' ? runPromptText : undefined
     const runId = await createRun(survey.id, runLlmConfig, runDemographics, runAlgorithm, promptText)
     if (runId) {
@@ -217,6 +240,8 @@ export function SurveyView() {
   }
 
   const displayRun = selectedRun || latestRun
+  const hasMcqQuestions = survey?.questions.some((q) => q.type === 'mcq') ?? false
+  const hasNonMcqQuestions = survey?.questions.some((q) => q.type !== 'mcq') ?? false
 
   if (loading) {
     return (
@@ -240,7 +265,7 @@ export function SurveyView() {
 
   return (
     <Layout>
-      <div className="max-w-4xl mx-auto space-y-6">
+      <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center gap-4">
           <Button variant="ghost" size="icon" onClick={() => navigate('/surveys')}>
@@ -404,99 +429,207 @@ export function SurveyView() {
           onChangeOverrides={setRunOverrides}
         />
 
-        {/* Algorithm Selector */}
-        <Card>
-          <CardHeader>
-            <CardTitle>Algorithm</CardTitle>
-            <CardDescription>
-              How the LLM will be prompted for each response
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <div className="flex gap-6">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="run-algorithm"
-                  value="anthology"
-                  checked={runAlgorithm === 'anthology'}
-                  onChange={() => setRunAlgorithm('anthology')}
-                  className="accent-primary"
-                />
-                <span className="font-medium">Anthology</span>
-                <span className="text-muted-foreground text-sm">(run once per backstory)</span>
-              </label>
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="run-algorithm"
-                  value="zero_shot_baseline"
-                  checked={runAlgorithm === 'zero_shot_baseline'}
-                  onChange={() => setRunAlgorithm('zero_shot_baseline')}
-                  className="accent-primary"
-                />
-                <span className="font-medium">Zero-Shot Baseline</span>
-                <span className="text-muted-foreground text-sm">(demographic description, N independent trials)</span>
-              </label>
-            </div>
-          </CardContent>
-        </Card>
+        {/* Run Setup */}
+        <div className="grid gap-6 xl:grid-cols-[minmax(0,1.05fr)_minmax(0,0.95fr)]">
+          <div className="space-y-6">
+            <DemographicFilter
+              value={runDemographics}
+              onChange={setRunDemographics}
+              description="Choose the target population and sample cap for the next run."
+              sampleSizeLabel={
+                adaptiveSampling.enabled
+                  ? 'Maximum samples'
+                  : runAlgorithm === 'zero_shot_baseline'
+                    ? 'Number of trials'
+                    : undefined
+              }
+            />
 
-        {/* Demographic Filters (editable per-run) */}
-        <DemographicFilter
-          value={runDemographics}
-          onChange={setRunDemographics}
-          description="Settings for the next run (empty = inherit from initial survey settings)"
-          sampleSizeLabel={runAlgorithm === 'zero_shot_baseline' ? 'Number of trials' : undefined}
-        />
-
-        {/* Prompt Preview */}
-        {survey.questions.length > 0 && (
-          <Card>
-            <CardHeader>
-              <div className="flex items-center gap-2">
-                <Eye className="h-4 w-4" />
-                <CardTitle>Prompt Preview</CardTitle>
-              </div>
-              <CardDescription>
-                {runAlgorithm === 'zero_shot_baseline'
-                  ? `What will be sent to the LLM for each trial (repeated ${runDemographics.sample_size ?? '?'} times independently)`
-                  : 'What will be sent to the LLM for each backstory (run once per backstory)'}
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-2">
-              {runAlgorithm === 'zero_shot_baseline' ? (
-                <>
-                  <textarea
-                    className="w-full text-sm bg-muted rounded-lg p-4 font-mono leading-relaxed border-0 resize-none focus:outline-none focus:ring-1 focus:ring-ring"
-                    rows={3}
-                    value={runPromptText}
-                    onChange={(e) => setRunPromptText(e.target.value)}
+            <Card>
+              <CardHeader>
+                <CardTitle>Early Stopping</CardTitle>
+                <CardDescription>
+                  Beta posterior on MCQ counts. Stops when P(ranking is wrong) &lt; ε.
+                </CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <label className="flex items-start gap-3 cursor-pointer">
+                  <Checkbox
+                    checked={adaptiveSampling.enabled}
+                    onCheckedChange={(checked) =>
+                      setAdaptiveSampling((current) => ({ ...current, enabled: checked === true }))
+                    }
+                    className="mt-0.5"
                   />
-                  <pre className="text-sm bg-muted rounded-lg p-4 whitespace-pre-wrap font-mono overflow-x-auto leading-relaxed text-muted-foreground">
-                    {'\n'}
-                    {formatQuestionPreview(survey.questions[0])}
-                    {survey.questions.length > 1 && (
-                      <>{'\n\n'}{`// + ${survey.questions.length - 1} more question(s)`}</>
+                  <div className="space-y-1">
+                    <span className="text-sm font-medium">Run until stable</span>
+                    <p className="text-sm text-muted-foreground">
+                      Sample size above acts as a cap.
+                    </p>
+                  </div>
+                </label>
+
+                {adaptiveSampling.enabled && (
+                  <>
+                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-1 2xl:grid-cols-2">
+                      <div className="space-y-2">
+                        <Label htmlFor="adaptive-epsilon">Epsilon</Label>
+                        <Input
+                          id="adaptive-epsilon"
+                          type="number"
+                          min={0.0001}
+                          max={0.5}
+                          step={0.001}
+                          value={adaptiveSampling.epsilon}
+                          onChange={(event) => {
+                            const value = Number(event.target.value)
+                            if (Number.isFinite(value)) {
+                              setAdaptiveSampling((current) => ({ ...current, epsilon: value }))
+                            }
+                          }}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Misranking tolerance. 0.01 ⇒ ≥ 99% confidence.
+                        </p>
+                      </div>
+                      <div className="space-y-2">
+                        <Label htmlFor="adaptive-min-samples">Minimum samples</Label>
+                        <Input
+                          id="adaptive-min-samples"
+                          type="number"
+                          min={2}
+                          step={1}
+                          value={adaptiveSampling.min_samples}
+                          onChange={(event) => {
+                            const value = parseInt(event.target.value, 10)
+                            if (Number.isFinite(value)) {
+                              setAdaptiveSampling((current) => ({ ...current, min_samples: Math.max(2, value) }))
+                            }
+                          }}
+                        />
+                        <p className="text-xs text-muted-foreground">
+                          Floor before stability is checked.
+                        </p>
+                      </div>
+                    </div>
+
+                    {runDemographics.mode === 'balanced' && (
+                      <div className="flex gap-2 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-700 dark:text-amber-300">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>Balanced Matching creates a balanced candidate set, but early stopping can finish before all allocated slots complete.</span>
+                      </div>
                     )}
-                  </pre>
-                </>
-              ) : (
-                <pre className="text-sm bg-muted rounded-lg p-4 whitespace-pre-wrap font-mono overflow-x-auto leading-relaxed">
-                  <span className="text-muted-foreground italic">[backstory text]</span>
-                  {'\n\n'}
-                  {formatQuestionPreview(survey.questions[0])}
-                  {survey.questions.length > 1 && (
-                    <span className="text-muted-foreground">
+
+                    {hasNonMcqQuestions && (
+                      <div className="flex gap-2 rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>Only MCQ questions drive early stopping; non-MCQ answers are still collected for completed samples.</span>
+                      </div>
+                    )}
+
+                    {!hasMcqQuestions && (
+                      <div className="flex gap-2 rounded-lg border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive">
+                        <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                        <span>This survey has no MCQ questions, so early stopping will not trigger.</span>
+                      </div>
+                    )}
+                  </>
+                )}
+              </CardContent>
+            </Card>
+          </div>
+
+          <div className="space-y-6">
+            <Card>
+              <CardHeader>
+                <CardTitle>Algorithm</CardTitle>
+                <CardDescription>
+                  How the LLM will be prompted for each response
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-3">
+                  <label className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${runAlgorithm === 'anthology' ? 'border-primary bg-primary/5' : 'border-border'}`}>
+                    <input
+                      type="radio"
+                      name="run-algorithm"
+                      value="anthology"
+                      checked={runAlgorithm === 'anthology'}
+                      onChange={() => setRunAlgorithm('anthology')}
+                      className="mt-1 accent-primary"
+                    />
+                    <div>
+                      <span className="font-medium">Anthology</span>
+                      <p className="text-sm text-muted-foreground">Run once per selected backstory.</p>
+                    </div>
+                  </label>
+                  <label className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${runAlgorithm === 'zero_shot_baseline' ? 'border-primary bg-primary/5' : 'border-border'}`}>
+                    <input
+                      type="radio"
+                      name="run-algorithm"
+                      value="zero_shot_baseline"
+                      checked={runAlgorithm === 'zero_shot_baseline'}
+                      onChange={() => setRunAlgorithm('zero_shot_baseline')}
+                      className="mt-1 accent-primary"
+                    />
+                    <div>
+                      <span className="font-medium">Zero-Shot Baseline</span>
+                      <p className="text-sm text-muted-foreground">Use a demographic description for repeated independent trials.</p>
+                    </div>
+                  </label>
+                </div>
+              </CardContent>
+            </Card>
+
+            {survey.questions.length > 0 && (
+              <Card>
+                <CardHeader>
+                  <div className="flex items-center gap-2">
+                    <Eye className="h-4 w-4" />
+                    <CardTitle>Prompt Preview</CardTitle>
+                  </div>
+                  <CardDescription>
+                    {runAlgorithm === 'zero_shot_baseline'
+                      ? `Sent per trial (${adaptiveSampling.enabled ? 'up to ' : 'repeated '}${runDemographics.sample_size || '?'} times independently)`
+                      : 'Sent once per selected backstory'}
+                  </CardDescription>
+                </CardHeader>
+                <CardContent className="space-y-2">
+                  {runAlgorithm === 'zero_shot_baseline' ? (
+                    <>
+                      <textarea
+                        className="w-full text-sm bg-muted rounded-lg p-4 font-mono leading-relaxed border-0 resize-none focus:outline-none focus:ring-1 focus:ring-ring"
+                        rows={3}
+                        value={runPromptText}
+                        onChange={(e) => setRunPromptText(e.target.value)}
+                      />
+                      <pre className="text-sm bg-muted rounded-lg p-4 whitespace-pre-wrap font-mono overflow-x-auto leading-relaxed text-muted-foreground">
+                        {'\n'}
+                        {formatQuestionPreview(survey.questions[0])}
+                        {survey.questions.length > 1 && (
+                          <>{'\n\n'}{`// + ${survey.questions.length - 1} more question(s)`}</>
+                        )}
+                      </pre>
+                    </>
+                  ) : (
+                    <pre className="text-sm bg-muted rounded-lg p-4 whitespace-pre-wrap font-mono overflow-x-auto leading-relaxed">
+                      <span className="text-muted-foreground italic">[backstory text]</span>
                       {'\n\n'}
-                      {`// + ${survey.questions.length - 1} more question(s) with context accumulation`}
-                    </span>
+                      {formatQuestionPreview(survey.questions[0])}
+                      {survey.questions.length > 1 && (
+                        <span className="text-muted-foreground">
+                          {'\n\n'}
+                          {`// + ${survey.questions.length - 1} more question(s) with context accumulation`}
+                        </span>
+                      )}
+                    </pre>
                   )}
-                </pre>
-              )}
-            </CardContent>
-          </Card>
-        )}
+                </CardContent>
+              </Card>
+            )}
+
+          </div>
+        </div>
       </div>
     </Layout>
   )

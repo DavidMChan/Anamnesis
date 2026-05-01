@@ -18,6 +18,26 @@ interface CreateSurveyRunResult {
   error?: string
 }
 
+// Supabase enforces a Postgres statement_timeout (~8s on the anon role). A single
+// .insert() of tens of thousands of survey_tasks rows blows past it, so chunk.
+const SURVEY_TASKS_INSERT_CHUNK = 1000
+
+type SurveyTaskInsert = {
+  survey_run_id: string
+  backstory_id: string | null
+  status: string
+  attempts: number
+}
+
+async function insertSurveyTasksChunked(tasks: SurveyTaskInsert[]): Promise<string | null> {
+  for (let i = 0; i < tasks.length; i += SURVEY_TASKS_INSERT_CHUNK) {
+    const chunk = tasks.slice(i, i + SURVEY_TASKS_INSERT_CHUNK)
+    const { error } = await supabase.from('survey_tasks').insert(chunk)
+    if (error) return error.message
+  }
+  return null
+}
+
 /**
  * Create a new survey run.
  *
@@ -99,18 +119,18 @@ export async function createSurveyRun(
     }
 
     // Create tasks for each backstory
-    const tasks = backstoryIds.map((backstoryId) => ({
+    const tasks: SurveyTaskInsert[] = backstoryIds.map((backstoryId) => ({
       survey_run_id: run.id,
       backstory_id: backstoryId,
       status: 'pending',
       attempts: 0,
     }))
 
-    const { error: tasksError } = await supabase.from('survey_tasks').insert(tasks)
+    const tasksError = await insertSurveyTasksChunked(tasks)
 
     if (tasksError) {
       await supabase.from('survey_runs').delete().eq('id', run.id)
-      return { success: false, error: tasksError.message }
+      return { success: false, error: tasksError }
     }
 
     // Mark survey as active (has been run at least once)
@@ -166,17 +186,17 @@ export async function createZeroShotBaselineRun(
     }
 
     // N tasks, all with backstory_id = null
-    const tasks = Array.from({ length: n }, () => ({
+    const tasks: SurveyTaskInsert[] = Array.from({ length: n }, () => ({
       survey_run_id: run.id,
       backstory_id: null,
       status: 'pending',
       attempts: 0,
     }))
 
-    const { error: tasksError } = await supabase.from('survey_tasks').insert(tasks)
+    const tasksError = await insertSurveyTasksChunked(tasks)
     if (tasksError) {
       await supabase.from('survey_runs').delete().eq('id', run.id)
-      return { success: false, error: tasksError.message }
+      return { success: false, error: tasksError }
     }
 
     await supabase.from('surveys').update({ status: 'active' }).eq('id', surveyId)
@@ -236,18 +256,18 @@ export async function createDemographicSurveyRun(
     }
 
     // Create tasks for each backstory
-    const tasks = backstoryIds.map((backstoryId) => ({
+    const tasks: SurveyTaskInsert[] = backstoryIds.map((backstoryId) => ({
       survey_run_id: run.id,
       backstory_id: backstoryId,
       status: 'pending',
       attempts: 0,
     }))
 
-    const { error: tasksError } = await supabase.from('survey_tasks').insert(tasks)
+    const tasksError = await insertSurveyTasksChunked(tasks)
 
     if (tasksError) {
       await supabase.from('survey_runs').delete().eq('id', run.id)
-      return { success: false, error: tasksError.message }
+      return { success: false, error: tasksError }
     }
 
     return { success: true, runId: run.id }

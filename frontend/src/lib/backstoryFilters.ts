@@ -153,10 +153,11 @@ export async function selectBackstoryIds(
   config: DemographicSelectionConfig
 ): Promise<string[]> {
   const activeKeys = getActiveDemographicKeys(config.filters)
+  const sampleLimit = config.sample_size > 0 ? config.sample_size : undefined
 
   if (activeKeys.length === 0) {
     const ids = await fetchAllPublicBackstoryIds()
-    const selected = shuffle(ids).slice(0, config.sample_size)
+    const selected = sampleLimit ? shuffle(ids).slice(0, sampleLimit) : shuffle(ids)
     console.log(`[selectBackstoryIds] pool size: ${ids.length}`)
     console.log(`[selectBackstoryIds] ${config.mode}, no filters -> random sample of ${selected.length}`)
     return selected
@@ -173,11 +174,11 @@ export async function selectBackstoryIds(
 
   if (config.mode === 'top_k') {
     if (Object.keys(config.filters).length === 0) {
-      const selected = shuffle(backstories).slice(0, config.sample_size)
+      const selected = sampleLimit ? shuffle(backstories).slice(0, sampleLimit) : shuffle(backstories)
       console.log(`[selectBackstoryIds] top_k, no filters → random sample of ${selected.length}`)
       return selected.map((b) => b.id)
     }
-    const scored = rankAndSelectBackstories(backstories, config.filters, config.sample_size)
+    const scored = rankAndSelectBackstories(backstories, config.filters, sampleLimit)
     console.log(`[selectBackstoryIds] top_k, filters=${JSON.stringify(config.filters)}`)
     console.log(`[selectBackstoryIds] top scores:`, scored.slice(0, 5).map((s) => ({ id: s.id, score: s.score })))
     return scored.map((s) => s.id)
@@ -188,14 +189,15 @@ export async function selectBackstoryIds(
   console.log(`[selectBackstoryIds] balanced, dimensions=${JSON.stringify(dimensions)}, groups=${groups.length}`)
 
   if (groups.length === 0) {
-    const selected = shuffle(backstories).slice(0, config.sample_size)
+    const selected = sampleLimit ? shuffle(backstories).slice(0, sampleLimit) : shuffle(backstories)
     console.log(`[selectBackstoryIds] balanced, no filters → random sample of ${selected.length}`)
     return selected.map((b) => b.id)
   }
 
+  const balancedSampleSize = sampleLimit ?? backstories.length
   const slotAllocation =
     config.slot_allocation ??
-    defaultSlotAllocation(groups, dimensions, config.sample_size)
+    defaultSlotAllocation(groups, dimensions, balancedSampleSize)
   console.log(`[selectBackstoryIds] slot allocation:`, slotAllocation)
 
   const results = hungarianMatch(slotAllocation, dimensions, backstories)

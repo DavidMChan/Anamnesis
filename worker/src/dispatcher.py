@@ -16,6 +16,7 @@ from typing import List, Dict, Any
 from .config import get_config
 from .db import DatabaseClient
 from .queue import QueuePublisher
+from .bayesian_stability import compute_adaptive_sampling_state
 
 # Configure logging
 logging.basicConfig(
@@ -38,6 +39,7 @@ class TaskDispatcher:
         self.db = db
         self.publisher = publisher
         self.running = False
+        self._adaptive_check_cache: Dict[str, Dict[str, Any]] = {}
 
     def dispatch_run(self, run: Dict[str, Any]) -> int:
         """
@@ -101,6 +103,76 @@ class TaskDispatcher:
 
         return dispatched
 
+    def maybe_complete_adaptive_run(self, run: Dict[str, Any]) -> bool:
+        """
+        Finish adaptive-sampling runs once completed MCQ results are stable.
+
+        Returns True when the run was completed early and should not dispatch
+        more work this cycle.
+        """
+        llm_config = run.get("llm_config", {}) or {}
+        adaptive = llm_config.get("adaptive_sampling") or {}
+        if not adaptive.get("enabled"):
+            return False
+        if llm_config.get("distribution_mode") in ("n_sample", "logprobs"):
+            return False
+
+        run_id = run["id"]
+        cache = self._adaptive_check_cache.setdefault(run_id, {})
+
+        try:
+            epsilon = float(adaptive.get("epsilon", 0.01))
+        except (TypeError, ValueError):
+            epsilon = 0.01
+        try:
+            min_samples = max(2, int(adaptive.get("min_samples", 30)))
+        except (TypeError, ValueError):
+            min_samples = 30
+        if epsilon <= 0 or epsilon >= 1:
+            if not cache.get("invalid_epsilon_logged"):
+                logger.warning(f"Run {run_id} has invalid adaptive epsilon={epsilon}; skipping adaptive stop")
+                cache["invalid_epsilon_logged"] = True
+            return False
+
+        completed = int(run.get("completed_tasks") or 0)
+        if completed < min_samples:
+            return False
+        last_checked_completed = int(cache.get("last_checked_completed") or 0)
+        check_stride = max(1, int(adaptive.get("check_every_samples", 5) or 5))
+        total_tasks = int(run.get("total_tasks") or 0)
+        if (
+            last_checked_completed
+            and completed < total_tasks
+            and completed - last_checked_completed < check_stride
+        ):
+            return False
+
+        results = self.db.get_completed_results_for_run(run_id)
+        cache["last_checked_completed"] = completed
+
+        questions = self.db.get_survey_questions(run_id)
+        state = compute_adaptive_sampling_state(questions, results, epsilon, min_samples)
+        if not state:
+            return False
+
+        if not state.should_stop:
+            return False
+
+        stop_summary = {
+            "sample_count": state.sample_count,
+            "eligible_questions": state.eligible_questions,
+            "confidence_lower_bound": state.confidence_lower_bound,
+            "epsilon": epsilon,
+            "min_samples": min_samples,
+        }
+        self.db.complete_run_early(run_id, stop_summary)
+        logger.info(
+            f"Adaptive sampling completed run {run_id} early: "
+            f"samples={state.sample_count}, eligible_questions={state.eligible_questions}, "
+            f"confidence_lower_bound={state.confidence_lower_bound:.4f}"
+        )
+        return True
+
     def poll_and_dispatch(self) -> tuple[int, int]:
         """
         Poll for pending runs and dispatch their tasks.
@@ -117,6 +189,9 @@ class TaskDispatcher:
                 reset = self.db.reset_stale_tasks(run["id"])
                 if reset > 0:
                     logger.warning(f"Reset {reset} stale tasks for run {run['id']}")
+
+                if self.maybe_complete_adaptive_run(run):
+                    continue
 
                 dispatched = self.dispatch_run(run)
                 total_dispatched += dispatched

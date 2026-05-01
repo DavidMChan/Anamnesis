@@ -23,6 +23,8 @@ def make_run(llm_config=None, status="pending"):
         "id": str(uuid.uuid4()),
         "status": status,
         "llm_config": llm_config or {},
+        "completed_tasks": 0,
+        "total_tasks": 100,
     }
 
 
@@ -39,11 +41,15 @@ def mock_db():
     """Mock database client."""
     db = Mock()
     db.get_in_flight_count.return_value = 0
+    db.reset_stale_tasks.return_value = 0
     db.get_pending_tasks_for_dispatch.return_value = []
     db.mark_task_queued.return_value = None
     db.update_task_status.return_value = None
     db.update_run_status.return_value = None
     db.check_run_completion.return_value = None
+    db.get_completed_results_for_run.return_value = []
+    db.get_survey_questions.return_value = []
+    db.complete_run_early.return_value = None
     return db
 
 
@@ -175,7 +181,7 @@ class TestDispatchRunThrottling:
         dispatched = dispatcher.dispatch_run(run)
 
         assert dispatched == 1
-        mock_db.mark_task_queued.assert_called_once_with(task["id"])
+        mock_db.mark_tasks_queued.assert_called_once_with([task["id"]])
         mock_publisher.publish_task.assert_called_once_with(run["id"], task["id"])
 
     def test_reverts_to_pending_on_publish_failure(self, dispatcher, mock_db, mock_publisher):
@@ -207,3 +213,49 @@ class TestPollAndDispatch:
         dispatcher.poll_and_dispatch()
 
         mock_db.check_run_completion.assert_called_once_with(run["id"])
+
+
+class TestAdaptiveSampling:
+    def test_skips_demographic_distribution_runs(self, dispatcher, mock_db):
+        run = make_run(
+            llm_config={
+                "distribution_mode": "n_sample",
+                "adaptive_sampling": {"enabled": True, "epsilon": 0.01, "min_samples": 2},
+            },
+            status="running",
+        )
+        run["completed_tasks"] = 50
+
+        assert dispatcher.maybe_complete_adaptive_run(run) is False
+        mock_db.get_completed_results_for_run.assert_not_called()
+
+    def test_clamps_malformed_min_samples(self, dispatcher, mock_db):
+        run = make_run(
+            llm_config={
+                "adaptive_sampling": {"enabled": True, "epsilon": 0.99, "min_samples": -5},
+            },
+            status="running",
+        )
+        run["completed_tasks"] = 1
+
+        assert dispatcher.maybe_complete_adaptive_run(run) is False
+        mock_db.get_completed_results_for_run.assert_not_called()
+
+    def test_completes_stable_run(self, dispatcher, mock_db):
+        run = make_run(
+            llm_config={
+                "adaptive_sampling": {"enabled": True, "epsilon": 0.05, "min_samples": 30},
+            },
+            status="running",
+        )
+        run["completed_tasks"] = 101
+        mock_db.get_completed_results_for_run.return_value = [{"q1": "B"} for _ in range(100)] + [{"q1": "A"}]
+        mock_db.get_survey_questions.return_value = [
+            {"qkey": "q1", "type": "mcq", "options": ["A option", "B option"]},
+        ]
+
+        assert dispatcher.maybe_complete_adaptive_run(run) is True
+        mock_db.complete_run_early.assert_called_once()
+        args = mock_db.complete_run_early.call_args.args
+        assert args[0] == run["id"]
+        assert args[1]["sample_count"] == 101

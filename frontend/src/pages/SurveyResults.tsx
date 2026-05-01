@@ -9,7 +9,7 @@ import { supabase } from '@/lib/supabase'
 import { useSurveyRun } from '@/hooks/useSurveyRun'
 import type { Survey, SurveyRun, Question, SurveyResults as SurveyResultsType, SurveyTaskUsage } from '@/types/database'
 import { getModelName } from '@/lib/llmConfig'
-import { BarChart2, Table, ImageDown, RefreshCw, ChevronDown, Settings, Wallet, Gauge, Layers3 } from 'lucide-react'
+import { BarChart2, Table, ImageDown, RefreshCw, ChevronDown, Settings, Wallet, Gauge, Layers3, CheckCircle2 } from 'lucide-react'
 import { ResultsHero } from '@/components/results/ResultsHero'
 import { OpenResponseList } from '@/components/results/OpenResponseList'
 import { DistributionChart } from '@/components/results/DistributionChart'
@@ -18,6 +18,12 @@ import { ResultsTable } from '@/components/results/ResultsTable'
 import { DemographicsSummary } from '@/components/results/DemographicsSummary'
 import { DemographicFilter } from '@/components/results/DemographicFilter'
 import type { Backstory, DemographicKey } from '@/types/database'
+import {
+  computeAdaptiveSamplingSummary,
+  computeDistributionWithIntervals,
+  type AdaptiveSamplingSummary,
+  type DistributionDatum,
+} from '@/lib/bayesianStability'
 
 // Chart colors (vibrant for data visualization)
 const COLORS = ['#3b82f6', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16']
@@ -41,6 +47,8 @@ function RunConfigCard({ run }: { run: SurveyRun | null }) {
 
   const config = run.llm_config
   const modelName = getModelName(config)
+  const maxSamples = getMaxSamplesLabel(run)
+  const adaptiveConfig = config.adaptive_sampling
 
   return (
     <Card>
@@ -80,11 +88,40 @@ function RunConfigCard({ run }: { run: SurveyRun | null }) {
               <span className="font-medium w-24">Max Tokens:</span>
               <span className="text-muted-foreground">{config.max_tokens ?? 'Not set'}</span>
             </div>
+            {adaptiveConfig?.enabled && (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium w-24">Early Stop:</span>
+                  <Badge variant="outline">Enabled</Badge>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium w-24">Epsilon:</span>
+                  <span className="text-muted-foreground">{adaptiveConfig.epsilon}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium w-24">Min Samples:</span>
+                  <span className="text-muted-foreground">{adaptiveConfig.min_samples}</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="font-medium w-24">Max Samples:</span>
+                  <span className="text-muted-foreground">{maxSamples}</span>
+                </div>
+              </>
+            )}
           </div>
         </CardContent>
       )}
     </Card>
   )
+}
+
+function getMaxSamplesLabel(run: SurveyRun): string {
+  const demographics = run.demographics
+  if (demographics && 'sample_size' in demographics) {
+    const sampleSize = demographics.sample_size
+    return typeof sampleSize === 'number' && sampleSize > 0 ? String(sampleSize) : 'All available'
+  }
+  return run.algorithm === 'zero_shot_baseline' ? String(run.total_tasks) : 'All available'
 }
 
 function CostSummaryCard({ usage, responseCount }: { usage: SurveyTaskUsage | null; responseCount: number }) {
@@ -94,7 +131,7 @@ function CostSummaryCard({ usage, responseCount }: { usage: SurveyTaskUsage | nu
   const fmtUsd = (n: number) => `$${n.toFixed(4)}`
 
   return (
-    <div className="rounded-xl border border-border/70 bg-gradient-to-r from-card to-muted/40 p-4">
+    <div className="h-full rounded-xl border border-border/70 bg-gradient-to-r from-card to-muted/40 p-4">
       <div className="mb-3 flex items-start justify-between gap-4">
         <div>
           <div className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Run Cost</div>
@@ -163,7 +200,7 @@ function aggregateUsage(results: SurveyResultsType): SurveyTaskUsage | null {
 interface QuestionStats {
   qkey: string
   question: Question
-  distribution: { option: string; count: number; percentage: number }[]
+  distribution: DistributionDatum[]
   openResponses?: string[]
   // Ranking-specific stats
   rankingStats?: {
@@ -172,6 +209,47 @@ interface QuestionStats {
     bordaScore: number
     firstPlaceCount: number
   }[]
+}
+
+function AdaptiveSamplingCard({
+  summary,
+  isRunComplete,
+  stopSummary,
+}: {
+  summary: AdaptiveSamplingSummary | null
+  isRunComplete: boolean
+  stopSummary?: {
+    sample_count: number
+    eligible_questions: number
+    confidence_lower_bound: number
+    epsilon: number
+    min_samples: number
+  }
+}) {
+  if (!summary && !stopSummary) return null
+
+  const confidenceLowerBound = stopSummary?.confidence_lower_bound ?? summary?.confidenceLowerBound ?? 0
+  const shouldStop = stopSummary ? true : summary?.shouldStop ?? false
+
+  return (
+    <div className="h-full rounded-xl border border-border/70 bg-gradient-to-r from-card to-muted/40 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Early Stopping</div>
+        </div>
+        <Badge variant={isRunComplete || shouldStop ? 'default' : 'outline'}>
+          {isRunComplete ? 'Completed' : shouldStop ? 'Stable' : 'Collecting'}
+        </Badge>
+      </div>
+      <div className="mt-3 rounded-lg border border-border/60 bg-background/80 p-3 text-sm">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <CheckCircle2 className="h-4 w-4" />
+          <span>Confidence lower bound</span>
+        </div>
+        <div className="mt-2 text-lg font-medium">{Math.round(confidenceLowerBound * 1000) / 10}%</div>
+      </div>
+    </div>
+  )
 }
 
 export function SurveyResults() {
@@ -510,11 +588,7 @@ export function SurveyResults() {
         }
       })
 
-      const distribution = Object.entries(counts).map(([option, count]) => ({
-        option,
-        count: Math.round(count * 10) / 10,
-        percentage: totalWeight > 0 ? Math.round((count / totalWeight) * 100) : 0,
-      }))
+      const distribution = computeDistributionWithIntervals(counts, totalWeight, filters.length === 0)
 
       return {
         qkey: question.qkey,
@@ -715,6 +789,13 @@ export function SurveyResults() {
 
   const totalResponses = Object.keys(results).length
   const usageSummary = aggregateUsage(results)
+  const adaptiveConfig = run.llm_config.adaptive_sampling
+  const adaptiveSummary = adaptiveConfig?.enabled
+    ? computeAdaptiveSamplingSummary(survey.questions, results, {
+      epsilon: adaptiveConfig.epsilon,
+      minSamples: adaptiveConfig.min_samples,
+    })
+    : null
 
   return (
     <Layout>
@@ -729,7 +810,16 @@ export function SurveyResults() {
         />
 
         <RunConfigCard run={run} />
-        <CostSummaryCard usage={usageSummary} responseCount={totalResponses} />
+        <div className={`grid gap-4 ${adaptiveConfig?.enabled ? 'md:grid-cols-2' : 'grid-cols-1'}`}>
+          <CostSummaryCard usage={usageSummary} responseCount={totalResponses} />
+          {adaptiveConfig?.enabled && (
+            <AdaptiveSamplingCard
+              summary={adaptiveSummary}
+              stopSummary={adaptiveConfig?.stop_summary}
+              isRunComplete={run.status === 'completed'}
+            />
+          )}
+        </div>
 
         {isRunning && run && (
           <div className="flex items-center gap-3 rounded-lg border border-border bg-card p-3">

@@ -18,10 +18,11 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
-import { RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, Square, ChevronDown, RotateCcw, Wallet, Gauge, Flag } from 'lucide-react'
+import { RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, Square, ChevronDown, RotateCcw, Wallet, Gauge, Flag, CheckCircle2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { retryTask } from '@/lib/surveyRunner'
-import type { SurveyRun, SurveyRunStatus, SurveyTaskUsage, SurveyTaskResult } from '@/types/database'
+import { computeAdaptiveSamplingSummary, type AdaptiveSamplingSummary } from '@/lib/bayesianStability'
+import type { SurveyRun, SurveyRunStatus, SurveyTaskUsage, SurveyTaskResult, SurveyResults as SurveyResultsType, Question } from '@/types/database'
 
 interface SurveyRunProgressProps {
   run: SurveyRun
@@ -67,12 +68,21 @@ const statusConfig: Record<
 export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, creatingRun, onTaskRetried }: SurveyRunProgressProps) {
   const [cancelling, setCancelling] = useState(false)
   const [costSummary, setCostSummary] = useState<SurveyTaskUsage | null>(null)
+  const [earlyStoppingSummary, setEarlyStoppingSummary] = useState<AdaptiveSamplingSummary | null>(null)
   const status = statusConfig[run.status]
   const totalProcessed = run.completed_tasks + run.failed_tasks
-  const progress = run.total_tasks > 0 ? Math.round((totalProcessed / run.total_tasks) * 100) : 0
-
   const isInProgress = run.status === 'pending' || run.status === 'running'
   const isComplete = run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled'
+  const isSuccessfulCompletion = run.status === 'completed'
+  const adaptiveConfig = run.llm_config.adaptive_sampling
+  const showEarlyStopping = adaptiveConfig?.enabled === true
+  const displayTotalTasks = isSuccessfulCompletion ? totalProcessed : run.total_tasks
+  const progress = isSuccessfulCompletion
+    ? 100
+    : run.total_tasks > 0
+      ? Math.round((totalProcessed / run.total_tasks) * 100)
+      : 0
+  const remainingTasks = isSuccessfulCompletion ? 0 : Math.max(0, run.total_tasks - totalProcessed)
 
   const handleCancel = async () => {
     if (!onCancel) return
@@ -90,7 +100,7 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, cr
     const fetchCostSummary = async () => {
       const { data, error } = await supabase
         .from('survey_tasks')
-        .select('result')
+        .select('id, backstory_id, result')
         .eq('survey_run_id', run.id)
         .eq('status', 'completed')
 
@@ -98,6 +108,29 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, cr
 
       const totals = aggregateUsageFromResults((data || []).map((row) => row.result as SurveyTaskResult | null))
       setCostSummary(totals)
+
+      if (showEarlyStopping && !adaptiveConfig?.stop_summary) {
+        const { data: surveyData } = await supabase
+          .from('surveys')
+          .select('questions')
+          .eq('id', run.survey_id)
+          .single()
+
+        if (cancelled || !surveyData) return
+
+        const taskResults: SurveyResultsType = {}
+        for (const task of data || []) {
+          if (task.result) {
+            taskResults[task.backstory_id ?? task.id] = task.result as SurveyTaskResult
+          }
+        }
+        setEarlyStoppingSummary(
+          computeAdaptiveSamplingSummary(surveyData.questions as Question[], taskResults, {
+            epsilon: adaptiveConfig?.epsilon ?? 0.01,
+            minSamples: adaptiveConfig?.min_samples ?? 30,
+          })
+        )
+      }
     }
 
     fetchCostSummary()
@@ -112,7 +145,7 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, cr
     return () => {
       cancelled = true
     }
-  }, [run.id, run.completed_tasks, isInProgress])
+  }, [run.id, run.survey_id, run.completed_tasks, isInProgress, showEarlyStopping, adaptiveConfig])
 
   return (
     <Card>
@@ -134,7 +167,7 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, cr
           <div className="flex items-center justify-between text-sm">
             <span>Progress</span>
             <span className="text-muted-foreground">
-              {totalProcessed} / {run.total_tasks} ({progress}%)
+              {totalProcessed} / {displayTotalTasks} ({progress}%)
             </span>
           </div>
           <Progress value={progress} className="h-2" />
@@ -157,50 +190,59 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, cr
           </div>
           <div className="text-center">
             <div className="text-2xl font-bold">
-              {run.total_tasks - totalProcessed}
+              {remainingTasks}
             </div>
             <div className="text-muted-foreground">Remaining</div>
           </div>
         </div>
 
-        {costSummary && run.completed_tasks > 0 && (
-          <div className="rounded-xl border border-border/70 bg-gradient-to-r from-card to-muted/40 p-4">
-            <div className="mb-3 flex items-start justify-between gap-4">
-              <div>
-                <div className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Estimated Cost</div>
-                <div className="mt-1 text-2xl font-semibold leading-none">
-                  {formatUsd((costSummary.cost / run.completed_tasks) * run.total_tasks)}
+        {((costSummary && run.completed_tasks > 0) || showEarlyStopping) && (
+          <div className={`grid gap-4 ${costSummary && run.completed_tasks > 0 && showEarlyStopping ? 'md:grid-cols-[2fr_1fr]' : 'grid-cols-1'}`}>
+            {costSummary && run.completed_tasks > 0 && (
+              <div className="h-full rounded-xl border border-border/70 bg-gradient-to-r from-card to-muted/40 p-4">
+                <div className="mb-3 flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-xs uppercase tracking-[0.12em] text-muted-foreground">
+                      {isInProgress ? 'Estimated Cost' : 'Run Cost'}
+                    </div>
+                    <div className="mt-1 text-2xl font-semibold leading-none">
+                      {formatUsd(isInProgress ? (costSummary.cost / run.completed_tasks) * run.total_tasks : costSummary.cost)}
+                    </div>
+                    {/* <div className="mt-1 text-sm text-muted-foreground">
+                      pace for the full run
+                    </div> */}
+                  </div>
+                  <Badge variant="outline" className="shrink-0">
+                    {run.completed_tasks} task{run.completed_tasks > 1 ? 's' : ''} sampled
+                  </Badge>
                 </div>
-                {/* <div className="mt-1 text-sm text-muted-foreground">
-                  pace for the full run
-                </div> */}
-              </div>
-              <Badge variant="outline" className="shrink-0">
-                {run.completed_tasks} task{run.completed_tasks > 1 ? 's' : ''} sampled
-              </Badge>
-            </div>
-            <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
-              <div className="rounded-lg border border-border/60 bg-background/80 p-3">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Wallet className="h-4 w-4" />
-                  <span>Current cost</span>
+                <div className="grid grid-cols-1 gap-3 text-sm md:grid-cols-2">
+                  <div className="rounded-lg border border-border/60 bg-background/80 p-3">
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <Wallet className="h-4 w-4" />
+                      <span>Current cost</span>
+                    </div>
+                    <div className="mt-2 text-lg font-medium">{formatUsd(costSummary.cost)}</div>
+                  </div>
+                  <div className="rounded-lg border border-border/60 bg-background/80 p-3">
+                    <div className="flex items-center gap-2 text-muted-foreground">
+                      <Gauge className="h-4 w-4" />
+                      <span>Cost per completed task</span>
+                    </div>
+                    <div className="mt-2 text-lg font-medium">{formatUsd(costSummary.cost / run.completed_tasks)}</div>
+                    {/* <div className="text-xs text-muted-foreground">per completed task</div> */}
+                  </div>
                 </div>
-                <div className="mt-2 text-lg font-medium">{formatUsd(costSummary.cost)}</div>
+                {isInProgress && (
+                  <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
+                    <Flag className="h-3.5 w-3.5" />
+                    This line moves with each completed task that reports usage metadata.
+                  </p>
+                )}
               </div>
-              <div className="rounded-lg border border-border/60 bg-background/80 p-3">
-                <div className="flex items-center gap-2 text-muted-foreground">
-                  <Gauge className="h-4 w-4" />
-                  <span>Cost per completed task</span>
-                </div>
-                <div className="mt-2 text-lg font-medium">{formatUsd(costSummary.cost / run.completed_tasks)}</div>
-                {/* <div className="text-xs text-muted-foreground">per completed task</div> */}
-              </div>
-            </div>
-            {isInProgress && (
-              <p className="mt-3 flex items-center gap-2 text-xs text-muted-foreground">
-                <Flag className="h-3.5 w-3.5" />
-                This line moves with each completed task that reports usage metadata.
-              </p>
+            )}
+            {showEarlyStopping && (
+              <EarlyStoppingRunCard run={run} summary={earlyStoppingSummary} />
             )}
           </div>
         )}
@@ -285,6 +327,45 @@ function aggregateUsageFromResults(results: Array<SurveyTaskResult | null>): Sur
 
 function formatUsd(value: number): string {
   return `$${value.toFixed(4)}`
+}
+
+function EarlyStoppingRunCard({ run, summary }: { run: SurveyRun; summary: AdaptiveSamplingSummary | null }) {
+  const adaptiveConfig = run.llm_config.adaptive_sampling
+  if (!adaptiveConfig?.enabled) return null
+
+  const stopSummary = adaptiveConfig.stop_summary
+  const confidence = stopSummary?.confidence_lower_bound ?? summary?.confidenceLowerBound
+  const sampleCount = stopSummary?.sample_count ?? summary?.sampleCount
+  const badgeLabel = run.status === 'completed'
+    ? 'Completed'
+    : confidence !== undefined
+      ? 'Stable'
+      : 'Monitoring'
+
+  return (
+    <div className="h-full rounded-xl border border-border/70 bg-gradient-to-r from-card to-muted/40 p-4">
+      <div className="mb-3 flex items-start justify-between gap-4">
+        <div>
+          <div className="text-xs uppercase tracking-[0.12em] text-muted-foreground">Early Stopping</div>
+          <div className="mt-1 text-2xl font-semibold leading-none">
+            {confidence !== undefined ? `${Math.round(confidence * 1000) / 10}%` : 'Calculating'}
+          </div>
+        </div>
+        <Badge variant={run.status === 'completed' || confidence !== undefined ? 'default' : 'outline'} className="shrink-0">
+          {badgeLabel}
+        </Badge>
+      </div>
+      <div className="rounded-lg border border-border/60 bg-background/80 p-3 text-sm">
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <CheckCircle2 className="h-4 w-4" />
+          <span>Samples evaluated</span>
+        </div>
+        <div className="mt-2 text-lg font-medium">
+          {sampleCount !== undefined ? sampleCount : 'Calculating'}
+        </div>
+      </div>
+    </div>
+  )
 }
 
 const MAX_DISPLAYED_ERRORS = 20
