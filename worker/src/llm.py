@@ -64,6 +64,7 @@ class UnifiedLLMClient:
         self.max_tokens = max_tokens
         self.use_guided_decoding = use_guided_decoding
         self.use_chat_template = use_chat_template
+        self._api_key = api_key
 
         self._sync_client = OpenAI(
             base_url=base_url, api_key=api_key, max_retries=max_retries,
@@ -226,6 +227,36 @@ class UnifiedLLMClient:
         parsed.usage = UnifiedLLMClient._extract_usage(response)
         return parsed
 
+    def _fetch_openrouter_cost_sync(self, generation_id: str) -> Optional[float]:
+        """Fetch actual cost from OpenRouter's generation endpoint (sync fallback)."""
+        import httpx
+        try:
+            with httpx.Client(timeout=5.0) as client:
+                resp = client.get(
+                    f"https://openrouter.ai/api/v1/generation?id={generation_id}",
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                )
+                if resp.status_code == 200:
+                    return resp.json().get("data", {}).get("total_cost")
+        except Exception:
+            pass
+        return None
+
+    async def _fetch_openrouter_cost_async(self, generation_id: str) -> Optional[float]:
+        """Fetch actual cost from OpenRouter's generation endpoint (async fallback)."""
+        import httpx
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(
+                    f"https://openrouter.ai/api/v1/generation?id={generation_id}",
+                    headers={"Authorization": f"Bearer {self._api_key}"},
+                )
+                if resp.status_code == 200:
+                    return resp.json().get("data", {}).get("total_cost")
+        except Exception:
+            pass
+        return None
+
     @staticmethod
     def _is_multimodal_error(error_str: str) -> bool:
         """Check if an error is about unsupported multimodal content."""
@@ -273,7 +304,10 @@ class UnifiedLLMClient:
                     f"Response truncated at max_tokens={self.max_tokens}. "
                     "Increase max_tokens in Settings (thinking models like Gemini 2.5 Pro need ≥1024)."
                 )
-            return self._attach_usage(self._parse_response(content, question), response)
+            parsed = self._attach_usage(self._parse_response(content, question), response)
+            if self.provider == "openrouter" and parsed.usage and parsed.usage.cost is None:
+                parsed.usage.cost = self._fetch_openrouter_cost_sync(response.id)
+            return parsed
         except openai.BadRequestError as e:
             error_str = str(e).lower()
             if is_multimodal and self._is_multimodal_error(error_str):
@@ -374,7 +408,10 @@ class UnifiedLLMClient:
                     f"Response truncated at max_tokens={self.max_tokens}. "
                     "Increase max_tokens in Settings (thinking models like Gemini 2.5 Pro need ≥1024)."
                 )
-            return self._attach_usage(self._parse_response(content, question), response)
+            parsed = self._attach_usage(self._parse_response(content, question), response)
+            if self.provider == "openrouter" and parsed.usage and parsed.usage.cost is None:
+                parsed.usage.cost = await self._fetch_openrouter_cost_async(response.id)
+            return parsed
         except openai.BadRequestError as e:
             error_str = str(e).lower()
             if is_multimodal and self._is_multimodal_error(error_str):
