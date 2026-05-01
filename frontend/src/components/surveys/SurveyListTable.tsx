@@ -12,7 +12,6 @@ import {
 } from '@/components/ui/table'
 import type { Survey, SurveyRun } from '@/types/database'
 import { getModelName } from '@/lib/llmConfig'
-import { isDemographicSelectionConfig } from '@/lib/backstoryFilters'
 import { Eye, BarChart3, Trash2, Copy } from 'lucide-react'
 
 const runStatusVariants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info' | 'gold'> = {
@@ -28,10 +27,22 @@ const surveyStatusVariants: Record<string, 'default' | 'secondary' | 'destructiv
   active: 'gold',
 }
 
+function fmtUsd(n: number): string {
+  if (n === 0) return '$0.00'
+  if (n < 0.01) return `$${n.toFixed(4)}`
+  return `$${n.toFixed(2)}`
+}
+
+interface RunCost {
+  current: number
+  estimated: number | null
+}
+
 interface SurveyListTableProps {
   surveys: Survey[]
   latestRunStatus: Record<string, string>
   latestRuns: Record<string, SurveyRun>
+  runCosts: Record<string, RunCost>
   selectedIds: Set<string>
   onToggleSelect: (id: string) => void
   onSelectAll: () => void
@@ -44,6 +55,7 @@ export function SurveyListTable({
   surveys,
   latestRunStatus,
   latestRuns,
+  runCosts,
   selectedIds,
   onToggleSelect,
   onSelectAll,
@@ -63,11 +75,8 @@ export function SurveyListTable({
               <Checkbox
                 checked={allSelected}
                 onCheckedChange={(checked) => {
-                  if (checked) {
-                    onSelectAll()
-                  } else {
-                    onClearSelection()
-                  }
+                  if (checked) onSelectAll()
+                  else onClearSelection()
                 }}
                 aria-label="Select all"
                 data-state={someSelected && !allSelected ? 'indeterminate' : undefined}
@@ -77,18 +86,19 @@ export function SurveyListTable({
             <TableHead className="w-24">Status</TableHead>
             <TableHead className="w-20 text-right">Qs</TableHead>
             <TableHead>Model</TableHead>
-            <TableHead className="w-20 text-right">Temp</TableHead>
-            <TableHead className="w-24 text-right">Sample</TableHead>
+            <TableHead className="w-16 text-right">Temp</TableHead>
+            <TableHead className="w-20 text-right">Sample</TableHead>
             <TableHead className="w-24">Algorithm</TableHead>
-            <TableHead className="w-28">Created</TableHead>
-            <TableHead className="w-32 text-right">Actions</TableHead>
+            <TableHead className="w-24 text-right">Cost</TableHead>
+            <TableHead className="w-24 text-right">Est. Total</TableHead>
+            <TableHead className="w-24">Created</TableHead>
+            <TableHead className="w-28 text-right">Actions</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
           {surveys.map((survey) => {
             const run = latestRuns[survey.id]
             const runStatus = latestRunStatus[survey.id]
-            // Single consolidated status: run status takes priority when active/in-progress
             const displayStatus: string =
               runStatus === 'running' || runStatus === 'pending'
                 ? runStatus
@@ -98,12 +108,13 @@ export function SurveyListTable({
 
             const modelName = run ? getModelName(run.llm_config) : undefined
             const temperature = run?.llm_config?.temperature
-            const sampleSize = run?.demographics
-              ? isDemographicSelectionConfig(run.demographics)
-                ? run.demographics.sample_size
-                : undefined
+            const sampleSize = run
+              ? run.completed_tasks > 0
+                ? run.completed_tasks
+                : run.total_tasks || undefined
               : undefined
             const algorithm = run?.algorithm
+            const cost = runCosts[survey.id]
 
             return (
               <TableRow
@@ -157,6 +168,22 @@ export function SurveyListTable({
                     : algorithm === 'zero_shot_baseline'
                     ? 'Zero-Shot'
                     : '—'}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-xs">
+                  {cost != null ? (
+                    <span className={cost.current > 0 ? 'text-foreground' : 'text-muted-foreground'}>
+                      {fmtUsd(cost.current)}
+                    </span>
+                  ) : run ? (
+                    <span className="text-muted-foreground animate-pulse">…</span>
+                  ) : '—'}
+                </TableCell>
+                <TableCell className="text-right tabular-nums text-xs text-muted-foreground">
+                  {cost?.estimated != null ? (
+                    <span title="Projected total if all tasks complete">
+                      ~{fmtUsd(cost.estimated)}
+                    </span>
+                  ) : '—'}
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
                   {new Date(survey.created_at).toLocaleDateString()}

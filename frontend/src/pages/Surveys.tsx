@@ -6,7 +6,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Badge } from '@/components/ui/badge'
 import { supabase } from '@/lib/supabase'
 import { useAuthContext } from '@/contexts/AuthContext'
-import type { Survey, SurveyRun, Question, MediaAttachment } from '@/types/database'
+import type { Survey, SurveyRun, Question, MediaAttachment, SurveyTaskResult } from '@/types/database'
 import { toast } from '@/hooks/use-toast'
 import { copyMedia, deleteMedia } from '@/lib/media'
 import { Plus, Eye, BarChart3, Trash2, ClipboardList, Copy, LayoutGrid, List } from 'lucide-react'
@@ -26,6 +26,7 @@ export function Surveys() {
   const [surveys, setSurveys] = useState<Survey[]>([])
   const [latestRunStatus, setLatestRunStatus] = useState<Record<string, string>>({})
   const [latestRuns, setLatestRuns] = useState<Record<string, SurveyRun>>({})
+  const [runCosts, setRunCosts] = useState<Record<string, { current: number; estimated: number | null }>>({})
   const [loading, setLoading] = useState(true)
   const [viewMode, setViewMode] = useState<'grid' | 'list'>(() => {
     return (localStorage.getItem('surveys-view-mode') as 'grid' | 'list') || 'grid'
@@ -81,6 +82,38 @@ export function Surveys() {
         }
         setLatestRunStatus(latestByStatus)
         setLatestRuns(latestByRun)
+
+        // Background: aggregate cost from survey_tasks for each latest run
+        const runIds = Object.values(latestByRun).map((r) => r.id)
+        if (runIds.length > 0) {
+          supabase
+            .from('survey_tasks')
+            .select('survey_run_id, result')
+            .in('survey_run_id', runIds)
+            .eq('status', 'completed')
+            .then(({ data: taskRows }) => {
+              if (!taskRows) return
+              // Sum cost per run_id
+              const costMap: Record<string, number> = {}
+              for (const row of taskRows) {
+                const cost = (row.result as SurveyTaskResult)?.__meta__?.usage?.cost ?? 0
+                costMap[row.survey_run_id] = (costMap[row.survey_run_id] ?? 0) + cost
+              }
+              // Compute estimated total using cost-per-task × total_tasks
+              const costs: Record<string, { current: number; estimated: number | null }> = {}
+              for (const run of Object.values(latestByRun)) {
+                const current = costMap[run.id] ?? 0
+                const completed = run.completed_tasks
+                const total = run.total_tasks
+                const estimated =
+                  completed > 0 && total > completed
+                    ? (current / completed) * total
+                    : null
+                costs[run.survey_id] = { current, estimated }
+              }
+              setRunCosts(costs)
+            })
+        }
       }
     }
 
@@ -230,6 +263,7 @@ export function Surveys() {
             surveys={surveys}
             latestRunStatus={latestRunStatus}
             latestRuns={latestRuns}
+            runCosts={runCosts}
             selectedIds={selectedIds}
             onToggleSelect={toggle}
             onSelectAll={() => selectAll(surveys)}
