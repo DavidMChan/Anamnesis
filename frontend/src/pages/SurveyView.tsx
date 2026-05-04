@@ -17,6 +17,7 @@ import { MediaPreview } from '@/components/surveys/MediaPreview'
 import { DemographicFilter, defaultDemographicSelectionConfig, legacyToSelectionConfig } from '@/components/surveys/DemographicFilter'
 import { getMediaUrl } from '@/lib/media'
 import { mergeEffectiveConfig } from '@/lib/llmConfig'
+import { validateRunConfig } from '@/lib/runValidation'
 import { RunConfigCard } from '@/components/surveys/RunConfigCard'
 import { isDemographicSelectionConfig } from '@/lib/backstoryFilters'
 import { buildDemographicPromptText } from '@/lib/demographicPrompt'
@@ -41,24 +42,6 @@ function AudioPlayer({ media }: { media: MediaAttachment }) {
   return <audio controls src={url} className="w-full" />
 }
 
-/**
- * Check if a model supports multimodal input via the OpenRouter models API.
- */
-async function checkMultimodalSupport(modelId: string): Promise<boolean> {
-  try {
-    const response = await fetch('https://openrouter.ai/api/v1/models')
-    if (!response.ok) return true
-    const data = await response.json()
-    const models = data?.data as Array<{ id: string; architecture?: { modality?: string } }> | undefined
-    if (!models) return true
-    const model = models.find((m) => m.id === modelId)
-    if (!model) return true
-    const modality = model.architecture?.modality || ''
-    return modality.includes('image') || modality.includes('multimodal') || modality.includes('audio')
-  } catch {
-    return true
-  }
-}
 
 const statusColors: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'gold'> = {
   draft: 'secondary',
@@ -173,62 +156,23 @@ export function SurveyView() {
     if (!survey || !user) return
     setConfigError(null)
 
-    const sampleSize = runDemographics.sample_size
-    if (runAlgorithm === 'zero_shot_baseline' && (!sampleSize || sampleSize <= 0)) {
-      setConfigError('Number of trials must be greater than 0 before running a zero-shot baseline.')
+    const llmConfig = mergeEffectiveConfig(profile?.llm_config, runOverrides)
+    const validation = await validateRunConfig({
+      survey,
+      llmConfig,
+      maskedApiKeys,
+      demographics: runDemographics,
+      algorithm: runAlgorithm,
+      adaptiveSampling,
+    })
+
+    if (!validation.valid) {
+      setConfigError(validation.error ?? 'Configuration error.')
       return
     }
-    if (adaptiveSampling.enabled && sampleSize > 0 && sampleSize < adaptiveSampling.min_samples) {
-      setConfigError('Maximum samples must be at least the minimum samples for run-until-stable mode.')
-      return
-    }
 
-    // Validate LLM config before creating tasks
-    const llmConfig = profile?.llm_config
-    if (!llmConfig?.provider) {
-      setConfigError('No LLM provider configured. Please set up your LLM settings in the Settings page before running a survey.')
-      return
-    }
-    if (llmConfig.provider === 'openrouter') {
-      if (!maskedApiKeys.openrouter) {
-        setConfigError('OpenRouter API key is missing. Please add your API key in the Settings page.')
-        return
-      }
-      if (!llmConfig.openrouter_model) {
-        setConfigError('OpenRouter model is not set. Please configure it in the Settings page.')
-        return
-      }
-    } else if (llmConfig.provider === 'vllm') {
-      if (!llmConfig.vllm_endpoint) {
-        setConfigError('vLLM endpoint is not set. Please configure it in the Settings page.')
-        return
-      }
-      if (!llmConfig.vllm_model) {
-        setConfigError('vLLM model is not set. Please configure it in the Settings page.')
-        return
-      }
-    }
-
-    // Check if survey has media attachments
-    const hasMedia = survey.questions.some(
-      (q) => q.media || q.option_media?.some((m) => m != null)
-    )
-
-    if (hasMedia) {
-      const modelId = llmConfig.provider === 'openrouter' ? llmConfig.openrouter_model : llmConfig.vllm_model
-      const isMultimodal = await checkMultimodalSupport(modelId || '')
-      if (!isMultimodal) {
-        setConfigError(
-          `Your model (${modelId}) may not support multimodal input. This survey has questions with media attachments. ` +
-          'Please use a multimodal model (e.g., google/gemini-2.0-flash, anthropic/claude-sonnet-4, openai/gpt-4o).'
-        )
-        return
-      }
-    }
-
-    // Merge profile defaults + local overrides into run config snapshot
     const runLlmConfig = {
-      ...mergeEffectiveConfig(llmConfig, runOverrides),
+      ...llmConfig,
       ...(adaptiveSampling.enabled ? { adaptive_sampling: adaptiveSampling } : {}),
     }
     const promptText = runAlgorithm === 'zero_shot_baseline' ? runPromptText : undefined

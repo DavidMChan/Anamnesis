@@ -9,6 +9,7 @@ import { supabase } from '@/lib/supabase'
 import { useSurveyRun } from '@/hooks/useSurveyRun'
 import type { Survey, SurveyRun, Question, SurveyResults as SurveyResultsType, SurveyTaskUsage } from '@/types/database'
 import { getModelName } from '@/lib/llmConfig'
+import { downloadSurveyCSV } from '@/lib/csvExport'
 import { BarChart2, Table, ImageDown, RefreshCw, ChevronDown, Settings, Wallet, Gauge, Layers3, CheckCircle2 } from 'lucide-react'
 import { ResultsHero } from '@/components/results/ResultsHero'
 import { OpenResponseList } from '@/components/results/OpenResponseList'
@@ -650,119 +651,14 @@ export function SurveyResults() {
     img.src = svgUrl
   }, [])
 
-  // Helper to map letter answer to option text
-  const mapAnswerToOption = (answer: string, question: Question): string => {
-    if (!question.options || question.type === 'open_response') return answer
-    const index = answer.charCodeAt(0) - 'A'.charCodeAt(0)
-    if (index >= 0 && index < question.options.length) {
-      return question.options[index]
-    }
-    return answer
-  }
-
   const downloadCSV = async () => {
     if (!survey || !run || downloadingCSV) return
     setDownloadingCSV(true)
-
-    const isZeroShot = run.algorithm === 'zero_shot_baseline'
-
-    // Fetch backstory demographics via RPC (single query with temp table join)
-    // Only relevant for anthology runs (zero_shot has no backstories)
-    let backstoryMap: Map<string, Record<string, unknown>> = new Map()
-    if (!isZeroShot) {
-      const backstoryIds = Object.keys(results)
-      if (backstoryIds.length > 0) {
-        const { data } = await supabase.rpc('get_backstory_demographics', {
-          backstory_ids: backstoryIds,
-        })
-        if (data) {
-          backstoryMap = new Map(
-            (data as { id: string; demographics: Record<string, unknown> }[]).map((b) => [b.id, b.demographics])
-          )
-        }
-      }
+    try {
+      await downloadSurveyCSV(survey, run)
+    } finally {
+      setDownloadingCSV(false)
     }
-
-    const questionHeaders = survey.questions.map((q) => `${q.qkey}: ${q.text}`)
-    const firstCol = isZeroShot ? 'trial_index' : 'backstory_id'
-    const usageHeaders = [
-      'usage_cost_usd',
-      'usage_audio_tokens',
-      'usage_prompt_tokens',
-      'usage_completion_tokens',
-      'usage_total_tokens',
-      'usage_api_calls',
-    ]
-    const headers = isZeroShot
-      ? [firstCol, ...usageHeaders, ...questionHeaders]
-      : [firstCol, 'demographics', ...usageHeaders, ...questionHeaders]
-
-    const rows = Object.entries(results).map(([backstoryId, responses], index) => {
-      const firstColValue = isZeroShot ? `Trial ${index + 1}` : backstoryId
-      const demographics = backstoryMap.get(backstoryId)
-      const demographicsStr = demographics ? JSON.stringify(demographics) : ''
-      const usage = responses.__meta__?.usage
-
-      return [
-        firstColValue,
-        ...(isZeroShot ? [] : [demographicsStr]),
-        usage?.cost ?? '',
-        usage?.audio_tokens ?? '',
-        usage?.prompt_tokens ?? '',
-        usage?.completion_tokens ?? '',
-        usage?.total_tokens ?? '',
-        usage?.api_calls ?? '',
-        ...survey.questions.map((q) => {
-          const answer = responses[q.qkey]
-          if (!answer) return ''
-
-          // Handle ranking: "A,C,B,D,E" -> "Taiwan > China > United States > Italy > Mexico"
-          if (q.type === 'ranking' && typeof answer === 'string' && q.options) {
-            const ranking = answer.split(',').map(s => s.trim())
-            return ranking
-              .map((letter) => {
-                const index = letter.charCodeAt(0) - 'A'.charCodeAt(0)
-                return q.options && index >= 0 && index < q.options.length
-                  ? q.options[index]
-                  : letter
-              })
-              .join(' > ')
-          }
-
-          // Handle multiple select and arrays
-          if (Array.isArray(answer)) {
-            return answer.map((a) => mapAnswerToOption(a, q)).join('; ')
-          }
-
-          // Handle comma-separated (multiple_select stored as string)
-          if (typeof answer === 'string' && answer.includes(',') && q.type === 'multiple_select') {
-            return answer
-              .split(',')
-              .map(s => mapAnswerToOption(s.trim(), q))
-              .join('; ')
-          }
-
-          return mapAnswerToOption(answer, q)
-        }),
-      ]
-    })
-
-    const escape = (cell: string) => `"${cell.replace(/"/g, '""')}"`
-    const csvContent = [
-      headers.map(escape).join(','),
-      ...rows.map((row) => row.map((cell) => escape(String(cell))).join(',')),
-    ].join('\n')
-
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
-    const link = document.createElement('a')
-    link.href = URL.createObjectURL(blob)
-    const sampleSize = Object.keys(results).length
-    const slugName = (survey.name || 'survey').replace(/\s+/g, '_')
-    link.download = `${slugName}_${run.algorithm}_sample_${sampleSize}.csv`
-    document.body.appendChild(link)
-    link.click()
-    document.body.removeChild(link)
-    setDownloadingCSV(false)
   }
 
   if (loading) {
