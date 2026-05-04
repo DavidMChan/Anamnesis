@@ -192,4 +192,4 @@ cd worker && pytest
 
 See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for production deployment on Ubuntu 24.04.
 
-Updated: 3/23/2026
+Updated: 5/04/2026
