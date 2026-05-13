@@ -14,6 +14,8 @@ import { BatchUploadDialog } from '@/components/surveys/BatchUploadDialog'
 import { SurveyListTable } from '@/components/surveys/SurveyListTable'
 import { BatchActionToolbar } from '@/components/surveys/BatchActionToolbar'
 import { useBatchSelection } from '@/hooks/useBatchSelection'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
+import { buttonVariants } from '@/components/ui/button'
 
 const statusVariants: Record<string, 'default' | 'secondary' | 'destructive' | 'outline' | 'success' | 'warning' | 'info' | 'gold'> = {
   draft: 'secondary',
@@ -34,6 +36,7 @@ export function Surveys() {
 
   const { selectedIds, toggle, selectAll, clearSelection, selectedCount } =
     useBatchSelection<Survey>()
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
 
   useEffect(() => {
     if (user) {
@@ -121,8 +124,6 @@ export function Surveys() {
   }
 
   const deleteSurvey = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this survey?')) return
-
     const survey = surveys.find((s) => s.id === id)
 
     const { error } = await supabase.from('surveys').delete().eq('id', id)
@@ -138,6 +139,7 @@ export function Surveys() {
       }
       setSurveys(surveys.filter((s) => s.id !== id))
     }
+    setDeleteConfirmId(null)
   }
 
   const duplicateSurvey = async (survey: Survey) => {
@@ -216,6 +218,7 @@ export function Surveys() {
                   className="h-7 w-7 p-0"
                   onClick={() => switchViewMode('grid')}
                   title="Grid view"
+                  aria-label="Grid view"
                 >
                   <LayoutGrid className="h-3.5 w-3.5" />
                 </Button>
@@ -225,6 +228,7 @@ export function Surveys() {
                   className="h-7 w-7 p-0"
                   onClick={() => switchViewMode('list')}
                   title="List view"
+                  aria-label="List view"
                 >
                   <List className="h-3.5 w-3.5" />
                 </Button>
@@ -268,7 +272,7 @@ export function Surveys() {
             onToggleSelect={toggle}
             onSelectAll={() => selectAll(surveys)}
             onClearSelection={clearSelection}
-            onDeleteSurvey={deleteSurvey}
+            onDeleteSurvey={(id) => setDeleteConfirmId(id)}
             onDuplicateSurvey={duplicateSurvey}
           />
         ) : (
@@ -326,15 +330,16 @@ export function Surveys() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => deleteSurvey(survey.id)}
+                      onClick={() => setDeleteConfirmId(survey.id)}
                       className="px-2"
                       title="Delete survey"
+                      aria-label="Delete survey"
                     >
                       <Trash2 className="h-3.5 w-3.5 text-destructive" />
                     </Button>
                   </div>
 
-                  <p className="text-[10px] text-muted-foreground mt-3">
+                  <p className="text-xs text-muted-foreground mt-3">
                     Created {new Date(survey.created_at).toLocaleDateString()}
                   </p>
                 </CardContent>
@@ -354,6 +359,26 @@ export function Surveys() {
           onRunsStarted={fetchSurveys}
         />
       )}
+
+      <AlertDialog open={deleteConfirmId !== null} onOpenChange={(open) => { if (!open) setDeleteConfirmId(null) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete survey?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This will permanently delete the survey and its associated media. This action cannot be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={buttonVariants({ variant: 'destructive' })}
+              onClick={() => deleteConfirmId && deleteSurvey(deleteConfirmId)}
+            >
+              Delete
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Layout>
   )
 }

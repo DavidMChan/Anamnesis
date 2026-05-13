@@ -12,7 +12,9 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { supabase } from '@/lib/supabase'
 import { useAuthContext } from '@/contexts/AuthContext'
 import type { Backstory, Demographics } from '@/types/database'
-import { Plus, Trash2, Eye, Globe, Lock, Sparkles, Upload } from 'lucide-react'
+import { Trash2, Eye, Globe, Lock, Upload, BookOpen } from 'lucide-react'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog'
+import { buttonVariants } from '@/components/ui/button'
 
 export function Backstories() {
   const { user } = useAuthContext()
@@ -22,6 +24,7 @@ export function Backstories() {
   const [viewDialogOpen, setViewDialogOpen] = useState(false)
   const [selectedBackstory, setSelectedBackstory] = useState<Backstory | null>(null)
   const [saving, setSaving] = useState(false)
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null)
 
   // Form state
   const [backstoryText, setBackstoryText] = useState('')
@@ -80,8 +83,6 @@ export function Backstories() {
   }
 
   const deleteBackstory = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this backstory?')) return
-
     const { error } = await supabase.from('backstories').delete().eq('id', id)
 
     if (error) {
@@ -89,6 +90,7 @@ export function Backstories() {
     } else {
       setBackstories(backstories.filter((b) => b.id !== id))
     }
+    setDeleteConfirmId(null)
   }
 
   const viewBackstory = (backstory: Backstory) => {
@@ -111,16 +113,12 @@ export function Backstories() {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-3xl font-bold">My Backstories</h1>
+            <h1 className="text-2xl font-bold">My Backstories</h1>
             <p className="text-muted-foreground">
               Upload and manage your own backstories
             </p>
           </div>
           <div className="flex gap-2">
-            <Button variant="outline" disabled title="Coming soon">
-              <Sparkles className="h-4 w-4 mr-2" />
-              Generate with LLM
-            </Button>
             <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
               <DialogTrigger asChild>
                 <Button>
@@ -268,13 +266,17 @@ export function Backstories() {
         </div>
 
         {backstories.length === 0 ? (
-          <Card>
-            <CardContent className="flex flex-col items-center justify-center py-12">
-              <p className="text-muted-foreground mb-4">
-                You haven't uploaded any backstories yet.
+          <Card className="border-dashed">
+            <CardContent className="flex flex-col items-center justify-center py-16">
+              <div className="h-12 w-12 rounded-xl bg-muted flex items-center justify-center mb-4">
+                <BookOpen className="h-6 w-6 text-muted-foreground" />
+              </div>
+              <h3 className="font-semibold mb-1">No backstories yet</h3>
+              <p className="text-muted-foreground text-sm mb-4 text-center max-w-sm">
+                Upload your own backstories to contribute to the shared persona pool.
               </p>
               <Button onClick={() => setDialogOpen(true)}>
-                <Plus className="h-4 w-4 mr-2" />
+                <Upload className="h-4 w-4 mr-2" />
                 Upload Your First Backstory
               </Button>
             </CardContent>
@@ -287,7 +289,7 @@ export function Backstories() {
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-2">
                       {backstory.is_public ? (
-                        <Globe className="h-4 w-4 text-green-500" />
+                        <Globe className="h-4 w-4 text-primary" />
                       ) : (
                         <Lock className="h-4 w-4 text-muted-foreground" />
                       )}
@@ -328,7 +330,8 @@ export function Backstories() {
                     <Button
                       variant="ghost"
                       size="sm"
-                      onClick={() => deleteBackstory(backstory.id)}
+                      onClick={() => setDeleteConfirmId(backstory.id)}
+                      aria-label="Delete backstory"
                     >
                       <Trash2 className="h-4 w-4 text-destructive" />
                     </Button>
@@ -338,6 +341,27 @@ export function Backstories() {
             ))}
           </div>
         )}
+
+        {/* Delete Confirmation */}
+        <AlertDialog open={deleteConfirmId !== null} onOpenChange={(open) => { if (!open) setDeleteConfirmId(null) }}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete backstory?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This will permanently remove the backstory from your collection. This action cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                className={buttonVariants({ variant: 'destructive' })}
+                onClick={() => deleteConfirmId && deleteBackstory(deleteConfirmId)}
+              >
+                Delete
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
 
         {/* View Backstory Dialog */}
         <Dialog open={viewDialogOpen} onOpenChange={setViewDialogOpen}>

@@ -53,7 +53,7 @@ export function Home() {
         {/* Hero Section */}
         <section className="pt-32 pb-16 px-4 bg-gradient-to-b from-background to-muted/20">
           <div className="container max-w-4xl mx-auto text-center space-y-8">
-            <h1 className="text-4xl sm:text-5xl lg:text-5xl font-bold tracking-tight leading-tight">
+            <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-tight">
               Conditioning LLMs to simulate representative<br className="hidden sm:block" /> virtual personas across<br />
               <span className="block mt-2 text-primary">
                 <Typewriter
@@ -125,7 +125,7 @@ export function Home() {
 
             <div className="grid md:grid-cols-3 gap-8 relative">
               {/* Connector lines */}
-              <div className="hidden md:block absolute top-8 left-[20%] right-[20%] h-0.5 bg-gradient-to-r from-primary/20 via-primary/40 to-primary/20" />
+              <div className="hidden md:block absolute top-8 left-[20%] right-[20%] h-px bg-border" />
 
               <div className="relative flex flex-col items-center text-center group">
                 <div className="relative z-10 h-16 w-16 rounded-2xl bg-background border-2 border-primary text-primary flex items-center justify-center mb-5 shadow-sm transition-transform hover:scale-105">

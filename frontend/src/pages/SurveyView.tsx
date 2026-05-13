@@ -22,6 +22,8 @@ import { RunConfigCard } from '@/components/surveys/RunConfigCard'
 import { isDemographicSelectionConfig } from '@/lib/backstoryFilters'
 import { buildDemographicPromptText } from '@/lib/demographicPrompt'
 import { AlertTriangle, ArrowLeft, Edit, Play, History, ChevronDown, ChevronRight, Eye } from 'lucide-react'
+import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group'
+import { Textarea } from '@/components/ui/textarea'
 
 /** Standalone audio player that loads its own URL from a media key */
 function AudioPlayer({ media }: { media: MediaAttachment }) {
@@ -212,12 +214,12 @@ export function SurveyView() {
       <div className="space-y-6">
         {/* Header */}
         <div className="flex items-center gap-4">
-          <Button variant="ghost" size="icon" onClick={() => navigate('/surveys')}>
+          <Button variant="ghost" size="icon" onClick={() => navigate('/surveys')} aria-label="Back to surveys">
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div className="flex-1">
             <div className="flex items-center gap-3">
-              <h1 className="text-3xl font-bold">{survey.name || 'Untitled Survey'}</h1>
+              <h1 className="text-2xl font-bold">{survey.name || 'Untitled Survey'}</h1>
               <Badge variant={statusColors[survey.status]}>
                 {survey.status === 'active' ? 'Active' : 'Draft'}
               </Badge>
@@ -492,36 +494,22 @@ export function SurveyView() {
                 </CardDescription>
               </CardHeader>
               <CardContent>
-                <div className="grid gap-3">
+                <RadioGroup value={runAlgorithm} onValueChange={(v) => setRunAlgorithm(v as SurveyAlgorithm)} className="gap-3">
                   <label className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${runAlgorithm === 'anthology' ? 'border-primary bg-primary/5' : 'border-border'}`}>
-                    <input
-                      type="radio"
-                      name="run-algorithm"
-                      value="anthology"
-                      checked={runAlgorithm === 'anthology'}
-                      onChange={() => setRunAlgorithm('anthology')}
-                      className="mt-1 accent-primary"
-                    />
+                    <RadioGroupItem value="anthology" className="mt-0.5 shrink-0" />
                     <div>
                       <span className="font-medium">Anthology</span>
                       <p className="text-sm text-muted-foreground">Run once per selected backstory.</p>
                     </div>
                   </label>
                   <label className={`flex items-start gap-3 rounded-lg border p-3 cursor-pointer transition-colors ${runAlgorithm === 'zero_shot_baseline' ? 'border-primary bg-primary/5' : 'border-border'}`}>
-                    <input
-                      type="radio"
-                      name="run-algorithm"
-                      value="zero_shot_baseline"
-                      checked={runAlgorithm === 'zero_shot_baseline'}
-                      onChange={() => setRunAlgorithm('zero_shot_baseline')}
-                      className="mt-1 accent-primary"
-                    />
+                    <RadioGroupItem value="zero_shot_baseline" className="mt-0.5 shrink-0" />
                     <div>
                       <span className="font-medium">Zero-Shot Baseline</span>
                       <p className="text-sm text-muted-foreground">Use a demographic description for repeated independent trials.</p>
                     </div>
                   </label>
-                </div>
+                </RadioGroup>
               </CardContent>
             </Card>
 
@@ -541,8 +529,8 @@ export function SurveyView() {
                 <CardContent className="space-y-2">
                   {runAlgorithm === 'zero_shot_baseline' ? (
                     <>
-                      <textarea
-                        className="w-full text-sm bg-muted rounded-lg p-4 font-mono leading-relaxed border-0 resize-none focus:outline-none focus:ring-1 focus:ring-ring"
+                      <Textarea
+                        className="text-sm bg-muted font-mono leading-relaxed border-0 rounded-lg hover:border-0 focus-visible:ring-1"
                         rows={3}
                         value={runPromptText}
                         onChange={(e) => setRunPromptText(e.target.value)}
