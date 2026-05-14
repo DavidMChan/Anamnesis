@@ -580,6 +580,129 @@ class DatabaseClient:
         )
         return (data or {}).get("demographics") or {}
 
+    # ==================== Ground Truth Matching ====================
+
+    def get_matching_runs(self) -> List[Dict[str, Any]]:
+        """
+        Get survey runs in the 'matching' phase (Ground Truth feature).
+
+        Worker dispatcher picks these up, computes Hungarian/greedy/random
+        matches against the backstory pool, writes survey_tasks, and
+        transitions the run to 'pending'.
+        """
+        result = (
+            self.client.table("survey_runs")
+            .select("id, ground_truth, created_at")
+            .eq("status", "matching")
+            .order("created_at", desc=False)
+            .execute()
+        )
+        return result.data or []
+
+    def fetch_backstory_pool(
+        self,
+        demographic_keys: List[str],
+        page_size: int = 5000,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch the public, non-anthology backstory pool, projecting only the
+        demographic dimensions needed for matching.
+
+        Returns: [{"id": uuid, "demographics": {key: {distribution: {...}}}}, ...]
+        """
+        # Sanitize keys to safe identifiers (defensive — same rule the frontend uses).
+        import re
+        safe = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+        clean_keys = [k for k in demographic_keys if safe.match(k)]
+
+        if clean_keys:
+            select_clause = ",".join(
+                ["id"] + [f"{k}:demographics->{k}" for k in clean_keys]
+            )
+        else:
+            select_clause = "id, demographics"
+
+        pool: List[Dict[str, Any]] = []
+        from_idx = 0
+        while True:
+            to_idx = from_idx + page_size - 1
+            result = (
+                self.client.table("backstories")
+                .select(select_clause)
+                .eq("is_public", True)
+                .neq("source_type", "anthology")
+                .order("id", desc=False)
+                .range(from_idx, to_idx)
+                .execute()
+            )
+            rows = result.data or []
+            if not rows:
+                break
+
+            for row in rows:
+                if "demographics" in row:
+                    demo = row.get("demographics") or {}
+                else:
+                    demo = {k: row[k] for k in clean_keys if row.get(k)}
+                pool.append({"id": row["id"], "demographics": demo})
+
+            if len(rows) < page_size:
+                break
+            from_idx += page_size
+
+        return pool
+
+    def update_ground_truth_payload(
+        self,
+        run_id: str,
+        ground_truth: Dict[str, Any],
+    ) -> None:
+        """Overwrite survey_runs.ground_truth with the merged payload."""
+        self.client.table("survey_runs").update(
+            {"ground_truth": ground_truth}
+        ).eq("id", run_id).execute()
+
+    def finalize_matching(
+        self,
+        run_id: str,
+        ground_truth: Dict[str, Any],
+        backstory_ids: List[str],
+    ) -> None:
+        """
+        Atomically (best-effort) finalize a matching run:
+          - persist ground_truth with matches/stats
+          - insert survey_tasks for each matched backstory
+          - set total_tasks
+          - transition status: matching -> pending
+        """
+        self.update_ground_truth_payload(run_id, ground_truth)
+
+        if backstory_ids:
+            tasks = [{"survey_run_id": run_id, "backstory_id": bid} for bid in backstory_ids]
+            # Chunk inserts (Supabase REST has payload size limits)
+            chunk = 500
+            for i in range(0, len(tasks), chunk):
+                self.client.table("survey_tasks").insert(tasks[i:i + chunk]).execute()
+
+        self.client.table("survey_runs").update({
+            "status": "pending",
+            "total_tasks": len(backstory_ids),
+        }).eq("id", run_id).execute()
+
+    def fail_matching(self, run_id: str, error: str) -> None:
+        """Mark a matching run as failed (status=failed)."""
+        existing = self._safe_single_execute(
+            self.client.table("survey_runs").select("ground_truth").eq("id", run_id)
+        )
+        ground_truth = (existing or {}).get("ground_truth") or {}
+        ground_truth["match_error"] = error
+
+        self.client.table("survey_runs").update({
+            "status": "failed",
+            "ground_truth": ground_truth,
+            "completed_at": "now()",
+        }).eq("id", run_id).execute()
+
     def get_run_llm_context(self, run_id: str) -> Optional[Dict[str, Any]]:
         """
         Get llm_config snapshot and owning user_id for a survey run.

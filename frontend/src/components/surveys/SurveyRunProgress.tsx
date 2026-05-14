@@ -18,7 +18,7 @@ import {
   AlertDialogTitle,
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
-import { RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, Square, ChevronDown, RotateCcw, Wallet, Gauge, Flag, CheckCircle2 } from 'lucide-react'
+import { RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, Square, ChevronDown, RotateCcw, Wallet, Gauge, Flag, CheckCircle2, Target } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
 import { retryTask } from '@/lib/surveyRunner'
 import { computeAdaptiveSamplingSummary, type AdaptiveSamplingSummary } from '@/lib/bayesianStability'
@@ -42,6 +42,11 @@ const statusConfig: Record<
     label: 'Pending',
     variant: 'outline',
     icon: <Clock className="h-4 w-4" />,
+  },
+  matching: {
+    label: 'Matching',
+    variant: 'outline',
+    icon: <Target className="h-4 w-4 animate-pulse" />,
   },
   running: {
     label: 'Running',
@@ -71,7 +76,8 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, cr
   const [earlyStoppingSummary, setEarlyStoppingSummary] = useState<AdaptiveSamplingSummary | null>(null)
   const status = statusConfig[run.status]
   const totalProcessed = run.completed_tasks + run.failed_tasks
-  const isInProgress = run.status === 'pending' || run.status === 'running'
+  const isMatching = run.status === 'matching'
+  const isInProgress = run.status === 'pending' || run.status === 'running' || isMatching
   const isComplete = run.status === 'completed' || run.status === 'failed' || run.status === 'cancelled'
   const isSuccessfulCompletion = run.status === 'completed'
   const adaptiveConfig = run.llm_config.adaptive_sampling
@@ -158,10 +164,32 @@ export function SurveyRunProgress({ run, onViewResults, onRunAgain, onCancel, cr
           <Badge variant={status.variant}>{status.label}</Badge>
         </div>
         <CardDescription>
-          {isInProgress ? 'Processing backstories...' : formatCompletionTime(run)}
+          {isMatching
+            ? 'Matching respondents to backstories…'
+            : isInProgress
+              ? 'Processing backstories...'
+              : formatCompletionTime(run)}
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">
+        {isMatching && (
+          <div className="rounded-md border bg-muted/30 p-4 text-sm space-y-2">
+            <p className="font-medium flex items-center gap-2">
+              <Target className="h-4 w-4 animate-pulse" />
+              Computing optimal matches
+            </p>
+            <p className="text-muted-foreground text-xs">
+              {run.ground_truth
+                ? `${run.ground_truth.respondents.length} respondent${run.ground_truth.respondents.length > 1 ? 's' : ''} • ${run.ground_truth.match_method} • ${run.ground_truth.demographic_keys.join(', ')}`
+                : 'Loading matching parameters…'}
+            </p>
+            <p className="text-muted-foreground text-xs">
+              The worker will create one survey task per matched respondent and
+              start running the survey automatically.
+            </p>
+          </div>
+        )}
+
         {/* Progress bar */}
         <div className="space-y-2">
           <div className="flex items-center justify-between text-sm">

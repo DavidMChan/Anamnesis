@@ -11,6 +11,7 @@ import {
   Menu,
   X,
   Info,
+  Target,
 } from 'lucide-react'
 import { useState } from 'react'
 import { cn } from '@/lib/utils'
@@ -25,6 +26,7 @@ const mainNavItems: NavItem[] = [
   { label: 'Surveys', href: '/surveys', icon: ClipboardList },
   { label: 'Demographics', href: '/demographic-surveys', icon: FlaskConical },
   { label: 'Backstories', href: '/backstories', icon: BookOpen },
+  { label: 'Ground Truth', href: '/ground-truth', icon: Target },
 ]
 
 const accountNavItems: NavItem[] = [

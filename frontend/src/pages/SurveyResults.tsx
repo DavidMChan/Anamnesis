@@ -10,7 +10,7 @@ import { useSurveyRun } from '@/hooks/useSurveyRun'
 import type { Survey, SurveyRun, Question, SurveyResults as SurveyResultsType, SurveyTaskUsage } from '@/types/database'
 import { getModelName } from '@/lib/llmConfig'
 import { downloadSurveyCSV } from '@/lib/csvExport'
-import { BarChart2, Table, ImageDown, RefreshCw, ChevronDown, Settings, Wallet, Gauge, Layers3, CheckCircle2 } from 'lucide-react'
+import { BarChart2, Table, ImageDown, RefreshCw, ChevronDown, Settings, Wallet, Gauge, Layers3, CheckCircle2, Target } from 'lucide-react'
 import { ResultsHero } from '@/components/results/ResultsHero'
 import { OpenResponseList } from '@/components/results/OpenResponseList'
 import { DistributionChart } from '@/components/results/DistributionChart'
@@ -18,6 +18,7 @@ import { RankingResults } from '@/components/results/RankingResults'
 import { ResultsTable } from '@/components/results/ResultsTable'
 import { DemographicsSummary } from '@/components/results/DemographicsSummary'
 import { DemographicFilter } from '@/components/results/DemographicFilter'
+import { GroundTruthComparison } from '@/components/results/GroundTruthComparison'
 import type { Backstory, DemographicKey } from '@/types/database'
 import {
   computeAdaptiveSamplingSummary,
@@ -729,8 +730,14 @@ export function SurveyResults() {
           </div>
         )}
 
-        <Tabs defaultValue="charts">
+        <Tabs defaultValue={run.ground_truth ? 'comparison' : 'charts'}>
           <TabsList>
+            {run.ground_truth && (
+              <TabsTrigger value="comparison">
+                <Target className="h-4 w-4 mr-2" />
+                Comparison
+              </TabsTrigger>
+            )}
             <TabsTrigger value="charts">
               <BarChart2 className="h-4 w-4 mr-2" />
               Charts
@@ -744,6 +751,16 @@ export function SurveyResults() {
               Table
             </TabsTrigger>
           </TabsList>
+
+          {run.ground_truth && (
+            <TabsContent value="comparison" className="mt-6">
+              <GroundTruthComparison
+                groundTruth={run.ground_truth}
+                questions={survey.questions}
+                results={results}
+              />
+            </TabsContent>
+          )}
 
           <TabsContent value="charts" className="space-y-6 mt-6">
             <DemographicFilter

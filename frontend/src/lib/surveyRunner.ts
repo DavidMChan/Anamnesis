@@ -3,7 +3,14 @@
  */
 import { supabase } from './supabase'
 import { applyDemographicFilters, isDemographicSelectionConfig, selectBackstoryIds } from './backstoryFilters'
-import type { LLMConfig, SurveyRun, DemographicFilter, DemographicSelectionConfig, SurveyAlgorithm } from '@/types/database'
+import type {
+  LLMConfig,
+  SurveyRun,
+  DemographicFilter,
+  DemographicSelectionConfig,
+  SurveyAlgorithm,
+  GroundTruthData,
+} from '@/types/database'
 
 interface CreateSurveyRunOptions {
   surveyId: string
@@ -270,6 +277,62 @@ export async function createDemographicSurveyRun(
       return { success: false, error: tasksError }
     }
 
+    return { success: true, runId: run.id }
+  } catch (error) {
+    return { success: false, error: String(error) }
+  }
+}
+
+interface CreateGroundTruthRunOptions {
+  surveyId: string
+  llmConfig: LLMConfig
+  algorithm: Extract<SurveyAlgorithm, 'anthology' | 'independent'>
+  groundTruth: GroundTruthData
+}
+
+/**
+ * Create a Ground Truth run.
+ *
+ * Unlike createSurveyRun, this creates the run with status='matching' and
+ * NO survey_tasks. The worker dispatcher picks up matching-phase runs,
+ * computes Hungarian/greedy/random matches against the backstory pool,
+ * inserts survey_tasks, and transitions the run to 'pending'.
+ */
+export async function createGroundTruthRun(
+  options: CreateGroundTruthRunOptions,
+): Promise<CreateSurveyRunResult> {
+  const { surveyId, llmConfig, algorithm, groundTruth } = options
+
+  if (!groundTruth.respondents || groundTruth.respondents.length === 0) {
+    return { success: false, error: 'No respondents to match' }
+  }
+  if (!groundTruth.demographic_keys || groundTruth.demographic_keys.length === 0) {
+    return { success: false, error: 'No demographic dimensions to match on' }
+  }
+
+  try {
+    const { data: run, error: runError } = await supabase
+      .from('survey_runs')
+      .insert({
+        survey_id: surveyId,
+        status: 'matching',
+        total_tasks: 0,
+        completed_tasks: 0,
+        failed_tasks: 0,
+        results: {},
+        error_log: [],
+        llm_config: llmConfig,
+        algorithm,
+        ground_truth: groundTruth,
+      })
+      .select()
+      .single()
+
+    if (runError || !run) {
+      return { success: false, error: runError?.message ?? 'Failed to create run' }
+    }
+
+    await supabase.from('surveys').update({ status: 'active' }).eq('id', surveyId)
     return { success: true, runId: run.id }
   } catch (error) {
     return { success: false, error: String(error) }

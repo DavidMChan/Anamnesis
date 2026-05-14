@@ -17,6 +17,7 @@ from .config import get_config
 from .db import DatabaseClient
 from .queue import QueuePublisher
 from .bayesian_stability import compute_adaptive_sampling_state
+from .matcher import expand_aggregate_respondents, run_matching
 
 # Configure logging
 logging.basicConfig(
@@ -173,6 +174,89 @@ class TaskDispatcher:
         )
         return True
 
+    def process_matching_runs(self) -> int:
+        """
+        Process survey runs in the 'matching' phase (Ground Truth feature).
+
+        For each matching run: load the backstory pool, run the requested
+        matching algorithm (Hungarian / greedy / random), persist matches +
+        stats, create survey_tasks, and transition the run to 'pending'.
+
+        Returns the number of runs processed (matched or failed).
+        """
+        runs = self.db.get_matching_runs()
+        if not runs:
+            return 0
+
+        processed = 0
+        for run in runs:
+            run_id = run["id"]
+            ground_truth = run.get("ground_truth") or {}
+            try:
+                self._run_matching(run_id, ground_truth)
+                processed += 1
+            except Exception as e:
+                logger.error(f"Matching failed for run {run_id}: {e}", exc_info=True)
+                try:
+                    self.db.fail_matching(run_id, str(e))
+                except Exception as inner:
+                    logger.error(f"Could not mark run {run_id} failed: {inner}")
+                processed += 1
+        return processed
+
+    def _run_matching(self, run_id: str, ground_truth: Dict[str, Any]) -> None:
+        respondents = ground_truth.get("respondents") or []
+        method = ground_truth.get("match_method") or "hungarian"
+        mode = ground_truth.get("mode") or "per_respondent"
+        demographic_keys = ground_truth.get("demographic_keys") or []
+
+        if not respondents:
+            raise ValueError("ground_truth.respondents is empty")
+        if not demographic_keys:
+            raise ValueError("ground_truth.demographic_keys is empty")
+
+        logger.info(
+            f"[matching] run={run_id} method={method} mode={mode} "
+            f"respondents={len(respondents)} dims={demographic_keys}"
+        )
+
+        # Expand aggregate rows so each individual gets its own backstory.
+        expanded = (
+            expand_aggregate_respondents(respondents) if mode == "aggregate" else respondents
+        )
+
+        pool = self.db.fetch_backstory_pool(demographic_keys)
+        logger.info(f"[matching] run={run_id} pool_size={len(pool)}")
+
+        if not pool:
+            raise ValueError(
+                "Backstory pool is empty after applying public/non-anthology filter"
+            )
+        if len(expanded) > len(pool) and method == "hungarian":
+            logger.warning(
+                f"[matching] run={run_id} N={len(expanded)} > M={len(pool)}; "
+                "Hungarian will leave some respondents unmatched"
+            )
+
+        result = run_matching(expanded, pool, method=method)
+        matches = result["matches"]
+        stats = result["stats"]
+
+        # When aggregate mode was used, keep the raw expanded matches (each row's
+        # _id has the "parent::k" suffix) — the comparison view re-aggregates
+        # by parent _id.
+        backstory_ids = [m["backstory_id"] for m in matches]
+
+        ground_truth["matches"] = matches
+        ground_truth["stats"] = stats
+
+        self.db.finalize_matching(run_id, ground_truth, backstory_ids)
+        logger.info(
+            f"[matching] run={run_id} done: matches={len(matches)} "
+            f"mean_score={stats.get('mean_score', 0.0):.4f} "
+            f"zero_matches={stats.get('zero_score_matches', 0)}"
+        )
+
     def poll_and_dispatch(self) -> tuple[int, int]:
         """
         Poll for pending runs and dispatch their tasks.
@@ -181,6 +265,10 @@ class TaskDispatcher:
         Returns:
             (runs_found, total_dispatched) — used by start() to compute adaptive sleep.
         """
+        # Ground Truth: drain matching-phase runs first so they transition to 'pending'
+        # and can be dispatched in the same cycle.
+        self.process_matching_runs()
+
         pending_runs = self.db.get_runs_needing_dispatch()
 
         total_dispatched = 0

@@ -91,7 +91,8 @@ export function useSurveyRun(options: UseSurveyRunOptions = {}): UseSurveyRunRes
   useEffect(() => {
     if (!autoPoll || !run) return
 
-    const isInProgress = run.status === 'pending' || run.status === 'running'
+    const isInProgress =
+      run.status === 'pending' || run.status === 'running' || run.status === 'matching'
     if (!isInProgress) return
 
     const intervalId = setInterval(fetchRun, pollInterval)
@@ -101,7 +102,8 @@ export function useSurveyRun(options: UseSurveyRunOptions = {}): UseSurveyRunRes
 
   // Calculate progress
   const progress = run ? calculateProgress(run) : 0
-  const isRunning = run?.status === 'pending' || run?.status === 'running'
+  const isRunning =
+    run?.status === 'pending' || run?.status === 'running' || run?.status === 'matching'
 
   return {
     run,

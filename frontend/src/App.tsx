@@ -16,6 +16,7 @@ import { About } from '@/pages/About'
 import { DemographicSurveys } from '@/pages/DemographicSurveys'
 import { DemographicSurveyCreate } from '@/pages/DemographicSurveyCreate'
 import { DemographicSurveyView } from '@/pages/DemographicSurveyView'
+import { GroundTruth } from '@/pages/GroundTruth'
 
 function App() {
   return (
@@ -91,6 +92,14 @@ function App() {
             element={
               <ProtectedRoute>
                 <DemographicSurveyView />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/ground-truth"
+            element={
+              <ProtectedRoute>
+                <GroundTruth />
               </ProtectedRoute>
             }
           />

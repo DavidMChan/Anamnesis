@@ -190,8 +190,53 @@ export interface Survey {
 }
 
 // Survey Run Types
-export type SurveyRunStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled'
-export type SurveyAlgorithm = 'anthology' | 'zero_shot_baseline'
+export type SurveyRunStatus = 'pending' | 'matching' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type SurveyAlgorithm = 'anthology' | 'zero_shot_baseline' | 'independent'
+
+export type GroundTruthMatchMethod = 'hungarian' | 'greedy' | 'random'
+export type GroundTruthMode = 'per_respondent' | 'aggregate'
+
+// Ground truth respondent row, as parsed from the uploaded CSV.
+export interface GroundTruthRespondent {
+  // Stable identifier within the upload. For aggregate mode this is a row index.
+  _id: string
+  // For aggregate mode: number of respondents this row represents (defaults to 1).
+  _count?: number
+  // Exact-match demographic dimensions. Keys must match demographic_keys.key
+  // (after the leading underscore is stripped from any reserved columns).
+  // Refused/NA/empty values are dropped at parse time and absent here.
+  demographics: Record<string, string>
+  // Optional ground truth answers, keyed by qkey. Multi-select stored as string[].
+  answers?: Record<string, string | string[]>
+}
+
+// One row of the matching result.
+export interface GroundTruthMatch {
+  _id: string
+  backstory_id: string
+  score: number
+}
+
+// Full payload stored on survey_runs.ground_truth
+export interface GroundTruthData {
+  mode: GroundTruthMode
+  match_method: GroundTruthMatchMethod
+  demographic_keys: string[]
+  // Which qkeys from the uploaded CSV have ground truth answers (subset of survey questions).
+  question_keys?: string[]
+  respondents: GroundTruthRespondent[]
+  // Populated by the worker after the matching phase finishes.
+  matches?: GroundTruthMatch[]
+  stats?: {
+    n_respondents: number
+    pool_size: number
+    mean_score?: number
+    median_score?: number
+    min_score?: number
+    max_score?: number
+    dropped_dimensions?: Record<string, number>
+  }
+}
 
 export interface SurveyRunErrorLog {
   backstory_id: string
@@ -211,6 +256,7 @@ export interface SurveyRun {
   llm_config: LLMConfig
   demographics?: DemographicFilter | DemographicSelectionConfig
   algorithm: SurveyAlgorithm
+  ground_truth?: GroundTruthData | null
   started_at: string | null
   completed_at: string | null
   created_at: string
