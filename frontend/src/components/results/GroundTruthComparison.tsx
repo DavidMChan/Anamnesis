@@ -1,9 +1,10 @@
 /**
  * Ground Truth comparison view.
  *
- * Renders per-question LLM-vs-ground-truth comparisons for a Ground Truth run.
- * For each MCQ-style question it shows side-by-side distributions and the
- * Jensen-Shannon divergence. For open-response it lists matched pairs.
+ * Scores the matched virtual population against the uploaded human population
+ * using the three Anthology Table 1 metrics (WD, Fro., alpha — see
+ * `@/lib/groundTruthMetrics`), then shows per-question LLM-vs-truth
+ * distributions with each question's Wasserstein distance.
  */
 import { useMemo } from 'react'
 import {
@@ -21,6 +22,13 @@ import type {
   SurveyResults,
   SurveyTaskResult,
 } from '@/types/database'
+import {
+  alignToOptions,
+  cronbachAlpha,
+  earthMoversDistance,
+  frobeniusOfCorrelations,
+  toOrdinal,
+} from '@/lib/groundTruthMetrics'
 import { Target } from 'lucide-react'
 
 interface ComparisonProps {
@@ -29,26 +37,31 @@ interface ComparisonProps {
   results: SurveyResults
 }
 
-interface ComparisonPair {
-  respondentId: string
-  groundTruth: string | string[] | null
-  llmAnswer: string | string[] | null
-  matchScore: number
-}
-
 interface PerQuestionStats {
   question: Question
-  pairs: ComparisonPair[]
   matchRate: number | null
-  jsDivergence: number | null
+  wd: number | null
   llmDistribution: Record<string, number>
   truthDistribution: Record<string, number>
 }
 
+interface RunMetrics {
+  wd: number | null
+  fro: number | null
+  alphaHuman: number | null
+  alphaLlm: number | null
+  nSubjects: number
+  kQuestions: number
+}
+
 export function GroundTruthComparison({ groundTruth, questions, results }: ComparisonProps) {
-  const stats = useMemo(
-    () => buildComparisonStats(groundTruth, questions, results),
+  const perQuestion = useMemo(
+    () => buildPerQuestionStats(groundTruth, questions, results),
     [groundTruth, questions, results],
+  )
+  const metrics = useMemo(
+    () => buildRunMetrics(groundTruth, questions, results, perQuestion),
+    [groundTruth, questions, results, perQuestion],
   )
 
   if (!groundTruth.matches || groundTruth.matches.length === 0) {
@@ -69,7 +82,8 @@ export function GroundTruthComparison({ groundTruth, questions, results }: Compa
   return (
     <div className="space-y-4">
       <MatchingSummary groundTruth={groundTruth} />
-      {stats
+      <EvalMetrics metrics={metrics} />
+      {perQuestion
         .filter((s) => truthQkeys.has(s.question.qkey))
         .map((s) => (
           <QuestionComparison key={s.question.qkey} stats={s} />
@@ -125,6 +139,48 @@ function MatchingSummary({ groundTruth }: { groundTruth: GroundTruthData }) {
   )
 }
 
+function EvalMetrics({ metrics }: { metrics: RunMetrics }) {
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Distribution Alignment</CardTitle>
+        <CardDescription>
+          Virtual vs. real population · {metrics.nSubjects} subjects ·{' '}
+          {metrics.kQuestions} MCQ items · unweighted
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
+          <MetricCell label="WD ↓" value={metrics.wd} hint="avg Wasserstein" />
+          <MetricCell label="Fro. ↓" value={metrics.fro} hint="corr. matrix" />
+          <MetricCell label="α · LLM" value={metrics.alphaLlm} hint="Cronbach's α" />
+          <MetricCell label="α · Human" value={metrics.alphaHuman} hint="target" />
+        </div>
+      </CardContent>
+    </Card>
+  )
+}
+
+function MetricCell({
+  label,
+  value,
+  hint,
+}: {
+  label: string
+  value: number | null
+  hint: string
+}) {
+  return (
+    <div className="rounded-md border bg-muted/30 p-3">
+      <div className="text-xs text-muted-foreground">{label}</div>
+      <div className="text-lg font-medium font-mono tabular-nums">
+        {value === null ? '—' : value.toFixed(4)}
+      </div>
+      <div className="text-[11px] text-muted-foreground">{hint}</div>
+    </div>
+  )
+}
+
 function StatCell({ label, value }: { label: string; value: string | number }) {
   return (
     <div className="rounded-md border bg-muted/30 p-3">
@@ -135,7 +191,7 @@ function StatCell({ label, value }: { label: string; value: string | number }) {
 }
 
 function QuestionComparison({ stats }: { stats: PerQuestionStats }) {
-  const { question, pairs, matchRate, jsDivergence, llmDistribution, truthDistribution } = stats
+  const { question, matchRate, wd, llmDistribution, truthDistribution } = stats
   const options = question.options ?? []
   const isMcq = question.type === 'mcq' || question.type === 'multiple_select'
 
@@ -153,9 +209,9 @@ function QuestionComparison({ stats }: { stats: PerQuestionStats }) {
                 {Math.round(matchRate * 100)}% exact match
               </Badge>
             )}
-            {jsDivergence !== null && (
+            {wd !== null && (
               <Badge variant="outline" className="font-mono">
-                JS = {jsDivergence.toFixed(4)}
+                WD = {wd.toFixed(4)}
               </Badge>
             )}
           </div>
@@ -182,36 +238,6 @@ function QuestionComparison({ stats }: { stats: PerQuestionStats }) {
             })}
           </div>
         )}
-
-        <details className="text-sm">
-          <summary className="cursor-pointer text-muted-foreground">
-            Show all {pairs.length} pairs
-          </summary>
-          <div className="mt-2 max-h-96 overflow-auto">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left p-1">Respondent</th>
-                  <th className="text-left p-1">Ground truth</th>
-                  <th className="text-left p-1">LLM answer</th>
-                  <th className="text-right p-1">Match score</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pairs.map((p) => (
-                  <tr key={p.respondentId} className="border-b last:border-0">
-                    <td className="p-1 font-mono">{p.respondentId}</td>
-                    <td className="p-1">{renderAnswer(p.groundTruth)}</td>
-                    <td className="p-1">{renderAnswer(p.llmAnswer)}</td>
-                    <td className="p-1 text-right font-mono">
-                      {p.matchScore.toFixed(4)}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </details>
       </CardContent>
     </Card>
   )
@@ -233,15 +259,9 @@ function DistBar({ p, className }: { p: number; className: string }) {
   )
 }
 
-function renderAnswer(value: string | string[] | null): string {
-  if (value === null || value === undefined) return '—'
-  if (Array.isArray(value)) return value.join(', ')
-  return value
-}
-
 // Stats computation ----------------------------------------------------------
 
-function buildComparisonStats(
+function buildPerQuestionStats(
   groundTruth: GroundTruthData,
   questions: Question[],
   results: SurveyResults,
@@ -252,7 +272,7 @@ function buildComparisonStats(
   for (const r of groundTruth.respondents) respondentLookup.set(r._id, r)
 
   return questions.map((question) => {
-    const pairs: ComparisonPair[] = []
+    const options = question.options ?? []
     const llmCounts: Record<string, number> = {}
     const truthCounts: Record<string, number> = {}
     let exactMatches = 0
@@ -268,13 +288,6 @@ function buildComparisonStats(
       const llmRaw = llmResult?.[question.qkey]
       const llmAnswer = (llmRaw === undefined ? null : (llmRaw as string | string[])) ?? null
 
-      pairs.push({
-        respondentId: match._id,
-        groundTruth: truth,
-        llmAnswer,
-        matchScore: match.score,
-      })
-
       if (truth !== null && llmAnswer !== null) {
         comparable += 1
         if (answersEqual(truth, llmAnswer)) exactMatches += 1
@@ -287,24 +300,88 @@ function buildComparisonStats(
     const llmDistribution = normalize(llmCounts)
     const truthDistribution = normalize(truthCounts)
 
-    let jsDivergence: number | null = null
-    if (
-      (question.type === 'mcq' || question.type === 'multiple_select') &&
-      Object.keys(llmDistribution).length > 0 &&
-      Object.keys(truthDistribution).length > 0
-    ) {
-      jsDivergence = jensenShannon(llmDistribution, truthDistribution)
+    let wd: number | null = null
+    if (question.type === 'mcq' && options.length > 0) {
+      const llmVec = alignToOptions(llmDistribution, options)
+      const truthVec = alignToOptions(truthDistribution, options)
+      const hasLlm = llmVec.some((v) => v > 0)
+      const hasTruth = truthVec.some((v) => v > 0)
+      if (hasLlm && hasTruth) wd = earthMoversDistance(llmVec, truthVec)
     }
 
     return {
       question,
-      pairs,
       matchRate: comparable > 0 ? exactMatches / comparable : null,
-      jsDivergence,
+      wd,
       llmDistribution,
       truthDistribution,
     }
   })
+}
+
+function buildRunMetrics(
+  groundTruth: GroundTruthData,
+  questions: Question[],
+  results: SurveyResults,
+  perQuestion: PerQuestionStats[],
+): RunMetrics {
+  const mcqQuestions = questions.filter(
+    (q) => q.type === 'mcq' && (q.options?.length ?? 0) > 0,
+  )
+
+  // WD: average the per-question Wasserstein distances over MCQ questions.
+  const wdVals = perQuestion
+    .filter((s) => s.question.type === 'mcq' && s.wd !== null)
+    .map((s) => s.wd as number)
+  const wd = wdVals.length
+    ? wdVals.reduce((a, b) => a + b, 0) / wdVals.length
+    : null
+
+  // Fro / alpha: build subjects x MCQ-items ordinal matrices for each population.
+  const { human, llm } = buildResponseMatrices(groundTruth, mcqQuestions, results)
+  const fro = frobeniusOfCorrelations(human, llm)
+  const alphaHuman = cronbachAlpha(human)
+  const alphaLlm = cronbachAlpha(llm)
+
+  return {
+    wd,
+    fro,
+    alphaHuman,
+    alphaLlm,
+    nSubjects: human.length,
+    kQuestions: mcqQuestions.length,
+  }
+}
+
+function buildResponseMatrices(
+  groundTruth: GroundTruthData,
+  mcqQuestions: Question[],
+  results: SurveyResults,
+): { human: number[][]; llm: number[][] } {
+  const respondentLookup = new Map<string, GroundTruthRespondent>()
+  for (const r of groundTruth.respondents) respondentLookup.set(r._id, r)
+
+  const human: number[][] = []
+  const llm: number[][] = []
+
+  for (const match of groundTruth.matches ?? []) {
+    const parentId = match._id.includes('::') ? match._id.split('::')[0] : match._id
+    const respondent = respondentLookup.get(parentId)
+    if (!respondent) continue
+    const llmResult = results[match.backstory_id] as SurveyTaskResult | undefined
+
+    const humanRow: number[] = []
+    const llmRow: number[] = []
+    for (const q of mcqQuestions) {
+      const options = q.options ?? []
+      humanRow.push(toOrdinal(respondent.answers?.[q.qkey] ?? null, options))
+      llmRow.push(toOrdinal((llmResult?.[q.qkey] as string | string[] | undefined) ?? null, options))
+    }
+    human.push(humanRow)
+    llm.push(llmRow)
+  }
+
+  return { human, llm }
 }
 
 function answersEqual(a: string | string[], b: string | string[]): boolean {
@@ -336,21 +413,4 @@ function normalize(counts: Record<string, number>): Record<string, number> {
   const out: Record<string, number> = {}
   for (const [k, v] of Object.entries(counts)) out[k] = v / total
   return out
-}
-
-function jensenShannon(
-  p: Record<string, number>,
-  q: Record<string, number>,
-): number {
-  const keys = new Set([...Object.keys(p), ...Object.keys(q)])
-  let js = 0
-  for (const k of keys) {
-    const pk = p[k] ?? 0
-    const qk = q[k] ?? 0
-    const m = 0.5 * (pk + qk)
-    if (pk > 0) js += 0.5 * pk * Math.log2(pk / m)
-    if (qk > 0) js += 0.5 * qk * Math.log2(qk / m)
-  }
-  // Round-off correction
-  return Math.max(0, js)
 }

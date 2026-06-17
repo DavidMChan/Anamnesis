@@ -37,7 +37,7 @@ import type {
   Survey,
   SurveyAlgorithm,
 } from '@/types/database'
-import { Upload, Play, Target, AlertCircle, CheckCircle2 } from 'lucide-react'
+import { Upload, Play, Target, AlertCircle, CheckCircle2, Download } from 'lucide-react'
 
 type GroundTruthAlgorithm = Extract<SurveyAlgorithm, 'anthology' | 'independent'>
 
@@ -114,6 +114,18 @@ export function GroundTruth() {
     setParseResult(null)
     setFileName('')
   }, [surveyId])
+
+  const downloadTemplate = (mode: 'per_respondent' | 'aggregate') => {
+    if (!selectedSurvey) return
+    const csv = buildTemplateCsv({
+      mode,
+      demographicKeys: demographicKeys.map((k) => k.key),
+      questions: selectedSurvey.questions,
+    })
+    const slug = (selectedSurvey.name || 'survey').replace(/[^a-z0-9]+/gi, '_').toLowerCase()
+    const suffix = mode === 'aggregate' ? 'aggregate' : 'per_respondent'
+    triggerCsvDownload(csv, `ground_truth_template_${slug}_${suffix}.csv`)
+  }
 
   const canRun =
     !!selectedSurvey &&
@@ -240,7 +252,7 @@ export function GroundTruth() {
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-3">
               <Label
                 htmlFor="gt-csv"
                 className="inline-flex h-9 cursor-pointer items-center gap-2 rounded-md border bg-background px-3 text-sm font-medium hover:bg-muted"
@@ -256,6 +268,24 @@ export function GroundTruth() {
                 disabled={!selectedSurvey}
                 onChange={(e) => handleFile(e.target.files?.[0] ?? null)}
               />
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!selectedSurvey}
+                onClick={() => downloadTemplate('per_respondent')}
+              >
+                <Download className="h-4 w-4 mr-1" />
+                Empty template
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={!selectedSurvey}
+                onClick={() => downloadTemplate('aggregate')}
+              >
+                <Download className="h-4 w-4 mr-1" />
+                Empty template (aggregate)
+              </Button>
               <span className="text-sm text-muted-foreground">
                 {fileName || (selectedSurvey ? 'No file selected' : 'Select a survey first')}
               </span>
@@ -417,6 +447,61 @@ function ParseSummary({ result }: { result: GroundTruthParseResult }) {
       )}
     </div>
   )
+}
+
+function buildTemplateCsv({
+  mode,
+  demographicKeys,
+  questions,
+}: {
+  mode: 'per_respondent' | 'aggregate'
+  demographicKeys: string[]
+  questions: { qkey: string; type: string; options?: string[] }[]
+}): string {
+  const headers: string[] = ['_id']
+  if (mode === 'aggregate') headers.push('_count')
+  headers.push(...demographicKeys)
+  headers.push(...questions.map((q) => `q${q.qkey}`))
+
+  // One placeholder row so the format is obvious. Cells are filled with hints.
+  const exampleRow = headers.map((h) => {
+    if (h === '_id') return mode === 'aggregate' ? 'group_1' : 'respondent_001'
+    if (h === '_count') return '50'
+    if (h.startsWith('q')) {
+      const qkey = h.slice(1)
+      const q = questions.find((x) => x.qkey === qkey)
+      if (!q) return ''
+      if (q.type === 'mcq' && q.options?.length) return q.options[0]
+      if (q.type === 'multiple_select' && q.options?.length) {
+        return q.options.slice(0, Math.min(2, q.options.length)).join('|')
+      }
+      return ''
+    }
+    return '<value>'
+  })
+
+  return [headers, exampleRow].map(csvRow).join('\n') + '\n'
+}
+
+function csvRow(cells: string[]): string {
+  return cells
+    .map((c) => {
+      const needsQuoting = /[",\n]/.test(c)
+      return needsQuoting ? `"${c.replace(/"/g, '""')}"` : c
+    })
+    .join(',')
+}
+
+function triggerCsvDownload(content: string, filename: string) {
+  const blob = new Blob([content], { type: 'text/csv;charset=utf-8;' })
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = filename
+  document.body.appendChild(link)
+  link.click()
+  document.body.removeChild(link)
+  URL.revokeObjectURL(url)
 }
 
 function RadioOption({
