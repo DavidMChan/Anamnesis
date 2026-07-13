@@ -61,9 +61,8 @@ describe('Home Page - Auth Redirect Guard', () => {
 
       renderHome()
 
-      expect(screen.getByText('Anamnesis')).toBeInTheDocument()
-      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/understand how/i)
-      // There are multiple "Sign In" links (navbar and hero), just check at least one exists
+      expect(screen.getByRole('link', { name: /anamnesis home/i })).toBeInTheDocument()
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/conditioning llms to simulate/i)
       const signInLinks = screen.getAllByRole('link', { name: /sign in/i })
       expect(signInLinks.length).toBeGreaterThan(0)
       const getStartedLinks = screen.getAllByRole('link', { name: /get started/i })

@@ -12,6 +12,9 @@
   --color-popover-foreground: hsl(209 50% 15%);
   --color-primary: hsl(201 46% 43%);
   --color-primary-foreground: hsl(0 0% 100%);
+  --color-brand-navy: hsl(209 100% 19%);
+  --color-brand-blue: hsl(201 46% 43%);
+  --color-brand-gold: hsl(43 98% 54%);
   --color-secondary: hsl(210 15% 92%);
   --color-secondary-foreground: hsl(209 30% 25%);
   --color-muted: hsl(210 10% 90%);
@@ -47,6 +50,9 @@
   --color-popover-foreground: hsl(210 15% 95%);
   --color-primary: hsl(201 60% 55%);
   --color-primary-foreground: hsl(209 50% 10%);
+  --color-brand-navy: hsl(209 100% 16%);
+  --color-brand-blue: hsl(201 60% 55%);
+  --color-brand-gold: hsl(43 98% 58%);
   --color-secondary: hsl(209 15% 18%);
   --color-secondary-foreground: hsl(210 10% 85%);
   --color-muted: hsl(209 12% 20%);
@@ -76,6 +82,15 @@ body {
   font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+.home-grid {
+  background-image:
+    linear-gradient(hsl(0 0% 100% / 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, hsl(0 0% 100% / 0.08) 1px, transparent 1px);
+  background-size: 48px 48px;
+  -webkit-mask-image: linear-gradient(to bottom, black, transparent 88%);
+  mask-image: linear-gradient(to bottom, black, transparent 88%);
 }
 
 /* Smooth transitions for theme switching */
@@ -169,4 +184,15 @@ html {
 
 .animate-toast-fade {
   animation: toast-fade 1.5s ease-out forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }
