@@ -7,6 +7,8 @@ import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Checkbox } from '@/components/ui/checkbox'
+import { InfoHint } from '@/components/ui/info-hint'
+import { EndpointManager } from '@/components/settings/EndpointManager'
 import { User, Key, Check, X, Eye, EyeOff } from 'lucide-react'
 import type { LLMConfig } from '@/types/database'
 import type { ApiKeyType } from '@/hooks/useAuth'
@@ -236,7 +238,20 @@ export function Settings() {
           <CardContent className="space-y-6">
             {/* Provider Selection */}
             <div className="space-y-2">
-              <Label htmlFor="provider">Provider</Label>
+              <Label htmlFor="provider" className="flex items-center gap-1.5">
+                Provider
+                <InfoHint>
+                  <span className="block">
+                    <span className="font-medium">OpenRouter</span> — hosted models, billed per
+                    token, no server of your own.
+                  </span>
+                  <span className="block">
+                    <span className="font-medium">Self-hosted</span> — any server that speaks the
+                    OpenAI HTTP API. Anamnesis just points the OpenAI SDK at your base URL, so it
+                    is not limited to vLLM.
+                  </span>
+                </InfoHint>
+              </Label>
               <Select
                 value={provider}
                 onValueChange={(value) =>
@@ -248,13 +263,13 @@ export function Settings() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="openrouter">OpenRouter</SelectItem>
-                  <SelectItem value="vllm">vLLM (Self-hosted)</SelectItem>
+                  <SelectItem value="vllm">Self-hosted (OpenAI-compatible)</SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
                 {provider === 'openrouter'
                   ? 'OpenRouter provides access to many LLM providers through a single API.'
-                  : 'vLLM is a self-hosted inference server for running open-source models.'}
+                  : 'Any server exposing an OpenAI-compatible API — vLLM, SGLang, TGI, llama.cpp, Ollama, or your own wrapper around a custom model.'}
               </p>
             </div>
 
@@ -265,7 +280,9 @@ export function Settings() {
                 API Keys
               </div>
               <p className="text-xs text-muted-foreground">
-                Both keys are stored independently. The OpenRouter key is also used for the parser LLM fallback.
+                Both keys are stored independently. The OpenRouter key is also used for the parser
+                LLM fallback. All self-hosted endpoints share the one key below — leave it empty if
+                your server does not check authorization.
               </p>
 
               <ApiKeyField
@@ -280,7 +297,7 @@ export function Settings() {
               />
 
               <ApiKeyField
-                label="vLLM API Key"
+                label="Self-hosted API Key"
                 keyType="vllm"
                 maskedKey={maskedApiKeys.vllm}
                 onStore={storeApiKey}
@@ -324,64 +341,13 @@ export function Settings() {
               </div>
             )}
 
-            {/* vLLM Model Settings */}
+            {/* Self-hosted endpoints */}
             {provider === 'vllm' && (
-              <div className="space-y-4 rounded-lg border p-4">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <div className="h-2 w-2 rounded-full bg-purple-500" />
-                  vLLM Server
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="vllm_endpoint">Endpoint</Label>
-                  <Input
-                    id="vllm_endpoint"
-                    value={llmConfig.vllm_endpoint || ''}
-                    onChange={(e) => setLlmConfig({ ...llmConfig, vllm_endpoint: e.target.value })}
-                    placeholder="http://localhost:8000/v1"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    The URL of your vLLM server (OpenAI-compatible API endpoint).
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="vllm_model">Model</Label>
-                  <Input
-                    id="vllm_model"
-                    value={llmConfig.vllm_model || ''}
-                    onChange={(e) => setLlmConfig({ ...llmConfig, vllm_model: e.target.value })}
-                    placeholder="meta-llama/Llama-3-70b"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    The model name as configured on your vLLM server.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="use_guided_decoding">Guided Decoding</Label>
-                  <Select
-                    value={llmConfig.use_guided_decoding === false ? 'false' : 'true'}
-                    onValueChange={(value) =>
-                      setLlmConfig({ ...llmConfig, use_guided_decoding: value === 'true' })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="true">Enabled</SelectItem>
-                      <SelectItem value="false">Disabled</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Use vLLM guided decoding to constrain MCQ responses to valid options.
-                  </p>
-                </div>
-              </div>
+              <EndpointManager config={llmConfig} onChange={setLlmConfig} />
             )}
 
-            {/* Chat Template Toggle */}
+            {/* Chat Template Toggle — self-hosted endpoints carry their own */}
+            {provider === 'openrouter' && (
             <div className="flex items-start gap-3 rounded-lg border p-4">
               <Checkbox
                 id="use_chat_template"
@@ -402,6 +368,7 @@ export function Settings() {
                 </p>
               </div>
             </div>
+            )}
 
             {/* Parser LLM */}
             <div className="space-y-2">

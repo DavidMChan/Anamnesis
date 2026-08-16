@@ -61,10 +61,10 @@ export async function validateRunConfig({
     }
   } else if (llmConfig.provider === 'vllm') {
     if (!llmConfig.vllm_endpoint) {
-      return { valid: false, error: 'vLLM endpoint is not set. Configure it in the Settings page.' }
+      return { valid: false, error: 'No endpoint selected. Add one and mark it default in the Settings page.' }
     }
     if (!llmConfig.vllm_model) {
-      return { valid: false, error: 'vLLM model is not set. Configure it in the Settings page.' }
+      return { valid: false, error: 'The selected endpoint has no model set. Configure it in the Settings page.' }
     }
   }
 
