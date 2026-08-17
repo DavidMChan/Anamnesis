@@ -70,7 +70,8 @@ def get_llm_config_for_run(db: DatabaseClient, run_id: str) -> LLMConfig:
 
     The snapshot (survey_runs.llm_config) was created at run time and includes
     per-survey overrides for temperature/max_tokens already merged in.
-    API keys are fetched from Vault via the owning user.
+    API keys are fetched from Vault via the owning user — for self-hosted runs
+    the snapshot's active_endpoint_id selects which endpoint's key to use.
     """
     ctx = db.get_run_llm_context(run_id)
     if not ctx:
@@ -96,7 +97,15 @@ def get_llm_config_for_run(db: DatabaseClient, run_id: str) -> LLMConfig:
                 "Please add your OpenRouter API key in the Settings page."
             )
     elif provider == "vllm":
-        api_key = db.get_user_api_key(user_id, "vllm")
+        # Each named endpoint can hold its own key under "vllm:<endpoint_id>";
+        # the plain "vllm" key stays the shared fallback for endpoints that
+        # have none (including every run snapshot taken before per-endpoint
+        # keys existed).
+        endpoint_id = run_config.get("active_endpoint_id")
+        if endpoint_id:
+            api_key = db.get_user_api_key(user_id, f"vllm:{endpoint_id}")
+        if not api_key:
+            api_key = db.get_user_api_key(user_id, "vllm")
 
     return LLMConfig.from_user_config(run_config, api_key=api_key)
 

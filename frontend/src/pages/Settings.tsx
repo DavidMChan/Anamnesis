@@ -9,147 +9,9 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Checkbox } from '@/components/ui/checkbox'
 import { InfoHint } from '@/components/ui/info-hint'
 import { EndpointManager } from '@/components/settings/EndpointManager'
-import { User, Key, Check, X, Eye, EyeOff } from 'lucide-react'
+import { ApiKeyField } from '@/components/settings/ApiKeyField'
+import { User, Key, Check } from 'lucide-react'
 import type { LLMConfig } from '@/types/database'
-import type { ApiKeyType } from '@/hooks/useAuth'
-
-interface ApiKeyFieldProps {
-  label: string
-  keyType: ApiKeyType
-  maskedKey: string | null
-  onStore: (key: string, type: ApiKeyType) => Promise<{ error: Error | null; success: boolean }>
-  onClear: (type: ApiKeyType) => Promise<{ error: Error | null; success: boolean }>
-  saving: boolean
-  setSaving: (saving: boolean) => void
-  setSaved: (saved: boolean) => void
-  optional?: boolean
-}
-
-function ApiKeyField({
-  label,
-  keyType,
-  maskedKey,
-  onStore,
-  onClear,
-  saving,
-  setSaving,
-  setSaved,
-  optional = false,
-}: ApiKeyFieldProps) {
-  const [isEditing, setIsEditing] = useState(false)
-  const [inputValue, setInputValue] = useState('')
-  const [showInput, setShowInput] = useState(false)
-
-  const handleSave = async () => {
-    if (!inputValue.trim()) return
-
-    setSaving(true)
-    const result = await onStore(inputValue.trim(), keyType)
-    setSaving(false)
-
-    if (result.success) {
-      setInputValue('')
-      setIsEditing(false)
-      setShowInput(false)
-      setSaved(true)
-      setTimeout(() => setSaved(false), 3000)
-    }
-  }
-
-  const handleClear = async () => {
-    setSaving(true)
-    await onClear(keyType)
-    setSaving(false)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 3000)
-  }
-
-  const handleCancel = () => {
-    setIsEditing(false)
-    setInputValue('')
-    setShowInput(false)
-  }
-
-  return (
-    <div className="space-y-2">
-      <Label htmlFor={`api_key_${keyType}`}>
-        {label}
-        {optional && <span className="text-muted-foreground ml-1">(optional)</span>}
-      </Label>
-      {isEditing ? (
-        <div className="space-y-2">
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Input
-                id={`api_key_${keyType}`}
-                type={showInput ? 'text' : 'password'}
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                placeholder="Enter API key..."
-                className="pr-10"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleSave()
-                  if (e.key === 'Escape') handleCancel()
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => setShowInput(!showInput)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                {showInput ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
-            </div>
-            <Button onClick={handleSave} disabled={saving || !inputValue.trim()}>
-              Save
-            </Button>
-            <Button variant="ghost" size="icon" onClick={handleCancel} title="Cancel">
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Enter your API key. It will be encrypted and stored securely.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          <div className="flex gap-2">
-            <Input
-              id={`api_key_${keyType}_display`}
-              type="text"
-              value={maskedKey || ''}
-              disabled
-              placeholder={optional ? 'No API key (optional)' : 'No API key configured'}
-              className="bg-muted font-mono"
-            />
-            <Button variant="outline" onClick={() => setIsEditing(true)}>
-              {maskedKey ? 'Change' : 'Add'}
-            </Button>
-            {maskedKey && (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleClear}
-                disabled={saving}
-                title="Remove API key"
-                className="text-destructive hover:text-destructive"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            )}
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {maskedKey
-              ? 'Your API key is encrypted and stored securely in Supabase Vault.'
-              : optional
-                ? 'API key is optional for this provider.'
-                : 'Add your API key to run surveys with LLM inference.'}
-          </p>
-        </div>
-      )}
-    </div>
-  )
-}
 
 export function Settings() {
   const { profile, updateProfile, maskedApiKeys, storeApiKey, clearApiKey } = useAuthContext()
@@ -281,8 +143,9 @@ export function Settings() {
               </div>
               <p className="text-xs text-muted-foreground">
                 Both keys are stored independently. The OpenRouter key is also used for the parser
-                LLM fallback. All self-hosted endpoints share the one key below — leave it empty if
-                your server does not check authorization.
+                LLM fallback. The self-hosted key below is the fallback for endpoints that have no
+                key of their own — set per-endpoint keys under Endpoints. Leave it empty if your
+                servers do not check authorization.
               </p>
 
               <ApiKeyField
@@ -297,7 +160,7 @@ export function Settings() {
               />
 
               <ApiKeyField
-                label="Self-hosted API Key"
+                label="Self-hosted API Key (shared fallback)"
                 keyType="vllm"
                 maskedKey={maskedApiKeys.vllm}
                 onStore={storeApiKey}

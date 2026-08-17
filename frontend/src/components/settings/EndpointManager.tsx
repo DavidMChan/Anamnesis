@@ -1,10 +1,14 @@
+import { useCallback, useEffect, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { InfoHint } from '@/components/ui/info-hint'
+import { ApiKeyField } from '@/components/settings/ApiKeyField'
 import { Plus, Trash2, Server } from 'lucide-react'
+import { useAuthContext } from '@/contexts/AuthContext'
+import { endpointKeyType } from '@/hooks/useAuth'
 import { getEndpoints, getActiveEndpoint, applyEndpoint } from '@/lib/llmConfig'
 import type { LLMConfig, LLMEndpoint } from '@/types/database'
 
@@ -19,6 +23,12 @@ function newId(): string {
  * The registry lives on the profile config; the selected entry is mirrored into
  * the flat `vllm_endpoint` / `vllm_model` fields on every change so anything
  * reading the legacy shape (run snapshots, validation) stays correct.
+ *
+ * API keys are the exception: they never touch `llm_config`. Each endpoint's
+ * key lives in Vault under the key type `vllm:<endpoint_id>`, so — unlike the
+ * rest of this form — adding or removing one takes effect immediately rather
+ * than on Save. An endpoint with no key of its own falls back to the shared
+ * `vllm` key, which is what every endpoint used before this existed.
  */
 export function EndpointManager({
   config,
@@ -27,8 +37,37 @@ export function EndpointManager({
   config: LLMConfig
   onChange: (config: LLMConfig) => void
 }) {
+  const { maskedApiKeys, fetchMaskedApiKey, storeApiKey, clearApiKey } = useAuthContext()
   const endpoints = getEndpoints(config)
   const activeId = getActiveEndpoint(config)?.id
+
+  // Masked per-endpoint keys, fetched one RPC per endpoint. Keyed by endpoint
+  // id; a missing entry means "not loaded yet", null means "no key stored".
+  const [maskedKeys, setMaskedKeys] = useState<Record<string, string | null>>({})
+  const endpointIds = endpoints.map((e) => e.id).join(',')
+
+  const refreshKey = useCallback(
+    async (id: string) => {
+      const masked = await fetchMaskedApiKey(endpointKeyType(id))
+      setMaskedKeys((prev) => ({ ...prev, [id]: masked }))
+    },
+    [fetchMaskedApiKey],
+  )
+
+  useEffect(() => {
+    const ids = endpointIds ? endpointIds.split(',') : []
+    if (!ids.length) return
+
+    let cancelled = false
+    Promise.all(
+      ids.map(async (id) => [id, await fetchMaskedApiKey(endpointKeyType(id))] as const),
+    ).then((entries) => {
+      if (!cancelled) setMaskedKeys(Object.fromEntries(entries))
+    })
+    return () => {
+      cancelled = true
+    }
+  }, [endpointIds, fetchMaskedApiKey])
 
   /** Persist a new endpoint list, keeping the flattened active endpoint in sync. */
   const commit = (next: LLMEndpoint[], nextActiveId?: string) => {
@@ -62,6 +101,13 @@ export function EndpointManager({
   const removeEndpoint = (id: string) => {
     const next = endpoints.filter((e) => e.id !== id)
     commit(next, id === activeId ? next[0]?.id : activeId)
+    // Drop the credential with the server it belonged to — leaving it in Vault
+    // would strand a secret under an id nothing can reach again.
+    void clearApiKey(endpointKeyType(id))
+    setMaskedKeys((prev) => {
+      const { [id]: _removed, ...rest } = prev
+      return rest
+    })
   }
 
   return (
@@ -79,7 +125,8 @@ export function EndpointManager({
             </span>
             <span className="block">
               Save as many as you like and pick which one a run uses here or per survey.
-              All of them share the single API key below.
+              Each one can carry its own API key; endpoints without one fall back to the
+              shared self-hosted key above.
             </span>
           </InfoHint>
         </div>
@@ -248,6 +295,38 @@ export function EndpointManager({
                 </Select>
               </div>
             </div>
+
+            <ApiKeyField
+              label={
+                <span className="flex items-center gap-1.5">
+                  API key
+                  <InfoHint>
+                    <span className="block">
+                      Sent as <span className="font-mono">Authorization: Bearer …</span> to this
+                      server only. Stored encrypted in Supabase Vault, never in your profile
+                      config or in a run snapshot.
+                    </span>
+                    <span className="block">
+                      Unlike the rest of this form, the key is saved the moment you press Save
+                      here — it does not wait for Save Changes at the bottom of the page.
+                    </span>
+                  </InfoHint>
+                </span>
+              }
+              keyType={endpointKeyType(ep.id)}
+              maskedKey={maskedKeys[ep.id] ?? null}
+              onStore={storeApiKey}
+              onClear={clearApiKey}
+              optional
+              onChanged={() => refreshKey(ep.id)}
+              hint={
+                maskedKeys[ep.id]
+                  ? 'Used for this endpoint only.'
+                  : maskedApiKeys.vllm
+                    ? `No key of its own — falls back to the shared self-hosted key (${maskedApiKeys.vllm}).`
+                    : 'No key. Requests go out unauthenticated unless you set the shared self-hosted key.'
+              }
+            />
           </div>
         )
       })}

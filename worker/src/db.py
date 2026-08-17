@@ -546,7 +546,9 @@ class DatabaseClient:
 
         Args:
             user_id: UUID of the user
-            key_type: Type of key ('openrouter' or 'vllm')
+            key_type: 'openrouter', 'vllm' (shared self-hosted fallback), or
+                'vllm:<endpoint_id>' for one named endpoint's own key.
+                Unknown key types resolve to None rather than raising.
 
         Returns:
             Decrypted API key or None if not found

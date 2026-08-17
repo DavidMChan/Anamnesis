@@ -23,6 +23,7 @@ interface MockAuthContext {
   signOut: ReturnType<typeof vi.fn>
   signInWithGoogle: ReturnType<typeof vi.fn>
   updateProfile: ReturnType<typeof vi.fn>
+  fetchMaskedApiKey: ReturnType<typeof vi.fn>
   storeApiKey: ReturnType<typeof vi.fn>
   clearApiKey: ReturnType<typeof vi.fn>
   refreshMaskedApiKeys: ReturnType<typeof vi.fn>
@@ -46,6 +47,7 @@ const createMockAuthContext = (overrides: Partial<MockAuthContext> = {}): MockAu
   signOut: vi.fn(),
   signInWithGoogle: vi.fn(),
   updateProfile: vi.fn().mockResolvedValue({ error: null }),
+  fetchMaskedApiKey: vi.fn().mockResolvedValue(null),
   storeApiKey: vi.fn().mockResolvedValue({ error: null, success: true }),
   clearApiKey: vi.fn().mockResolvedValue({ error: null, success: true }),
   refreshMaskedApiKeys: vi.fn().mockResolvedValue({ openrouter: null, vllm: null }),

@@ -3,7 +3,18 @@ import type { User as SupabaseUser, Session } from '@supabase/supabase-js'
 import { supabase } from '@/lib/supabase'
 import type { User } from '@/types/database'
 
-export type ApiKeyType = 'openrouter' | 'vllm'
+/**
+ * Vault key types.
+ *
+ * `vllm` is the shared fallback for self-hosted servers; `vllm:<endpoint_id>`
+ * is a key belonging to one named endpoint in the profile's endpoint registry.
+ */
+export type ApiKeyType = 'openrouter' | 'vllm' | `vllm:${string}`
+
+/** Vault key type for one named endpoint. */
+export function endpointKeyType(endpointId: string): ApiKeyType {
+  return `vllm:${endpointId}`
+}
 
 interface MaskedApiKeys {
   openrouter: string | null
@@ -228,6 +239,7 @@ export function useAuth() {
     signOut,
     signInWithGoogle,
     updateProfile,
+    fetchMaskedApiKey,
     storeApiKey,
     clearApiKey,
     refreshMaskedApiKeys,
