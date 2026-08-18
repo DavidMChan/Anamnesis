@@ -88,7 +88,7 @@ export function EndpointManager({
       name: endpoints.length ? `Endpoint ${endpoints.length + 1}` : 'Default',
       endpoint: '',
       model: '',
-      use_chat_template: true,
+      use_chat_template: false,
       use_guided_decoding: false,
     }
     commit([...endpoints, endpoint], endpoints.length ? activeId : endpoint.id)
@@ -232,19 +232,28 @@ export function EndpointManager({
                   Chat template
                   <InfoHint>
                     <span className="block">
-                      <span className="font-medium">On</span> → requests go to{' '}
-                      <span className="font-mono">/v1/chat/completions</span> as messages. Use this
-                      for instruction-tuned and multimodal models.
+                      <span className="font-medium">On</span> (chat completions) → requests go to{' '}
+                      <span className="font-mono">/v1/chat/completions</span> as messages, formatted
+                      with the model's chat template.
                     </span>
                     <span className="block">
-                      <span className="font-medium">Off</span> → requests go to{' '}
-                      <span className="font-mono">/v1/completions</span> as a raw prompt string,
-                      which is what you want for base models with no chat formatting.
+                      <span className="font-medium">Off</span> (text completions) → requests go to{' '}
+                      <span className="font-mono">/v1/completions</span> as a raw prompt string, no
+                      template applied.
                     </span>
                     <span className="block">
-                      Questions carrying image or audio media always use{' '}
-                      <span className="font-mono">/v1/chat/completions</span> regardless of this
-                      setting, because media is sent as structured content parts.
+                      <span className="font-medium">Base model, text-only survey</span> → leave this
+                      off. Most base checkpoints (no{' '}
+                      <span className="font-mono">-Instruct</span> suffix) ship with no chat template
+                      at all, and vLLM/transformers reject chat-completions requests outright when
+                      one is missing.
+                    </span>
+                    <span className="block">
+                      <span className="font-medium">Any question with image or audio media</span>{' '}
+                      always uses <span className="font-mono">/v1/chat/completions</span> regardless
+                      of this setting, since media is sent as structured content parts — a survey
+                      with media questions needs a model that both supports multimodal input and
+                      ships a chat template, or those questions will fail no matter how this is set.
                     </span>
                   </InfoHint>
                 </Label>

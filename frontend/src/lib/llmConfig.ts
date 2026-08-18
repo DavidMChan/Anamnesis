@@ -2,7 +2,7 @@ import type { LLMConfig, LLMEndpoint } from '@/types/database'
 
 export const LLM_DEFAULTS = {
   temperature: 1,
-  max_tokens: 128,
+  max_tokens: 1024,
 } as const
 
 /** Id used when migrating a pre-registry single-endpoint config. */
