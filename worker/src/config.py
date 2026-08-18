@@ -69,9 +69,13 @@ class LLMConfig:
             if not model:
                 raise ValueError("OpenRouter model is required")
         elif provider == "vllm":
-            endpoint = user_config.get("vllm_endpoint", "").rstrip("/")
+            endpoint = user_config.get("vllm_endpoint", "").strip().rstrip("/")
             if not endpoint:
                 raise ValueError("vLLM endpoint is required")
+            if not endpoint.startswith(("http://", "https://")):
+                raise ValueError(
+                    f"vLLM endpoint must start with http:// or https:// (got {endpoint!r})"
+                )
             base_url = f"{endpoint}/v1" if not endpoint.endswith("/v1") else endpoint
             model = user_config.get("vllm_model", "")
             if not model:
