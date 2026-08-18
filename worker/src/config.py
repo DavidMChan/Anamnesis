@@ -77,9 +77,9 @@ class LLMConfig:
                     f"vLLM endpoint must start with http:// or https:// (got {endpoint!r})"
                 )
             base_url = f"{endpoint}/v1" if not endpoint.endswith("/v1") else endpoint
+            # Model name is optional — not every OpenAI-compatible self-hosted
+            # server requires (or even checks) the `model` field.
             model = user_config.get("vllm_model", "")
-            if not model:
-                raise ValueError("vLLM model is required")
         else:
             raise ValueError(f"Unknown LLM provider: {provider!r}")
 

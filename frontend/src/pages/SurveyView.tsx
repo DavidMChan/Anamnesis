@@ -125,6 +125,24 @@ export function SurveyView() {
     }
   }, [survey?.id]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  // Reuse whatever LLM config actually produced the latest run, so "Run Again"
+  // (and reopening this page) doesn't silently fall back to the profile
+  // default whenever local override state is gone.
+  useEffect(() => {
+    if (!latestRun) return
+    const cfg = latestRun.llm_config
+    setRunOverrides({
+      provider: cfg.provider,
+      openrouter_model: cfg.openrouter_model,
+      active_endpoint_id: cfg.active_endpoint_id,
+      vllm_endpoint: cfg.vllm_endpoint,
+      vllm_model: cfg.vllm_model,
+      temperature: cfg.temperature,
+      max_tokens: cfg.max_tokens,
+      max_concurrent_tasks: cfg.max_concurrent_tasks,
+    })
+  }, [latestRun?.id]) // eslint-disable-line react-hooks/exhaustive-deps
+
   // Auto-generate the zero-shot prompt whenever algorithm or demographics change.
   // User can freely edit the generated text afterwards.
   useEffect(() => {

@@ -209,12 +209,16 @@ export function EndpointManager({
 
             <div className="space-y-2">
               <Label htmlFor={`model-${ep.id}`} className="flex items-center gap-1.5">
-                Model
+                Model <span className="text-xs font-normal text-muted-foreground">(optional)</span>
                 <InfoHint>
                   <span className="block">
                     Sent as the <span className="font-mono">model</span> field on every request.
-                    It has to match whatever name your server answers to — for vLLM that is the
-                    value of <span className="font-mono">--served-model-name</span>.
+                    For vLLM this has to match the value of{' '}
+                    <span className="font-mono">--served-model-name</span>.
+                  </span>
+                  <span className="block">
+                    Leave it blank if your server only ever serves one model and doesn't check
+                    this field.
                   </span>
                 </InfoHint>
               </Label>
@@ -222,7 +226,7 @@ export function EndpointManager({
                 id={`model-${ep.id}`}
                 value={ep.model}
                 onChange={(e) => updateEndpoint(ep.id, { model: e.target.value })}
-                placeholder="meta-llama/Llama-3-70b"
+                placeholder="meta-llama/Llama-3-70b (optional)"
               />
             </div>
 
