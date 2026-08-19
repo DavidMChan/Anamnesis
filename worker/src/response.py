@@ -125,12 +125,31 @@ class LLMResponse:
         return cls(answer="", raw=text)
 
     @classmethod
-    def from_text(cls, text: str) -> "LLMResponse":
+    def from_text(cls, text: str, num_options: Optional[int] = None) -> "LLMResponse":
         """
         Parse LLM response from plain text (anthology style).
         Extracts the first letter (A, B, C, D, etc.) from the response.
+
+        num_options bounds accepted letters to the question's actual option
+        range (A..A+num_options-1). Without it, any letter in the generic
+        A-J range passes — which lets an out-of-range letter mentioned
+        elsewhere in a rambling completion (e.g. a base model hallucinating
+        extra text) get mistaken for a real answer.
         """
         text = text.strip()
+
+        if num_options:
+            # The real option range is known, so it alone is enough to reject
+            # a stray letter from hallucinated text — no need for the I/J
+            # pronoun-collision heuristic below, which would wrongly exclude
+            # a legitimate option I or J.
+            valid_primary = {chr(65 + i) for i in range(num_options)}
+            valid_anthology = valid_primary
+        else:
+            valid_primary = set('ABCDEFGHIJ')
+            # Legacy heuristic when the option range is unknown: 'I' collides
+            # with the pronoun "I" too often, so drop it (and J alongside it).
+            valid_anthology = set('ABCDEFGH')
 
         # Try to find answer letter at the start
         patterns = [
@@ -144,7 +163,7 @@ class LLMResponse:
             match = re.search(pattern, text)
             if match:
                 answer = match.group(1).upper()
-                if answer in 'ABCDEFGHIJ':
+                if answer in valid_primary:
                     return cls(answer=answer, raw=text)
 
         # Stricter fallback: anthology-style pattern
@@ -152,7 +171,7 @@ class LLMResponse:
         match = re.search(anthology_pattern, text)
         if match:
             answer = match.group(1).upper()
-            if answer in 'ABCDEFGH':
+            if answer in valid_anthology:
                 return cls(answer=answer, raw=text)
 
         logger.warning(f"Failed to parse MCQ answer from: {repr(text[:100])}")

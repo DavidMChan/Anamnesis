@@ -199,7 +199,8 @@ class UnifiedLLMClient:
             )
 
         # Fallback: text parsing
-        return LLMResponse.from_text(content)
+        num_options = len(question.options) if question and question.options else None
+        return LLMResponse.from_text(content, num_options=num_options)
 
     @staticmethod
     def _extract_usage(response) -> Optional[LLMUsage]:
@@ -301,8 +302,8 @@ class UnifiedLLMClient:
                     )
                     return self._complete_text_fallback(prompt, question, truncated=True)
                 raise TruncationError(
-                    f"Response truncated at max_tokens={self.max_tokens}. "
-                    "Increase max_tokens in Settings (thinking models like Gemini 2.5 Pro need ≥1024)."
+                    f"Truncated at max_tokens={self.max_tokens}. Reasoning models need "
+                    "higher max_tokens (>1024); base models should enable guided decoding."
                 )
             parsed = self._attach_usage(self._parse_response(content, question), response)
             if self.provider == "openrouter" and parsed.usage and parsed.usage.cost is None:
@@ -358,10 +359,11 @@ class UnifiedLLMClient:
                 finish_reason = choice.finish_reason
             if finish_reason == "length":
                 raise TruncationError(
-                    f"Response truncated at max_tokens={self.max_tokens} even in text mode. "
-                    "Increase max_tokens in Settings (thinking models like Gemini 2.5 Pro need ≥1024)."
+                    f"Truncated at max_tokens={self.max_tokens}. Reasoning models need "
+                    "higher max_tokens (>1024); base models should enable guided decoding."
                 )
-            return self._attach_usage(LLMResponse.from_text(content), response)
+            num_options = len(question.options) if question and question.options else None
+            return self._attach_usage(LLMResponse.from_text(content, num_options=num_options), response)
         except TruncationError:
             raise
         except Exception as e:
@@ -405,8 +407,8 @@ class UnifiedLLMClient:
                     )
                     return await self._async_complete_text_fallback(prompt, question, truncated=True)
                 raise TruncationError(
-                    f"Response truncated at max_tokens={self.max_tokens}. "
-                    "Increase max_tokens in Settings (thinking models like Gemini 2.5 Pro need ≥1024)."
+                    f"Truncated at max_tokens={self.max_tokens}. Reasoning models need "
+                    "higher max_tokens (>1024); base models should enable guided decoding."
                 )
             parsed = self._attach_usage(self._parse_response(content, question), response)
             if self.provider == "openrouter" and parsed.usage and parsed.usage.cost is None:
@@ -462,10 +464,11 @@ class UnifiedLLMClient:
                 finish_reason = choice.finish_reason
             if finish_reason == "length":
                 raise TruncationError(
-                    f"Response truncated at max_tokens={self.max_tokens} even in text mode. "
-                    "Increase max_tokens in Settings (thinking models like Gemini 2.5 Pro need ≥1024)."
+                    f"Truncated at max_tokens={self.max_tokens}. Reasoning models need "
+                    "higher max_tokens (>1024); base models should enable guided decoding."
                 )
-            return self._attach_usage(LLMResponse.from_text(content), response)
+            num_options = len(question.options) if question and question.options else None
+            return self._attach_usage(LLMResponse.from_text(content, num_options=num_options), response)
         except TruncationError:
             raise
         except Exception as e:
