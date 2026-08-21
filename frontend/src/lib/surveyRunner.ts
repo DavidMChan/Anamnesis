@@ -352,6 +352,18 @@ export async function retryTask(taskId: string): Promise<void> {
 }
 
 /**
+ * Retry every failed task in a run in one round trip.
+ *
+ * Resets all failed tasks to 'pending' and the run back to 'running' so the
+ * dispatcher picks them all up again. Returns the number of tasks reset.
+ */
+export async function retryAllFailedTasks(runId: string): Promise<number> {
+  const { data, error } = await supabase.rpc('retry_all_failed_tasks', { p_run_id: runId })
+  if (error) throw error
+  return (data as number) ?? 0
+}
+
+/**
  * Re-run a demographic survey from scratch.
  *
  * Atomically:

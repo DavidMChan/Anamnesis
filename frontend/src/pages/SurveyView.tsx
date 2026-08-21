@@ -282,6 +282,7 @@ export function SurveyView() {
               await cancelSurveyRun(displayRun.id)
               refreshRuns()
             }}
+            onTaskRetried={refreshRuns}
           />
         )}
 
