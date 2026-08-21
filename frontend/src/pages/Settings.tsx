@@ -1,7 +1,6 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useAuthContext } from '@/contexts/AuthContext'
 import { Layout } from '@/components/layout/Layout'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
@@ -10,36 +9,84 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { InfoHint } from '@/components/ui/info-hint'
 import { EndpointManager } from '@/components/settings/EndpointManager'
 import { ApiKeyField } from '@/components/settings/ApiKeyField'
-import { User, Key, Check } from 'lucide-react'
+import { User, Key, Check, Loader2, AlertCircle } from 'lucide-react'
 import type { LLMConfig } from '@/types/database'
+
+// How long to let editing settle before persisting — long enough that typing
+// a name doesn't fire a save per keystroke, short enough that a quick tab
+// switch away still lands.
+const AUTOSAVE_DELAY_MS = 800
+
+type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
+
+function snapshotsEqual(
+  a: { name: string; llmConfig: LLMConfig } | null,
+  b: { name: string; llmConfig: LLMConfig },
+): boolean {
+  if (!a) return false
+  return a.name === b.name && JSON.stringify(a.llmConfig) === JSON.stringify(b.llmConfig)
+}
 
 export function Settings() {
   const { profile, updateProfile, maskedApiKeys, storeApiKey, clearApiKey } = useAuthContext()
   const [name, setName] = useState('')
   const [llmConfig, setLlmConfig] = useState<LLMConfig>({})
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const [hydrated, setHydrated] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
+
+  // The most recently persisted (or just-hydrated) values. The autosave
+  // effect only fires when name/llmConfig actually drift from this, so
+  // re-renders that don't represent a real edit are no-ops.
+  const lastSynced = useRef<{ name: string; llmConfig: LLMConfig } | null>(null)
+  const pendingSave = useRef<{ name: string; llmConfig: LLMConfig } | null>(null)
 
   useEffect(() => {
-    if (profile) {
-      setName(profile.name || '')
-      setLlmConfig(profile.llm_config || {})
+    if (profile && !hydrated) {
+      const hydratedName = profile.name || ''
+      const hydratedConfig = profile.llm_config || {}
+      setName(hydratedName)
+      setLlmConfig(hydratedConfig)
+      lastSynced.current = { name: hydratedName, llmConfig: hydratedConfig }
+      setHydrated(true)
     }
-  }, [profile])
+  }, [profile, hydrated])
 
-  const handleSaveProfile = async () => {
-    setSaving(true)
-    setSaved(false)
+  // Autosave: persist name/llmConfig shortly after the user stops editing,
+  // so nothing on this page requires a manual "Save" click.
+  useEffect(() => {
+    if (!hydrated) return
+    if (snapshotsEqual(lastSynced.current, { name, llmConfig })) return
 
-    // Save profile settings (without api_key)
-    await updateProfile({
-      name,
-      llm_config: llmConfig,
-    })
+    pendingSave.current = { name, llmConfig }
+    setSaveStatus('saving')
 
-    setSaving(false)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 3000)
+    const timeoutId = window.setTimeout(async () => {
+      const pending = pendingSave.current
+      pendingSave.current = null
+      if (!pending) return
+      const { error } = await updateProfile({ name: pending.name, llm_config: pending.llmConfig })
+      if (!error) lastSynced.current = pending
+      setSaveStatus(error ? 'error' : 'saved')
+    }, AUTOSAVE_DELAY_MS)
+
+    return () => window.clearTimeout(timeoutId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, llmConfig, hydrated])
+
+  // Flush an edit still waiting on the debounce if the user navigates away.
+  useEffect(() => {
+    return () => {
+      if (pendingSave.current) {
+        void updateProfile({ name: pendingSave.current.name, llm_config: pendingSave.current.llmConfig })
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // API keys save themselves the moment they're submitted (see ApiKeyField) —
+  // this just feeds that into the same page-level status indicator.
+  const notifyKeySaved = (justSaved: boolean) => {
+    if (justSaved) setSaveStatus('saved')
   }
 
   const provider = llmConfig.provider || 'openrouter'
@@ -48,9 +95,12 @@ export function Settings() {
     <Layout>
       <div className="max-w-2xl space-y-8">
         {/* Page Header */}
-        <div>
-          <h1 className="text-2xl font-bold">Settings</h1>
-          <p className="text-muted-foreground">Manage your account and LLM configuration</p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold">Settings</h1>
+            <p className="text-muted-foreground">Manage your account and LLM configuration</p>
+          </div>
+          <SaveStatusIndicator status={saveStatus} />
         </div>
 
         {/* Profile Card */}
@@ -154,9 +204,7 @@ export function Settings() {
                 maskedKey={maskedApiKeys.openrouter}
                 onStore={storeApiKey}
                 onClear={clearApiKey}
-                saving={saving}
-                setSaving={setSaving}
-                setSaved={setSaved}
+                setSaved={notifyKeySaved}
               />
 
               <ApiKeyField
@@ -165,9 +213,7 @@ export function Settings() {
                 maskedKey={maskedApiKeys.vllm}
                 onStore={storeApiKey}
                 onClear={clearApiKey}
-                saving={saving}
-                setSaving={setSaving}
-                setSaved={setSaved}
+                setSaved={notifyKeySaved}
                 optional
               />
             </div>
@@ -206,7 +252,7 @@ export function Settings() {
 
             {/* Self-hosted endpoints */}
             {provider === 'vllm' && (
-              <EndpointManager config={llmConfig} onChange={setLlmConfig} />
+              <EndpointManager config={llmConfig} onChange={setLlmConfig} onKeySaved={() => setSaveStatus('saved')} />
             )}
 
             {/* Chat Template Toggle — self-hosted endpoints carry their own */}
@@ -271,20 +317,36 @@ export function Settings() {
             </div>
           </CardContent>
         </Card>
-
-        {/* Save Button */}
-        <div className="flex items-center gap-4">
-          <Button onClick={handleSaveProfile} disabled={saving}>
-            {saving ? 'Saving...' : 'Save Changes'}
-          </Button>
-          {saved && (
-            <div className="flex items-center gap-2 text-sm text-green-600">
-              <Check className="h-4 w-4" />
-              <span>Changes saved!</span>
-            </div>
-          )}
-        </div>
       </div>
     </Layout>
+  )
+}
+
+function SaveStatusIndicator({ status }: { status: SaveStatus }) {
+  if (status === 'idle') return null
+
+  if (status === 'saving') {
+    return (
+      <div className="flex shrink-0 items-center gap-1.5 pt-1 text-sm text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        <span>Saving...</span>
+      </div>
+    )
+  }
+
+  if (status === 'error') {
+    return (
+      <div className="flex shrink-0 items-center gap-1.5 pt-1 text-sm text-destructive">
+        <AlertCircle className="h-3.5 w-3.5" />
+        <span>Failed to save</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex shrink-0 items-center gap-1.5 pt-1 text-sm text-green-600">
+      <Check className="h-3.5 w-3.5" />
+      <span>All changes saved</span>
+    </div>
   )
 }

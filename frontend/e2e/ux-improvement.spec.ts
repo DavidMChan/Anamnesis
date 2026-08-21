@@ -96,16 +96,15 @@ test.describe.skip('Cancel Survey Run (requires auth + running survey)', () => {
 })
 
 test.describe.skip('Configurable Concurrency (requires auth)', () => {
-  test('user changes max_concurrent_tasks, saves, reloads — value persists', async ({ page }) => {
+  test('user changes max_concurrent_tasks, it autosaves, reloads — value persists', async ({ page }) => {
     await page.goto('/settings')
 
     // Find and change the concurrency input
     const input = page.getByLabel('Max Concurrent Tasks')
     await input.fill('50')
 
-    // Save
-    await page.getByRole('button', { name: 'Save Changes' }).click()
-    await expect(page.getByText('Changes saved!')).toBeVisible()
+    // Settings autosaves shortly after the field settles — no Save click needed
+    await expect(page.getByText('All changes saved')).toBeVisible()
 
     // Reload page
     await page.reload()

@@ -47,7 +47,7 @@ export function ApiKeyField({
   const [showInput, setShowInput] = useState(false)
   const [localSaving, setLocalSaving] = useState(false)
 
-  // Settings owns a shared busy flag (it also disables the page Save button);
+  // A caller may pass a shared busy flag to coordinate multiple key fields;
   // standalone uses fall back to local state.
   const busy = saving ?? localSaving
   const markSaving = (v: boolean) => (setSaving ? setSaving(v) : setLocalSaving(v))

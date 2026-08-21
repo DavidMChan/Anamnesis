@@ -24,18 +24,21 @@ function newId(): string {
  * the flat `vllm_endpoint` / `vllm_model` fields on every change so anything
  * reading the legacy shape (run snapshots, validation) stays correct.
  *
- * API keys are the exception: they never touch `llm_config`. Each endpoint's
- * key lives in Vault under the key type `vllm:<endpoint_id>`, so — unlike the
- * rest of this form — adding or removing one takes effect immediately rather
- * than on Save. An endpoint with no key of its own falls back to the shared
- * `vllm` key, which is what every endpoint used before this existed.
+ * API keys live in Vault under the key type `vllm:<endpoint_id>` rather than
+ * in `llm_config`, so adding or removing one is its own request — it doesn't
+ * wait on the rest of the form's autosave. An endpoint with no key of its own
+ * falls back to the shared `vllm` key, which is what every endpoint used
+ * before this existed.
  */
 export function EndpointManager({
   config,
   onChange,
+  onKeySaved,
 }: {
   config: LLMConfig
   onChange: (config: LLMConfig) => void
+  /** Called after a per-endpoint API key is stored or cleared. */
+  onKeySaved?: () => void
 }) {
   const { maskedApiKeys, fetchMaskedApiKey, storeApiKey, clearApiKey } = useAuthContext()
   const endpoints = getEndpoints(config)
@@ -320,8 +323,8 @@ export function EndpointManager({
                       config or in a run snapshot.
                     </span>
                     <span className="block">
-                      Unlike the rest of this form, the key is saved the moment you press Save
-                      here — it does not wait for Save Changes at the bottom of the page.
+                      The key is saved the moment you press Save here, independent of the rest
+                      of this form.
                     </span>
                   </InfoHint>
                 </span>
@@ -331,7 +334,10 @@ export function EndpointManager({
               onStore={storeApiKey}
               onClear={clearApiKey}
               optional
-              onChanged={() => refreshKey(ep.id)}
+              onChanged={() => {
+                refreshKey(ep.id)
+                onKeySaved?.()
+              }}
               hint={
                 maskedKeys[ep.id]
                   ? 'Used for this endpoint only.'
