@@ -20,7 +20,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { RefreshCw, CheckCircle, XCircle, Clock, AlertTriangle, Square, ChevronDown, RotateCcw, Wallet, Gauge, Flag, CheckCircle2 } from 'lucide-react'
 import { supabase } from '@/lib/supabase'
-import { retryTask } from '@/lib/surveyRunner'
+import { retryTask, retryAllFailedTasks } from '@/lib/surveyRunner'
 import { computeAdaptiveSamplingSummary, type AdaptiveSamplingSummary } from '@/lib/bayesianStability'
 import type { SurveyRun, SurveyRunStatus, SurveyTaskUsage, SurveyTaskResult, SurveyResults as SurveyResultsType, Question } from '@/types/database'
 
@@ -389,6 +389,7 @@ function FailedTaskErrors({
   const [errors, setErrors] = useState<FailedTaskError[]>([])
   const [loaded, setLoaded] = useState(false)
   const [retryingId, setRetryingId] = useState<string | null>(null)
+  const [retryingAll, setRetryingAll] = useState(false)
 
   useEffect(() => {
     if (expanded && !loaded) {
@@ -424,18 +425,44 @@ function FailedTaskErrors({
     }
   }
 
+  const handleRetryAll = async () => {
+    setRetryingAll(true)
+    try {
+      await retryAllFailedTasks(runId)
+      setErrors([])
+      onTaskRetried?.()
+    } catch (e) {
+      console.error('Failed to retry all tasks:', e)
+    } finally {
+      setRetryingAll(false)
+    }
+  }
+
   return (
     <div className="rounded-lg border border-destructive/20 bg-destructive/5 p-3">
-      <button
-        type="button"
-        className="flex items-center justify-between w-full text-left"
-        onClick={() => setExpanded(!expanded)}
-      >
-        <span className="text-sm font-medium text-destructive">
-          {failedCount} task{failedCount > 1 ? 's' : ''} failed
-        </span>
-        <ChevronDown className={`h-4 w-4 text-destructive transition-transform ${expanded ? 'rotate-180' : ''}`} />
-      </button>
+      <div className="flex items-center justify-between gap-2">
+        <button
+          type="button"
+          className="flex min-w-0 flex-1 items-center gap-2 text-left"
+          onClick={() => setExpanded(!expanded)}
+        >
+          <span className="text-sm font-medium text-destructive">
+            {failedCount} task{failedCount > 1 ? 's' : ''} failed
+          </span>
+          <ChevronDown className={`h-4 w-4 shrink-0 text-destructive transition-transform ${expanded ? 'rotate-180' : ''}`} />
+        </button>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="h-7 shrink-0"
+          onClick={handleRetryAll}
+          disabled={retryingAll}
+        >
+          <RotateCcw className={`mr-1.5 h-3.5 w-3.5 ${retryingAll ? 'animate-spin' : ''}`} />
+          {retryingAll ? 'Retrying...' : 'Retry All'}
+        </Button>
+      </div>
       {expanded && (
         <div className="mt-3 space-y-2">
           {!loaded ? (

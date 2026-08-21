@@ -6,6 +6,23 @@ export interface User {
   created_at: string
 }
 
+/**
+ * A named self-hosted / OpenAI-compatible server the user can pick between.
+ *
+ * Stored only on the *profile* config (`LLMConfig.endpoints`). When a run is
+ * created, the selected entry is flattened into the legacy `vllm_endpoint` /
+ * `vllm_model` fields (see `mergeEffectiveConfig`) so the run snapshot keeps
+ * the exact shape the worker already reads.
+ */
+export interface LLMEndpoint {
+  id: string                     // uuid, generated client-side
+  name: string                   // display name, e.g. "Music Flamingo (islay)"
+  endpoint: string               // base URL, e.g. "http://islay.cs.berkeley.edu:8000/v1"
+  model: string                  // model name as configured on that server
+  use_chat_template?: boolean    // per-server: /v1/chat/completions vs /v1/completions
+  use_guided_decoding?: boolean  // per-server: vLLM structured_outputs support
+}
+
 export interface LLMConfig {
   // Provider selection
   provider?: 'openrouter' | 'vllm'
@@ -13,7 +30,13 @@ export interface LLMConfig {
   // OpenRouter settings
   openrouter_model?: string  // e.g., "anthropic/claude-3-haiku"
 
-  // vLLM settings
+  // Self-hosted / OpenAI-compatible servers.
+  // Registry lives on the profile; `active_endpoint_id` picks the default one.
+  endpoints?: LLMEndpoint[]
+  active_endpoint_id?: string
+
+  // Flattened view of the selected endpoint. Always present in run snapshots —
+  // this is what the worker reads (worker/src/config.py).
   vllm_endpoint?: string     // e.g., "http://localhost:8000/v1"
   vllm_model?: string        // e.g., "meta-llama/Llama-3-70b"
 

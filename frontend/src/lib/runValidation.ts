@@ -61,11 +61,10 @@ export async function validateRunConfig({
     }
   } else if (llmConfig.provider === 'vllm') {
     if (!llmConfig.vllm_endpoint) {
-      return { valid: false, error: 'vLLM endpoint is not set. Configure it in the Settings page.' }
+      return { valid: false, error: 'No endpoint selected. Add one and mark it default in the Settings page.' }
     }
-    if (!llmConfig.vllm_model) {
-      return { valid: false, error: 'vLLM model is not set. Configure it in the Settings page.' }
-    }
+    // Model name is optional here — not every OpenAI-compatible self-hosted
+    // server requires (or even checks) the `model` field.
   }
 
   const hasMedia = survey.questions.some(

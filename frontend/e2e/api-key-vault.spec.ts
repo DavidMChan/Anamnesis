@@ -67,11 +67,11 @@ test.describe.skip('API Key Vault - Authenticated User Flow (requires auth mocki
     const apiKeyInput = page.getByPlaceholder('Enter new API key...')
     await apiKeyInput.fill('sk-test-key-1234567890abcdef')
 
-    // Save changes
-    await page.getByRole('button', { name: 'Save Changes' }).click()
+    // Save — the key field saves itself immediately, no page-level save step
+    await page.getByRole('button', { name: 'Save' }).click()
 
     // Verify success message
-    await expect(page.getByText('Changes saved!')).toBeVisible()
+    await expect(page.getByText('All changes saved')).toBeVisible()
 
     // Verify masked key is displayed
     await expect(page.getByDisplayValue(/^sk-\.\.\.def$/)).toBeVisible()
@@ -88,11 +88,11 @@ test.describe.skip('API Key Vault - Authenticated User Flow (requires auth mocki
     const apiKeyInput = page.getByPlaceholder('Enter new API key...')
     await apiKeyInput.fill('sk-new-key-0987654321fedcba')
 
-    // Save changes
-    await page.getByRole('button', { name: 'Save Changes' }).click()
+    // Save — the key field saves itself immediately, no page-level save step
+    await page.getByRole('button', { name: 'Save' }).click()
 
     // Verify success message
-    await expect(page.getByText('Changes saved!')).toBeVisible()
+    await expect(page.getByText('All changes saved')).toBeVisible()
 
     // Verify new masked key is displayed
     await expect(page.getByDisplayValue(/^sk-\.\.\.cba$/)).toBeVisible()
@@ -106,7 +106,7 @@ test.describe.skip('API Key Vault - Authenticated User Flow (requires auth mocki
     await page.getByTitle('Remove API key').click()
 
     // Verify success message
-    await expect(page.getByText('Changes saved!')).toBeVisible()
+    await expect(page.getByText('All changes saved')).toBeVisible()
 
     // Verify key is cleared (input shows placeholder)
     await expect(page.getByPlaceholder('No API key configured')).toBeVisible()

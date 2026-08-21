@@ -1,181 +1,92 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useAuthContext } from '@/contexts/AuthContext'
 import { Layout } from '@/components/layout/Layout'
-import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Checkbox } from '@/components/ui/checkbox'
-import { User, Key, Check, X, Eye, EyeOff } from 'lucide-react'
+import { InfoHint } from '@/components/ui/info-hint'
+import { EndpointManager } from '@/components/settings/EndpointManager'
+import { ApiKeyField } from '@/components/settings/ApiKeyField'
+import { User, Key, Check, Loader2, AlertCircle } from 'lucide-react'
 import type { LLMConfig } from '@/types/database'
-import type { ApiKeyType } from '@/hooks/useAuth'
 
-interface ApiKeyFieldProps {
-  label: string
-  keyType: ApiKeyType
-  maskedKey: string | null
-  onStore: (key: string, type: ApiKeyType) => Promise<{ error: Error | null; success: boolean }>
-  onClear: (type: ApiKeyType) => Promise<{ error: Error | null; success: boolean }>
-  saving: boolean
-  setSaving: (saving: boolean) => void
-  setSaved: (saved: boolean) => void
-  optional?: boolean
-}
+// How long to let editing settle before persisting — long enough that typing
+// a name doesn't fire a save per keystroke, short enough that a quick tab
+// switch away still lands.
+const AUTOSAVE_DELAY_MS = 800
 
-function ApiKeyField({
-  label,
-  keyType,
-  maskedKey,
-  onStore,
-  onClear,
-  saving,
-  setSaving,
-  setSaved,
-  optional = false,
-}: ApiKeyFieldProps) {
-  const [isEditing, setIsEditing] = useState(false)
-  const [inputValue, setInputValue] = useState('')
-  const [showInput, setShowInput] = useState(false)
+type SaveStatus = 'idle' | 'saving' | 'saved' | 'error'
 
-  const handleSave = async () => {
-    if (!inputValue.trim()) return
-
-    setSaving(true)
-    const result = await onStore(inputValue.trim(), keyType)
-    setSaving(false)
-
-    if (result.success) {
-      setInputValue('')
-      setIsEditing(false)
-      setShowInput(false)
-      setSaved(true)
-      setTimeout(() => setSaved(false), 3000)
-    }
-  }
-
-  const handleClear = async () => {
-    setSaving(true)
-    await onClear(keyType)
-    setSaving(false)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 3000)
-  }
-
-  const handleCancel = () => {
-    setIsEditing(false)
-    setInputValue('')
-    setShowInput(false)
-  }
-
-  return (
-    <div className="space-y-2">
-      <Label htmlFor={`api_key_${keyType}`}>
-        {label}
-        {optional && <span className="text-muted-foreground ml-1">(optional)</span>}
-      </Label>
-      {isEditing ? (
-        <div className="space-y-2">
-          <div className="flex gap-2">
-            <div className="relative flex-1">
-              <Input
-                id={`api_key_${keyType}`}
-                type={showInput ? 'text' : 'password'}
-                value={inputValue}
-                onChange={(e) => setInputValue(e.target.value)}
-                placeholder="Enter API key..."
-                className="pr-10"
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleSave()
-                  if (e.key === 'Escape') handleCancel()
-                }}
-              />
-              <button
-                type="button"
-                onClick={() => setShowInput(!showInput)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-              >
-                {showInput ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
-              </button>
-            </div>
-            <Button onClick={handleSave} disabled={saving || !inputValue.trim()}>
-              Save
-            </Button>
-            <Button variant="ghost" size="icon" onClick={handleCancel} title="Cancel">
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-          <p className="text-xs text-muted-foreground">
-            Enter your API key. It will be encrypted and stored securely.
-          </p>
-        </div>
-      ) : (
-        <div className="space-y-2">
-          <div className="flex gap-2">
-            <Input
-              id={`api_key_${keyType}_display`}
-              type="text"
-              value={maskedKey || ''}
-              disabled
-              placeholder={optional ? 'No API key (optional)' : 'No API key configured'}
-              className="bg-muted font-mono"
-            />
-            <Button variant="outline" onClick={() => setIsEditing(true)}>
-              {maskedKey ? 'Change' : 'Add'}
-            </Button>
-            {maskedKey && (
-              <Button
-                variant="ghost"
-                size="icon"
-                onClick={handleClear}
-                disabled={saving}
-                title="Remove API key"
-                className="text-destructive hover:text-destructive"
-              >
-                <X className="h-4 w-4" />
-              </Button>
-            )}
-          </div>
-          <p className="text-xs text-muted-foreground">
-            {maskedKey
-              ? 'Your API key is encrypted and stored securely in Supabase Vault.'
-              : optional
-                ? 'API key is optional for this provider.'
-                : 'Add your API key to run surveys with LLM inference.'}
-          </p>
-        </div>
-      )}
-    </div>
-  )
+function snapshotsEqual(
+  a: { name: string; llmConfig: LLMConfig } | null,
+  b: { name: string; llmConfig: LLMConfig },
+): boolean {
+  if (!a) return false
+  return a.name === b.name && JSON.stringify(a.llmConfig) === JSON.stringify(b.llmConfig)
 }
 
 export function Settings() {
   const { profile, updateProfile, maskedApiKeys, storeApiKey, clearApiKey } = useAuthContext()
   const [name, setName] = useState('')
   const [llmConfig, setLlmConfig] = useState<LLMConfig>({})
-  const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
+  const [hydrated, setHydrated] = useState(false)
+  const [saveStatus, setSaveStatus] = useState<SaveStatus>('idle')
+
+  // The most recently persisted (or just-hydrated) values. The autosave
+  // effect only fires when name/llmConfig actually drift from this, so
+  // re-renders that don't represent a real edit are no-ops.
+  const lastSynced = useRef<{ name: string; llmConfig: LLMConfig } | null>(null)
+  const pendingSave = useRef<{ name: string; llmConfig: LLMConfig } | null>(null)
 
   useEffect(() => {
-    if (profile) {
-      setName(profile.name || '')
-      setLlmConfig(profile.llm_config || {})
+    if (profile && !hydrated) {
+      const hydratedName = profile.name || ''
+      const hydratedConfig = profile.llm_config || {}
+      setName(hydratedName)
+      setLlmConfig(hydratedConfig)
+      lastSynced.current = { name: hydratedName, llmConfig: hydratedConfig }
+      setHydrated(true)
     }
-  }, [profile])
+  }, [profile, hydrated])
 
-  const handleSaveProfile = async () => {
-    setSaving(true)
-    setSaved(false)
+  // Autosave: persist name/llmConfig shortly after the user stops editing,
+  // so nothing on this page requires a manual "Save" click.
+  useEffect(() => {
+    if (!hydrated) return
+    if (snapshotsEqual(lastSynced.current, { name, llmConfig })) return
 
-    // Save profile settings (without api_key)
-    await updateProfile({
-      name,
-      llm_config: llmConfig,
-    })
+    pendingSave.current = { name, llmConfig }
+    setSaveStatus('saving')
 
-    setSaving(false)
-    setSaved(true)
-    setTimeout(() => setSaved(false), 3000)
+    const timeoutId = window.setTimeout(async () => {
+      const pending = pendingSave.current
+      pendingSave.current = null
+      if (!pending) return
+      const { error } = await updateProfile({ name: pending.name, llm_config: pending.llmConfig })
+      if (!error) lastSynced.current = pending
+      setSaveStatus(error ? 'error' : 'saved')
+    }, AUTOSAVE_DELAY_MS)
+
+    return () => window.clearTimeout(timeoutId)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, llmConfig, hydrated])
+
+  // Flush an edit still waiting on the debounce if the user navigates away.
+  useEffect(() => {
+    return () => {
+      if (pendingSave.current) {
+        void updateProfile({ name: pendingSave.current.name, llm_config: pendingSave.current.llmConfig })
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // API keys save themselves the moment they're submitted (see ApiKeyField) —
+  // this just feeds that into the same page-level status indicator.
+  const notifyKeySaved = (justSaved: boolean) => {
+    if (justSaved) setSaveStatus('saved')
   }
 
   const provider = llmConfig.provider || 'openrouter'
@@ -184,9 +95,12 @@ export function Settings() {
     <Layout>
       <div className="max-w-2xl space-y-8">
         {/* Page Header */}
-        <div>
-          <h1 className="text-2xl font-bold">Settings</h1>
-          <p className="text-muted-foreground">Manage your account and LLM configuration</p>
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h1 className="text-2xl font-bold">Settings</h1>
+            <p className="text-muted-foreground">Manage your account and LLM configuration</p>
+          </div>
+          <SaveStatusIndicator status={saveStatus} />
         </div>
 
         {/* Profile Card */}
@@ -236,7 +150,20 @@ export function Settings() {
           <CardContent className="space-y-6">
             {/* Provider Selection */}
             <div className="space-y-2">
-              <Label htmlFor="provider">Provider</Label>
+              <Label htmlFor="provider" className="flex items-center gap-1.5">
+                Provider
+                <InfoHint>
+                  <span className="block">
+                    <span className="font-medium">OpenRouter</span> — hosted models, billed per
+                    token, no server of your own.
+                  </span>
+                  <span className="block">
+                    <span className="font-medium">Self-hosted</span> — any server that speaks the
+                    OpenAI HTTP API. Anamnesis just points the OpenAI SDK at your base URL, so it
+                    is not limited to vLLM.
+                  </span>
+                </InfoHint>
+              </Label>
               <Select
                 value={provider}
                 onValueChange={(value) =>
@@ -248,13 +175,13 @@ export function Settings() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="openrouter">OpenRouter</SelectItem>
-                  <SelectItem value="vllm">vLLM (Self-hosted)</SelectItem>
+                  <SelectItem value="vllm">Self-hosted (OpenAI-compatible)</SelectItem>
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
                 {provider === 'openrouter'
                   ? 'OpenRouter provides access to many LLM providers through a single API.'
-                  : 'vLLM is a self-hosted inference server for running open-source models.'}
+                  : 'Any server exposing an OpenAI-compatible API — vLLM, SGLang, TGI, llama.cpp, Ollama, or your own wrapper around a custom model.'}
               </p>
             </div>
 
@@ -265,7 +192,10 @@ export function Settings() {
                 API Keys
               </div>
               <p className="text-xs text-muted-foreground">
-                Both keys are stored independently. The OpenRouter key is also used for the parser LLM fallback.
+                Both keys are stored independently. The OpenRouter key is also used for the parser
+                LLM fallback. The self-hosted key below is the fallback for endpoints that have no
+                key of their own — set per-endpoint keys under Endpoints. Leave it empty if your
+                servers do not check authorization.
               </p>
 
               <ApiKeyField
@@ -274,20 +204,16 @@ export function Settings() {
                 maskedKey={maskedApiKeys.openrouter}
                 onStore={storeApiKey}
                 onClear={clearApiKey}
-                saving={saving}
-                setSaving={setSaving}
-                setSaved={setSaved}
+                setSaved={notifyKeySaved}
               />
 
               <ApiKeyField
-                label="vLLM API Key"
+                label="Self-hosted API Key (shared fallback)"
                 keyType="vllm"
                 maskedKey={maskedApiKeys.vllm}
                 onStore={storeApiKey}
                 onClear={clearApiKey}
-                saving={saving}
-                setSaving={setSaving}
-                setSaved={setSaved}
+                setSaved={notifyKeySaved}
                 optional
               />
             </div>
@@ -324,64 +250,13 @@ export function Settings() {
               </div>
             )}
 
-            {/* vLLM Model Settings */}
+            {/* Self-hosted endpoints */}
             {provider === 'vllm' && (
-              <div className="space-y-4 rounded-lg border p-4">
-                <div className="flex items-center gap-2 text-sm font-medium">
-                  <div className="h-2 w-2 rounded-full bg-purple-500" />
-                  vLLM Server
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="vllm_endpoint">Endpoint</Label>
-                  <Input
-                    id="vllm_endpoint"
-                    value={llmConfig.vllm_endpoint || ''}
-                    onChange={(e) => setLlmConfig({ ...llmConfig, vllm_endpoint: e.target.value })}
-                    placeholder="http://localhost:8000/v1"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    The URL of your vLLM server (OpenAI-compatible API endpoint).
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="vllm_model">Model</Label>
-                  <Input
-                    id="vllm_model"
-                    value={llmConfig.vllm_model || ''}
-                    onChange={(e) => setLlmConfig({ ...llmConfig, vllm_model: e.target.value })}
-                    placeholder="meta-llama/Llama-3-70b"
-                  />
-                  <p className="text-xs text-muted-foreground">
-                    The model name as configured on your vLLM server.
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <Label htmlFor="use_guided_decoding">Guided Decoding</Label>
-                  <Select
-                    value={llmConfig.use_guided_decoding === false ? 'false' : 'true'}
-                    onValueChange={(value) =>
-                      setLlmConfig({ ...llmConfig, use_guided_decoding: value === 'true' })
-                    }
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="true">Enabled</SelectItem>
-                      <SelectItem value="false">Disabled</SelectItem>
-                    </SelectContent>
-                  </Select>
-                  <p className="text-xs text-muted-foreground">
-                    Use vLLM guided decoding to constrain MCQ responses to valid options.
-                  </p>
-                </div>
-              </div>
+              <EndpointManager config={llmConfig} onChange={setLlmConfig} onKeySaved={() => setSaveStatus('saved')} />
             )}
 
-            {/* Chat Template Toggle */}
+            {/* Chat Template Toggle — self-hosted endpoints carry their own */}
+            {provider === 'openrouter' && (
             <div className="flex items-start gap-3 rounded-lg border p-4">
               <Checkbox
                 id="use_chat_template"
@@ -402,6 +277,7 @@ export function Settings() {
                 </p>
               </div>
             </div>
+            )}
 
             {/* Parser LLM */}
             <div className="space-y-2">
@@ -441,20 +317,36 @@ export function Settings() {
             </div>
           </CardContent>
         </Card>
-
-        {/* Save Button */}
-        <div className="flex items-center gap-4">
-          <Button onClick={handleSaveProfile} disabled={saving}>
-            {saving ? 'Saving...' : 'Save Changes'}
-          </Button>
-          {saved && (
-            <div className="flex items-center gap-2 text-sm text-green-600">
-              <Check className="h-4 w-4" />
-              <span>Changes saved!</span>
-            </div>
-          )}
-        </div>
       </div>
     </Layout>
+  )
+}
+
+function SaveStatusIndicator({ status }: { status: SaveStatus }) {
+  if (status === 'idle') return null
+
+  if (status === 'saving') {
+    return (
+      <div className="flex shrink-0 items-center gap-1.5 pt-1 text-sm text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        <span>Saving...</span>
+      </div>
+    )
+  }
+
+  if (status === 'error') {
+    return (
+      <div className="flex shrink-0 items-center gap-1.5 pt-1 text-sm text-destructive">
+        <AlertCircle className="h-3.5 w-3.5" />
+        <span>Failed to save</span>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex shrink-0 items-center gap-1.5 pt-1 text-sm text-green-600">
+      <Check className="h-3.5 w-3.5" />
+      <span>All changes saved</span>
+    </div>
   )
 }

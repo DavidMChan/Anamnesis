@@ -24,6 +24,7 @@ interface MockAuthContext {
   signOut: ReturnType<typeof vi.fn>
   signInWithGoogle: ReturnType<typeof vi.fn>
   updateProfile: ReturnType<typeof vi.fn>
+  fetchMaskedApiKey: ReturnType<typeof vi.fn>
   storeApiKey: ReturnType<typeof vi.fn>
   clearApiKey: ReturnType<typeof vi.fn>
   refreshMaskedApiKeys: ReturnType<typeof vi.fn>
@@ -47,6 +48,7 @@ const createMockAuthContext = (overrides: Partial<MockAuthContext> = {}): MockAu
   signOut: vi.fn(),
   signInWithGoogle: vi.fn(),
   updateProfile: vi.fn().mockResolvedValue({ error: null }),
+  fetchMaskedApiKey: vi.fn().mockResolvedValue(null),
   storeApiKey: vi.fn().mockResolvedValue({ error: null, success: true }),
   clearApiKey: vi.fn().mockResolvedValue({ error: null, success: true }),
   refreshMaskedApiKeys: vi.fn().mockResolvedValue({ openrouter: null, vllm: null }),
@@ -208,11 +210,14 @@ describe('Settings Page - API Key Management', () => {
       const user = userEvent.setup()
       renderSettings(mockAuthContext)
 
-      // Save without entering edit mode (just profile changes)
-      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+      // Enter edit mode and type key
+      const addButtons = screen.getAllByRole('button', { name: 'Add' })
+      await user.click(addButtons[0])
+      await user.type(screen.getByPlaceholderText('Enter API key...'), 'sk-newkey12345678')
+      await user.click(screen.getByRole('button', { name: 'Save' }))
 
       await waitFor(() => {
-        expect(screen.getByText('Changes saved!')).toBeInTheDocument()
+        expect(screen.getByText('All changes saved')).toBeInTheDocument()
       })
     })
   })
@@ -234,17 +239,34 @@ describe('Settings Page - API Key Management', () => {
     })
   })
 
-  describe('Profile Updates', () => {
-    it('updates profile when saving', async () => {
+  describe('Profile Autosave', () => {
+    it('does not save on initial load', async () => {
+      renderSettings(mockAuthContext)
+
+      // Give the autosave effect and its debounce a chance to fire, if it were going to.
+      await new Promise((resolve) => setTimeout(resolve, 1000))
+
+      expect(mockAuthContext.updateProfile).not.toHaveBeenCalled()
+    })
+
+    it('saves profile changes automatically, without a manual save click', async () => {
       const user = userEvent.setup()
       renderSettings(mockAuthContext)
 
-      // Save
-      await user.click(screen.getByRole('button', { name: 'Save Changes' }))
+      const nameInput = screen.getByLabelText('Display Name')
+      await user.clear(nameInput)
+      await user.type(nameInput, 'New Name')
 
-      await waitFor(() => {
-        expect(mockAuthContext.updateProfile).toHaveBeenCalled()
-      })
+      await waitFor(
+        () => {
+          expect(mockAuthContext.updateProfile).toHaveBeenCalledWith(
+            expect.objectContaining({ name: 'New Name' })
+          )
+        },
+        { timeout: 3000 }
+      )
+
+      expect(screen.getByText('All changes saved')).toBeInTheDocument()
     })
   })
 })

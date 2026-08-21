@@ -23,6 +23,7 @@ interface MockAuthContext {
   signOut: ReturnType<typeof vi.fn>
   signInWithGoogle: ReturnType<typeof vi.fn>
   updateProfile: ReturnType<typeof vi.fn>
+  fetchMaskedApiKey: ReturnType<typeof vi.fn>
   storeApiKey: ReturnType<typeof vi.fn>
   clearApiKey: ReturnType<typeof vi.fn>
   refreshMaskedApiKeys: ReturnType<typeof vi.fn>
@@ -46,6 +47,7 @@ const createMockAuthContext = (overrides: Partial<MockAuthContext> = {}): MockAu
   signOut: vi.fn(),
   signInWithGoogle: vi.fn(),
   updateProfile: vi.fn().mockResolvedValue({ error: null }),
+  fetchMaskedApiKey: vi.fn().mockResolvedValue(null),
   storeApiKey: vi.fn().mockResolvedValue({ error: null, success: true }),
   clearApiKey: vi.fn().mockResolvedValue({ error: null, success: true }),
   refreshMaskedApiKeys: vi.fn().mockResolvedValue({ openrouter: null, vllm: null }),
@@ -94,26 +96,25 @@ describe('Settings Page - Max Concurrent Tasks', () => {
     expect(input).toHaveValue(25)
   })
 
-  it('saves max_concurrent_tasks to llm_config when form is submitted', async () => {
-    const user = userEvent.setup()
+  it('autosaves max_concurrent_tasks to llm_config after it changes', async () => {
     renderSettings(mockAuthContext)
 
     // Change the value using fireEvent.change for number inputs
     const input = screen.getByLabelText('Max Concurrent Tasks')
     fireEvent.change(input, { target: { value: '50' } })
 
-    // Save
-    await user.click(screen.getByRole('button', { name: 'Save Changes' }))
-
-    await waitFor(() => {
-      expect(mockAuthContext.updateProfile).toHaveBeenCalledWith(
-        expect.objectContaining({
-          llm_config: expect.objectContaining({
-            max_concurrent_tasks: 50,
-          }),
-        })
-      )
-    })
+    await waitFor(
+      () => {
+        expect(mockAuthContext.updateProfile).toHaveBeenCalledWith(
+          expect.objectContaining({
+            llm_config: expect.objectContaining({
+              max_concurrent_tasks: 50,
+            }),
+          })
+        )
+      },
+      { timeout: 3000 }
+    )
   })
 
   it('validates min=1 for concurrency input', async () => {
