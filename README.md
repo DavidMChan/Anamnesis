@@ -1,80 +1,58 @@
+<div align="center">
+
 # Anamnesis
 
-**Anamnesis** is a web-based research platform for running opinion surveys on LLM-simulated human personas. Researchers define survey instruments, execute them against large pools of naturalistic backstories via LLM inference, and analyze the resulting response distributions - all through a unified interface.
+### An Open-Source Platform for Large-Scale Backstory-Conditioned Survey Simulation
 
-The platform operationalizes the *Virtual Personas* methodology, Anthology, enabling systematic, large-scale evaluation of persona simulation at the level of individual response distributions rather than aggregate population statistics.
+<span style="white-space:nowrap;">Song-Ze Yu</span>&nbsp;·
+<span style="white-space:nowrap;">Joseph Suh</span>&nbsp;·
+<span style="white-space:nowrap;">Serina Chang</span>&nbsp;·
+<span style="white-space:nowrap;">David M. Chan</span>
+
+<sub>Berkeley Artificial Intelligence Research (BAIR) · University of California, Berkeley</sub>
+
+<br/>
+
+[![arXiv](https://img.shields.io/badge/arXiv-2607.10628-b31b1b.svg?logo=arxiv&logoColor=white)](https://arxiv.org/abs/2607.10628)
+[![EMNLP 2026 Demo](https://img.shields.io/badge/EMNLP_2026-Demo_Track-success.svg)](https://arxiv.org/abs/2607.10628)
+[![Live demo](https://img.shields.io/badge/Live_demo-simulate.group-0071e3.svg)](https://simulate.group/)
+[![Demo video](https://img.shields.io/badge/YouTube-Demo_video-red.svg?logo=youtube&logoColor=white)](https://youtu.be/j5yrnJl287g?list=PL0RJ6nWgJqURxHgh0X4TJNPzUIP_jFO3y)
+[![License: AGPL v3](https://img.shields.io/badge/License-AGPLv3-blue.svg)](LICENSE)
+
+</div>
+
+<p align="center">
+  <a href="https://simulate.group/">
+    <img src="assets/cover.jpg" alt="Anamnesis platform preview" width="100%">
+  </a>
+</p>
+
+---
+## TL;DR
+
+Simulating representative virtual persona groups with LLMs is one of the hottest topics in the Bay Area right now. Companies like Simile, Synthetic Users, Expected Parrot (YC F25), and Artificial Societies show the potential of LLM population simulation - but most remain closed-source.
+
+With Anamnesis, we enable non-technical users and researchers to prototype and stress-test surveys on virtual populations built from narrative backstories - drawing on our prior work, Anthology and Alterity - and study how different demographic groups might respond, without writing a line of code.
+
+We support demographic resampling, open-ended responses, and even multimodal surveys with images and audio. In experiments on Pew Research Center surveys and the New Yorker Caption Contest, backstory-conditioned virtual populations matched real human response distributions more closely than standard persona prompting or LLM-as-a-judge approaches.
 
 > *Anamnesis* (ἀνάμνησις): the Platonic concept of recollection - recovering knowledge from within. Here, backstories serve as that inner context, eliciting a specific human perspective from within the model.
 
 ---
 
-## Key Features
+## How It Works
 
-- **Survey Builder** - Create surveys with MCQ, multi-select, open-response, and ranking questions; attach image/audio media to questions and answer options
-- **Persona Targeting** - Filter backstories by demographic dimensions (age, gender, political affiliation, education, etc.) with distribution-balanced or top-K sampling
-- **Two Inference Algorithms** - *Anthology* (backstory-conditioned, sequential context accumulation) and *Zero-Shot Baseline* (demographic prompt, N-sample averaging)
-- **Demographic Survey Tool** - Define custom demographic dimensions; populate them across the backstory pool using LLM inference (N-sample or logprobs mode)
-- **Real-Time Progress** - Monitor active runs with live progress and per-task status
-- **Results & Export** - Bar/pie charts, response tables, Borda-score ranking summaries, CSV export with demographic breakdowns
-- **API Key Vault** - Per-user encrypted API key storage (Supabase Vault); supports OpenRouter and self-hosted vLLM
+<p align="center">
+  <img src="frontend/src/assets/arch.png" alt="Anamnesis method overview" width="100%">
+</p>
 
----
-
-## Architecture
-
-```
-┌───────────────────────────────────────────────────────────────┐
-│  Browser (React + TypeScript + Vite)                          │
-│  Survey Builder │ Backstory Browser │ Results Dashboard       │
-└────────────────────────┬──────────────────────────────────────┘
-                         │  Supabase JS SDK (RLS-enforced)
-┌────────────────────────▼──────────────────────────────────────┐
-│  Supabase (PostgreSQL + Auth + Vault)                         │
-│  users │ backstories │ surveys │ survey_runs │ survey_tasks   │
-└──────────┬─────────────────────────────────────────────────────┘
-           │  Service Role (worker/dispatcher)
-┌──────────▼────────────┐      ┌─────────────────────────────────┐
-│  Dispatcher (Python)  │──────▶  RabbitMQ                       │
-│  Poll → Throttle      │      │  survey_tasks queue             │
-│  → Publish tasks      │      └──────────────┬──────────────────┘
-└───────────────────────┘                     │
-                                   ┌──────────▼──────────┐
-                                   │  Worker(s) (Python) │  ×N
-                                   │  Async, scalable    │
-                                   └──────────┬──────────┘
-                                              │  API calls
-                                   ┌──────────▼──────────┐
-                                   │  LLM Providers      │
-                                   │  OpenRouter / vLLM  │
-                                   └─────────────────────┘
-```
-
----
-
-## Tech Stack
-
-| Layer | Technology |
-|-------|-----------|
-| Frontend | React 18, TypeScript, Vite, Tailwind CSS v4, shadcn/ui |
-| Charts | Recharts |
-| Database | Supabase (PostgreSQL 15, Row-Level Security, Vault) |
-| Task Queue | RabbitMQ 3 |
-| Worker | Python 3.11, asyncio, aio_pika |
-| LLM (cloud) | OpenRouter (OpenAI-compatible API, 70+ models) |
-| LLM (local) | vLLM (guided decoding, logprobs) |
-| Media Storage | Wasabi (S3-compatible) |
-| Containers | Docker Compose |
+Backstories are generated once, offline, by Anthology and Alterity: each virtual participant is built from a full narrative, not a demographic label. Anamnesis samples from this pool (currently 34,907 backstories) and runs surveys against it end-to-end in the browser - construct, target, simulate, analyze.
 
 ---
 
 ## Quick Start
 
-### Prerequisites
-
-- Node.js 18+, Python 3.11+
-- Supabase project (free tier works)
-- Docker + Docker Compose (for worker stack)
-- OpenRouter API key **or** vLLM endpoint
+Requires Node 18+, Python 3.11+, a Supabase project, Docker, and an OpenRouter API key or vLLM endpoint.
 
 ### 1. Frontend
 
@@ -104,37 +82,7 @@ docker compose up -d
 docker compose up -d --scale worker=4   # scale to 4 parallel workers
 ```
 
-LLM API keys are stored per-user in the Supabase Vault via the Settings page.
-
----
-
-## Survey Algorithms
-
-### Anthology (Default)
-
-Replicates the backstory-conditioned approach from our EACL 2024 paper:
-
-1. Prepend the full backstory to the first question
-2. Record the LLM's answer
-3. For each subsequent question, prepend all prior Q&A pairs (context accumulation)
-4. Parse answers using structured output (Tier 1) + parser LLM fallback (Tier 2)
-
-This promotes response consistency across questions - the LLM "remembers" what it has said.
-
-### Zero-Shot Baseline
-
-Constructs a short demographic description from the backstory's structured attributes (age, gender, education, etc.) and asks each question N times independently. The final answer is the majority vote across N trials. Used for ablation comparison against the full backstory-conditioned method.
-
----
-
-## Demographic Surveys
-
-Anamnesis can populate custom demographic attributes across the backstory pool by running dedicated demographic surveys:
-
-1. Define a dimension (e.g., `political_affiliation` with options `Democrat / Republican / Independent`)
-2. Run in **N-sample mode** (ask N times, compute frequency distribution) or **logprobs mode** (extract token probability distribution in a single call - ~20× cheaper, requires vLLM)
-3. The resulting distribution is stored in each backstory's `demographics` JSONB field
-4. Future opinion surveys can filter and sample backstories by this dimension
+LLM API keys are stored per-user in the Supabase Vault via the Settings page, scoped per named endpoint.
 
 ---
 
@@ -144,52 +92,55 @@ Anamnesis can populate custom demographic attributes across the backstory pool b
 anamnesis/
 ├── frontend/src/
 │   ├── pages/          # 14 route pages
-│   ├── components/     # UI, layout, surveys, results, demographic-surveys
-│   ├── lib/            # surveyRunner, backstoryFilters, backstoryScoring,
-│   │                   # demographicPrompt, hungarianMatching, media, apiKeyUtils
-│   ├── hooks/          # useAuth, useSurveyRun
-│   └── types/          # database.ts (all TypeScript types)
-├── worker/src/
-│   ├── main.py         # Async event loop + message handler
-│   ├── dispatcher.py   # DB polling, concurrency throttling
-│   ├── worker.py       # TaskProcessor + 3 FillingStrategies
-│   ├── llm.py          # UnifiedLLMClient (OpenRouter + vLLM)
-│   ├── prompt.py       # Anthology prompt format
-│   ├── parser.py       # Tier 2 MCQ parser LLM
-│   └── logprobs.py     # Token log-prob → distribution
-├── supabase/migrations/ # 23 SQL migrations
-└── docker-compose.yml  # RabbitMQ + Dispatcher + Worker
+│   ├── components/     # ui, layout, surveys (incl. batch dialogs), results,
+│   │                   # demographic-surveys, settings
+│   ├── lib/             # surveyRunner, backstoryFilters, backstoryScoring,
+│   │                   # demographicPrompt, hungarianMatching, bayesianStability,
+│   │                   # csvExport, llmConfig, apiKeyUtils, media
+│   ├── hooks/           # useAuth, useSurveyRun, useBatchSelection
+│   └── types/           # database.ts (all TypeScript types)
+├── worker/
+│   ├── main.py          # Async event loop + message handler
+│   └── src/
+│       ├── dispatcher.py    # DB polling, concurrency throttling
+│       ├── worker.py        # TaskProcessor + FillingStrategies
+│       ├── llm.py           # UnifiedLLMClient (OpenRouter + vLLM)
+│       ├── prompt.py        # Anthology prompt format
+│       ├── parser.py        # Tier 2 MCQ parser LLM
+│       ├── logprobs.py      # Token log-prob → distribution
+│       └── bayesian_stability.py  # Convergence/stability checks
+├── supabase/migrations/ # 27 SQL migrations
+└── docker-compose.yml   # RabbitMQ + Dispatcher + Worker
 ```
 
 ---
 
-## Research Context
+## Citation
 
-This platform is part of the **Virtual Personas** research program at UC Berkeley's BAIR lab (Prof. Trevor Darrell, postdoc David Chan), exploring how language models can be conditioned with naturalistic backstories to simulate individual human perspectives rather than aggregate population behavior.
+Accepted to the **EMNLP 2026 Demo Track**. If you use Anamnesis in your research, please cite:
 
-### Related Work
-
-- **Anthology** (`../anthology/`) - Original implementation for *"Virtual Personas for Language Models via an Anthology of Backstories"* (EACL 2024, arXiv:2407.06576)
-- **Alterity** (`../alterity-private-main/`) - Follow-up research on belief consistency using LLM-interview-generated backstories
+```bibtex
+@inproceedings{yu2026anamnesis,
+  title     = {Anamnesis: An Open-Source Platform for Large-Scale Backstory-Conditioned Survey Simulation},
+  author    = {Yu, Song-Ze and Suh, Joseph and Chang, Serina and Chan, David M.},
+  booktitle = {Proceedings of the 2026 Conference on Empirical Methods in Natural Language Processing: System Demonstrations},
+  year      = {2026},
+  note      = {arXiv:2607.10628}
+}
+```
 
 ---
 
 ## Development
 
 ```bash
-# Unit tests (frontend)
-cd frontend && npm run test
-
-# E2E tests (frontend)
-npm run test:e2e
-
-# Worker tests
-cd worker && pytest
-
-# Full CI equivalent
-# See .github/workflows/
+cd frontend && npm run test       # unit tests
+npm run test:e2e                  # e2e tests
+cd worker && pytest               # worker tests
 ```
 
-See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md) for production deployment on Ubuntu 24.04.
+---
 
-Updated: 7/14/2026
+Licensed under [AGPL-3.0](LICENSE).
+
+Updated: 8/25/2026
