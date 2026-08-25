@@ -7,6 +7,7 @@ import {
   Database,
   ExternalLink,
   FileText,
+  Github,
   LineChart,
   Users,
 } from 'lucide-react'
@@ -387,7 +388,11 @@ export function Home() {
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
               <Link to="/about" className="transition-colors hover:text-foreground">About</Link>
               <a href="https://arxiv.org/abs/2407.06576" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-foreground">Research</a>
-              <span>© {new Date().getFullYear()} Anamnesis</span>
+              <a href="https://github.com/DavidMChan/Anamnesis" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 transition-colors hover:text-foreground">
+                <Github className="h-4 w-4" />
+                GitHub
+              </a>
+              <span>© {new Date().getFullYear()} The Regents of the University of California</span>
             </div>
           </div>
         </footer>

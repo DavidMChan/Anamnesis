@@ -79,6 +79,23 @@ export function About() {
                         </div>
                     </section>
 
+                    {/* Open Source Section */}
+                    <section className="space-y-6">
+                        <h2 className="text-2xl font-semibold">Open Source</h2>
+                        <p className="text-muted-foreground leading-relaxed">
+                            Anamnesis is open source. Browse the code, file an issue, or contribute on GitHub:
+                        </p>
+                        <a
+                            href="https://github.com/DavidMChan/Anamnesis"
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-3 p-4 rounded-xl bg-card border border-border hover:bg-muted/50 transition-colors"
+                        >
+                            <Github className="h-5 w-5 text-primary shrink-0" />
+                            <span className="font-medium">DavidMChan/Anamnesis</span>
+                        </a>
+                    </section>
+
                     {/* Creator Section */}
                     <section className="space-y-6">
                         <h2 className="text-2xl font-semibold">Team</h2>
