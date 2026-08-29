@@ -144,4 +144,4 @@ cd worker && pytest               # worker tests
 Copyright (C) 2026 The Regents of the University of California.
 Licensed under [AGPL-3.0](LICENSE).
 
-Updated: 8/26/2026
+Updated: 8/28/2026
