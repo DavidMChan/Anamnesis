@@ -1,15 +1,10 @@
 import { Link, Navigate } from 'react-router-dom'
 import {
   ArrowRight,
-  BarChart3,
-  BookOpen,
-  Check,
-  Database,
   ExternalLink,
-  FileText,
   Github,
-  LineChart,
-  Users,
+  Sparkles,
+  UserRound,
 } from 'lucide-react'
 import { useAuthContext } from '@/contexts/AuthContext'
 import { PublicLayout } from '@/components/layout/Layout'
@@ -21,45 +16,65 @@ import architectureDiagram from '@/assets/arch.png'
 
 const HERO_WORDS = ['demographics', 'cultural backgrounds', 'socioeconomic statuses', 'life philosophies']
 
-const METHOD_STEPS = [
+const ATP_RESULTS = [
   {
-    number: '01',
-    icon: Database,
-    title: 'Build a diverse persona pool',
-    description:
-      'Generate open-ended life histories that go beyond demographics to formative experiences, values, and worldview.',
-    technical: 'Backstory generation and demographic annotation',
+    conditioning: 'BIO',
+    matching: 'n/a',
+    wave34: '0.258',
+    fro34: '1.556',
+    wave92: '0.346',
+    fro92: '2.078',
+    wave99: '0.277',
+    fro99: '1.229',
   },
   {
-    number: '02',
-    icon: FileText,
-    title: 'Run a study with virtual participants',
-    description:
-      'Condition each response on a single backstory, then run the full survey across your sampled population.',
-    technical: 'Persona conditioning and distributed execution',
+    conditioning: 'QA',
+    matching: 'n/a',
+    wave34: '0.235',
+    fro34: '1.481',
+    wave92: '0.392',
+    fro92: '1.719',
+    wave99: '0.180',
+    fro99: '1.475',
   },
   {
-    number: '03',
-    icon: BarChart3,
-    title: 'Compare patterns, not anecdotes',
-    description:
-      'Analyze response distributions and correlations, then compare them against human survey baselines where available.',
-    technical: 'Distributional and covariance-aware evaluation',
-  },
-]
-
-const METRICS = [
-  {
-    name: 'Wasserstein distance',
-    meaning: 'How closely the simulated response distribution matches the human one.',
+    conditioning: 'Anamnesis',
+    matching: 'max weight',
+    wave34: '0.160',
+    fro34: '0.837',
+    wave92: '0.251',
+    fro92: '1.603',
+    wave99: '0.148',
+    fro99: '1.026',
   },
   {
-    name: 'Frobenius norm',
-    meaning: 'How well the correlations between answers match the human data.',
+    conditioning: 'Anamnesis',
+    matching: 'greedy',
+    wave34: '0.147',
+    fro34: '0.964',
+    wave92: '0.218',
+    fro92: '1.414',
+    wave99: '0.139',
+    fro99: '1.352',
+  },
+  {
+    conditioning: 'Human',
+    matching: '—',
+    wave34: '0.057',
+    fro34: '0.418',
+    wave92: '0.091',
+    fro92: '0.411',
+    wave99: '0.081',
+    fro99: '0.327',
   },
 ]
 
 const PUBLICATIONS = [
+  {
+    title: 'Anamnesis',
+    description: 'An Open-Source Platform for Large-Scale Backstory-Conditioned Survey Simulation',
+    href: 'https://arxiv.org/abs/2607.10628',
+  },
   {
     title: 'Anthology',
     description: 'Virtual Personas for Language Models via an Anthology of Backstories',
@@ -110,8 +125,8 @@ export function Home() {
             </Link>
 
             <div className="hidden items-center gap-7 text-sm font-medium text-muted-foreground lg:flex">
-              <a href="#approach" className="transition-colors hover:text-foreground">Why backstories</a>
-              <a href="#method" className="transition-colors hover:text-foreground">How it works</a>
+              <a href="#difference" className="transition-colors hover:text-foreground">The difference</a>
+              <a href="#system" className="transition-colors hover:text-foreground">Under the hood</a>
               <a href="#evidence" className="transition-colors hover:text-foreground">Evidence</a>
             </div>
 
@@ -128,10 +143,16 @@ export function Home() {
             <div className="pointer-events-none absolute inset-0 home-grid opacity-25" aria-hidden="true" />
             <div className="relative mx-auto grid max-w-7xl items-center gap-12 px-4 py-16 sm:px-6 sm:py-20 lg:grid-cols-[1.02fr_0.98fr] lg:gap-16 lg:px-8 lg:py-24">
               <div className="max-w-2xl">
-                <p className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/8 px-3 py-1.5 text-sm font-medium text-blue-50">
-                  <Users className="h-4 w-4 text-brand-gold" aria-hidden="true" />
-                  An open-source platform for survey simulation
-                </p>
+                <a
+                  href="https://arxiv.org/abs/2607.10628"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/8 px-3 py-1.5 text-sm font-semibold text-blue-50 transition-colors hover:border-brand-gold/60 hover:text-brand-gold"
+                >
+                  EMNLP 2026 Demo <span className="text-white/35" aria-hidden="true">·</span> Read the paper
+                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span className="sr-only">(opens in a new tab)</span>
+                </a>
                 <h1 className="text-balance text-[clamp(2rem,4vw,3.5rem)] font-semibold leading-[1.06] tracking-[-0.03em]">
                   Conditioning LLMs to simulate representative virtual personas across
                   <span className="mt-2 block text-brand-gold">
@@ -144,7 +165,7 @@ export function Home() {
                   </span>
                 </h1>
                 <p className="mt-7 max-w-[62ch] text-pretty text-lg leading-8 text-blue-50/88 sm:text-xl">
-                  Anamnesis builds each virtual participant from a full narrative backstory, so researchers can survey a diverse sample instead of reducing people to a few demographic labels.
+                  An open-source interface for social scientists, product researchers, and NLP teams to run backstory-conditioned survey simulations.
                 </p>
                 <div className="mt-9 flex flex-col gap-3 sm:flex-row">
                   <Link
@@ -154,23 +175,19 @@ export function Home() {
                     Access the platform <ArrowRight className="h-4 w-4" aria-hidden="true" />
                   </Link>
                   <a
-                    href="#method"
+                    href="#difference"
                     className={cn(buttonVariants({ variant: 'outline', size: 'lg' }), 'border-white/30 bg-transparent text-white hover:bg-white/10 hover:text-white')}
                   >
                     See how it works
                   </a>
                 </div>
-                <p className="mt-8 text-sm text-blue-100/72">
-                  Designed for social scientists, product researchers, and NLP teams.
-                </p>
               </div>
 
               <figure className="relative mx-auto w-full max-w-xl lg:max-w-none">
                 <div className="absolute -inset-4 rounded-[2rem] border border-white/10" aria-hidden="true" />
                 <div className="relative overflow-hidden rounded-2xl bg-white p-4 shadow-[0_30px_80px_rgb(0_0_0_/_0.28)] sm:p-6">
-                  <div className="mb-4 flex items-center justify-between gap-4 border-b border-slate-200 pb-3 text-left text-xs font-semibold text-slate-500">
+                  <div className="mb-4 border-b border-slate-200 pb-3 text-left text-xs font-semibold text-slate-500">
                     <span>The idea in one glance</span>
-                    <span className="rounded-full bg-blue-50 px-2.5 py-1 text-brand-blue">Backstory conditioning</span>
                   </div>
                   <img
                     src={conceptDiagram}
@@ -180,117 +197,114 @@ export function Home() {
                     className="h-auto w-full"
                   />
                 </div>
-                <figcaption className="mt-5 max-w-lg text-sm leading-6 text-blue-100/78">
-                  One language model becomes many participants, each answering from a full life history rather than a short demographic prompt.
+              </figure>
+            </div>
+          </section>
+
+          <section id="difference" className="scroll-mt-18 border-b border-border bg-background px-4 py-20 sm:px-6 sm:py-28 lg:px-8">
+            <div className="mx-auto max-w-7xl">
+              <div className="max-w-3xl">
+                <p className="text-sm font-semibold uppercase tracking-[0.16em] text-primary">How Anamnesis differs</p>
+                <h2 className="mt-4 text-balance text-3xl font-semibold tracking-tight sm:text-5xl">
+                  Random labels don’t reproduce real populations.
+                </h2>
+              </div>
+
+              <figure className="mt-12 grid overflow-hidden rounded-3xl border border-border bg-white shadow-sm lg:grid-cols-2">
+                <div className="flex flex-col p-6 sm:p-10">
+                  <div className="flex items-center justify-between gap-4">
+                    <h3 className="text-xl font-semibold text-slate-900">Typical approach</h3>
+                    <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-semibold text-slate-600">Top-down</span>
+                  </div>
+                  <div className="mt-10 flex flex-col items-center" aria-label="Many random combinations of demographic attributes are each expanded into a story, creating a synthetic persona pool">
+                    <div className="flex flex-wrap justify-center gap-2">
+                      {['Age: 42', 'Gender: Woman', 'Education: College', 'Politics: Independent', 'Income: $50–75K', 'Region: Midwest'].map((label) => (
+                        <span key={label} className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 font-mono text-xs text-slate-600 shadow-sm">
+                          {label}
+                        </span>
+                      ))}
+                    </div>
+                    <span className="my-3 text-xl text-slate-300" aria-hidden="true">↓</span>
+                    <div className="grid w-full max-w-md grid-cols-3 gap-2" aria-label="Multiple generated personas">
+                      {[
+                        'I’m a 42-year-old college-educated woman.',
+                        'I’m an Independent woman from the Midwest.',
+                        'I’m a college graduate earning $50–75K.',
+                      ].map((story) => (
+                        <div key={story} className="flex min-h-32 flex-col items-center justify-center rounded-xl border border-dashed border-slate-300 bg-white px-3 py-3 text-center">
+                          <span className="flex h-10 w-10 items-center justify-center rounded-full bg-slate-200 text-slate-500">
+                            <UserRound className="h-4 w-4" aria-hidden="true" />
+                          </span>
+                          <span className="mt-2 text-xs font-medium leading-4 text-slate-500">“{story}”</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                  <p className="mx-auto mt-auto max-w-sm pt-8 text-center text-sm font-medium leading-6 text-slate-600">
+                    Random combinations do not reproduce the joint distribution of a real population.
+                  </p>
+                </div>
+
+                <div className="flex flex-col border-t border-border bg-blue-50/60 p-6 sm:p-10 lg:border-l lg:border-t-0">
+                  <div className="flex items-center justify-between gap-4">
+                    <h3 className="text-xl font-semibold text-brand-navy">Anamnesis</h3>
+                    <span className="rounded-full bg-brand-navy px-3 py-1 text-xs font-semibold text-white">Bottom-up</span>
+                  </div>
+                  <div className="relative mt-10 rounded-2xl border border-blue-200 bg-blue-50/40 px-4 pb-5 pt-7 sm:px-5" aria-label="Anthology algorithm: sample many narratives from an open-ended prompt, then survey their demographics">
+                    <span className="absolute -top-3 left-4 rounded-full border border-blue-200 bg-white px-3 py-1 text-xs font-semibold text-brand-blue">
+                      Anthology algorithm
+                    </span>
+                    <div className="flex flex-col items-center">
+                      <div className="rounded-md border border-blue-200 bg-white px-4 py-2 font-mono text-xs text-brand-navy shadow-sm">
+                        “Tell me about yourself.”
+                      </div>
+                      <span className="my-3 text-xl text-brand-blue" aria-hidden="true">↓</span>
+                      <div className="relative grid w-full max-w-md grid-cols-3 gap-2" aria-label="Multiple sampled narrative personas">
+                        <Sparkles className="absolute -right-3 -top-3 z-10 h-7 w-7 rounded-full bg-brand-gold p-1.5 text-brand-navy" aria-hidden="true" />
+                        {[
+                          'Family restaurant',
+                          'Transit mechanic',
+                          'Raised by grandmother',
+                        ].map((story) => (
+                          <div key={story} className="flex min-h-28 flex-col items-center justify-center rounded-xl border border-blue-200 bg-white px-2 py-3 text-center shadow-sm">
+                            <span className="flex h-10 w-10 items-center justify-center rounded-full bg-brand-navy text-white">
+                              <UserRound className="h-4 w-4" aria-hidden="true" />
+                            </span>
+                            <span className="mt-2 text-xs font-medium leading-4 text-brand-navy">{story}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <span className="my-3 text-xl text-brand-blue" aria-hidden="true">↓</span>
+                      <div className="rounded-lg bg-brand-navy px-4 py-2 text-xs font-semibold text-white">
+                        Demographic survey
+                      </div>
+                      <div className="mt-3 flex flex-wrap justify-center gap-2">
+                        {['Age', 'Gender', 'Education', 'Politics'].map((label) => (
+                          <span key={label} className="rounded-md border border-blue-200 bg-white px-2.5 py-1.5 text-xs font-semibold text-brand-navy">{label}</span>
+                        ))}
+                      </div>
+                    </div>
+                  </div>
+                  <p className="mx-auto mt-auto max-w-sm pt-8 text-center text-sm font-semibold leading-6 text-brand-navy">
+                    The narratives define the people; demographics are used afterward for sampling.
+                  </p>
+                </div>
+                <figcaption className="sr-only">
+                  Typical methods randomly combine demographic labels and invent personas. Anthology samples narrative backstories first; Anamnesis then uses demographic annotations to match personas to a target population.
                 </figcaption>
               </figure>
             </div>
           </section>
 
-          <section aria-label="Platform flow" className="border-b border-border bg-background">
-            <div className="mx-auto flex max-w-7xl flex-col gap-4 px-4 py-6 text-sm sm:px-6 md:flex-row md:items-center md:justify-between lg:px-8">
-              <p className="font-semibold text-foreground">From research question to interpretable results</p>
-              <ol className="flex flex-wrap items-center gap-x-3 gap-y-2 text-muted-foreground">
-                <li>Define a sample</li>
-                <li aria-hidden="true" className="text-primary">→</li>
-                <li>Run virtual participants</li>
-                <li aria-hidden="true" className="text-primary">→</li>
-                <li>Analyze distributions</li>
-              </ol>
-            </div>
-          </section>
-
-          <section id="approach" className="scroll-mt-18 bg-background px-4 py-20 sm:px-6 sm:py-28 lg:px-8">
-            <div className="mx-auto grid max-w-7xl gap-14 lg:grid-cols-[minmax(0,1.1fr)_minmax(20rem,0.9fr)] lg:items-start lg:gap-24">
-              <div>
-                <h2 className="max-w-[18ch] text-balance text-3xl font-semibold tracking-tight sm:text-5xl">
-                  People are more than a demographic profile.
-                </h2>
-                <div className="mt-8 max-w-[68ch] space-y-5 text-pretty text-base leading-7 text-muted-foreground sm:text-lg sm:leading-8">
-                  <p>
-                    Labels like age, location, and gender can define a sample, but they cannot stand in for a person. Prompted with labels alone, models tend to fall back on stereotypical, flattened responses.
-                  </p>
-                  <p>
-                    Anamnesis conditions models on narrative backstories instead. A life history carries context that a label cannot, and the platform runs it across a whole sample rather than one chat at a time.
-                  </p>
-                </div>
-              </div>
-
-              <aside className="rounded-2xl border border-border bg-muted/35 p-6 sm:p-8" aria-labelledby="research-value-heading">
-                <div className="flex items-center gap-3">
-                  <BookOpen className="h-6 w-6 text-primary" aria-hidden="true" />
-                  <h3 id="research-value-heading" className="text-xl font-semibold">What backstories add</h3>
-                </div>
-                <ul className="mt-7 space-y-6">
-                  <li className="flex gap-4">
-                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground"><Check className="h-3.5 w-3.5" aria-hidden="true" /></span>
-                    <div>
-                      <p className="font-semibold">Within-group variation</p>
-                      <p className="mt-1 text-sm leading-6 text-muted-foreground">Personas can share demographics without collapsing into one point of view.</p>
-                    </div>
-                  </li>
-                  <li className="flex gap-4">
-                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground"><Check className="h-3.5 w-3.5" aria-hidden="true" /></span>
-                    <div>
-                      <p className="font-semibold">Coherent individual context</p>
-                      <p className="mt-1 text-sm leading-6 text-muted-foreground">Each response stays grounded in one consistent life history.</p>
-                    </div>
-                  </li>
-                  <li className="flex gap-4">
-                    <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-primary text-primary-foreground"><Check className="h-3.5 w-3.5" aria-hidden="true" /></span>
-                    <div>
-                      <p className="font-semibold">Sample-level analysis</p>
-                      <p className="mt-1 text-sm leading-6 text-muted-foreground">Researchers can examine distributions and the correlations between responses across a sample.</p>
-                    </div>
-                  </li>
-                </ul>
-              </aside>
-            </div>
-          </section>
-
-          <section id="method" className="scroll-mt-18 border-y border-border bg-muted/25 px-4 py-20 sm:px-6 sm:py-28 lg:px-8">
-            <div className="mx-auto max-w-7xl">
-              <div className="flex flex-col justify-between gap-5 md:flex-row md:items-end">
-                <div>
-                  <h2 className="max-w-[18ch] text-balance text-3xl font-semibold tracking-tight sm:text-5xl">A study workflow, not a prompt trick.</h2>
-                </div>
-                <p className="max-w-xl text-pretty text-base leading-7 text-muted-foreground sm:text-lg">
-                  The platform turns backstory-conditioned simulation into a repeatable pipeline, from sampling through statistical analysis.
-                </p>
-              </div>
-
-              <ol className="mt-14 border-t border-border">
-                {METHOD_STEPS.map(({ number, icon: Icon, title, description, technical }) => (
-                  <li key={number} className="grid gap-5 border-b border-border py-8 sm:grid-cols-[4rem_minmax(0,0.7fr)_minmax(0,1fr)] sm:gap-8 sm:py-10">
-                    <span className="text-sm font-semibold tabular-nums text-primary">{number}</span>
-                    <div className="flex items-start gap-4">
-                      <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-                        <Icon className="h-5 w-5" aria-hidden="true" />
-                      </span>
-                      <h3 className="pt-1.5 text-xl font-semibold leading-7">{title}</h3>
-                    </div>
-                    <div>
-                      <p className="max-w-[60ch] leading-7 text-muted-foreground">{description}</p>
-                      <p className="mt-3 text-sm font-medium text-foreground">Technical layer: {technical}</p>
-                    </div>
-                  </li>
-                ))}
-              </ol>
-            </div>
-          </section>
-
-          <section className="bg-background px-4 py-20 sm:px-6 sm:py-28 lg:px-8">
+          <section id="system" className="scroll-mt-18 bg-background px-4 py-20 sm:px-6 sm:py-28 lg:px-8">
             <div className="mx-auto max-w-7xl">
               <div className="grid gap-6 lg:grid-cols-[0.7fr_1.3fr] lg:items-end">
                 <div>
                   <h2 className="text-balance text-3xl font-semibold tracking-tight sm:text-4xl">Under the hood</h2>
                   <p className="mt-4 max-w-[50ch] text-pretty leading-7 text-muted-foreground">
-                    Anamnesis connects survey construction and demographic targeting to a distributed execution engine, then returns results for sample-level analysis.
+                    Anthology generates the backstories. Anamnesis samples them, runs the survey, and analyzes the responses.
                   </p>
                 </div>
-                <p className="text-sm leading-6 text-muted-foreground lg:text-right">
-                  Reference architecture shown below · Select the image to inspect the full-resolution diagram
-                </p>
               </div>
 
               <figure className="mt-10">
@@ -310,51 +324,161 @@ export function Home() {
                     className="h-auto w-full"
                   />
                 </a>
-                <figcaption className="mt-4 text-sm leading-6 text-muted-foreground">
-                  System architecture from persona generation through result analysis. The execution layer scales across workers and LLM providers, and every run keeps a snapshot of its survey and sampling configuration.
-                </figcaption>
               </figure>
             </div>
           </section>
 
-          <section id="evidence" className="scroll-mt-18 border-y border-border bg-brand-navy px-4 py-20 text-white sm:px-6 sm:py-28 lg:px-8">
-            <div className="mx-auto grid max-w-7xl gap-16 lg:grid-cols-[1.05fr_0.95fr] lg:gap-24">
-              <div>
-                <LineChart className="h-8 w-8 text-brand-gold" aria-hidden="true" />
-                <h2 className="mt-6 max-w-[18ch] text-balance text-3xl font-semibold tracking-tight sm:text-5xl">
-                  Validated against human survey distributions.
-                </h2>
-                <p className="mt-6 max-w-[62ch] text-pretty text-lg leading-8 text-blue-50/82">
-                  On three American Trends Panel waves from the Pew Research Center, backstory-conditioned personas match the human response distribution more closely than demographic-prompting baselines, and better preserve how answers correlate.
+          <section id="evidence" className="scroll-mt-18 border-y border-slate-200 bg-[#eef3f5] px-4 py-20 text-brand-navy sm:px-6 sm:py-28 lg:px-8">
+            <div className="mx-auto max-w-7xl">
+              <div className="grid gap-8 lg:grid-cols-[0.72fr_1.28fr] lg:items-end">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.2em] text-brand-blue">Evidence map</p>
+                  <h2 className="mt-3 max-w-[20ch] text-balance text-3xl font-semibold tracking-tight sm:text-5xl">
+                    Validated against human survey distributions.
+                  </h2>
+                </div>
+                <p className="max-w-[58ch] text-pretty text-base leading-7 text-slate-600 lg:justify-self-end">
+                  We compare simulated and human response patterns across three survey waves. Every annotation below is anchored to the exact source, topic, or metric it describes.
                 </p>
-
-                <dl className="mt-10 divide-y divide-white/15 border-y border-white/15">
-                  {METRICS.map((metric) => (
-                    <div key={metric.name} className="grid gap-2 py-5 sm:grid-cols-[11rem_1fr] sm:gap-6">
-                      <dt className="font-semibold text-white">{metric.name}</dt>
-                      <dd className="text-sm leading-6 text-blue-100/76">{metric.meaning}</dd>
-                    </div>
-                  ))}
-                </dl>
               </div>
 
-              <div className="lg:pt-14">
-                <h3 className="text-xl font-semibold">Read the research</h3>
-                <p className="mt-3 max-w-[48ch] text-sm leading-6 text-blue-100/76">
-                  These papers cover the methodology, its evaluation, and the wider research program behind the platform.
+              <figure className="mt-14">
+                <div className="mb-8 flex flex-col gap-3 sm:flex-row sm:items-center md:gap-5">
+                  <div className="shrink-0">
+                    <p className="text-[0.65rem] font-bold uppercase tracking-[0.18em] text-brand-blue">Study population</p>
+                    <h3 className="mt-1 font-mono text-lg font-bold tracking-[-0.04em] text-brand-navy sm:text-xl">American Trends Panel</h3>
+                  </div>
+                  <span className="relative hidden h-px flex-1 bg-brand-blue/45 sm:block" aria-hidden="true">
+                    <span className="absolute -left-1 -top-1 h-2 w-2 rounded-full bg-brand-blue" />
+                  </span>
+                  <p className="max-w-md border border-dashed border-brand-blue/55 bg-white/65 px-4 py-3 text-xs leading-5 text-slate-600 sm:text-sm sm:leading-6">
+                    Pew Research Center questionnaires answered by U.S. adults, paired with respondent demographics.
+                  </p>
+                </div>
+
+                <p className="mb-3 font-mono text-[0.65rem] font-bold uppercase tracking-[0.14em] text-brand-blue sm:hidden">
+                  Swipe to trace every annotation →
                 </p>
-                <div className="mt-7 divide-y divide-white/15 border-y border-white/15">
+                <div className="overflow-x-auto pb-3">
+                  <div className="min-w-[73rem]">
+                    <div className="relative z-30 mr-[16rem] grid grid-cols-[11rem_8rem_repeat(3,minmax(0,1fr))]">
+                      <div />
+                      <div />
+                      {[
+                        { wave: 'W34', topic: 'biomedical and food issues', color: '#b66046', border: 'border-[#b66046]/55', text: 'text-[#8f402d]' },
+                        { wave: 'W92', topic: 'political typology', color: '#376f91', border: 'border-[#376f91]/55', text: 'text-[#285d7d]' },
+                        { wave: 'W99', topic: 'AI and human enhancement', color: '#4f7b68', border: 'border-[#4f7b68]/55', text: 'text-[#356451]' },
+                      ].map((item) => (
+                        <div key={item.wave} className="relative mx-3 flex min-h-24 items-center justify-center pb-6 text-center">
+                          <div className={cn('w-full border border-dashed bg-white/70 px-3 py-2.5', item.border)}>
+                            <span className={cn('font-mono text-[0.65rem] font-bold uppercase tracking-[0.16em]', item.text)}>{item.wave}</span>
+                            <span className="mt-1 block text-xs font-semibold leading-4 text-slate-700">{item.topic}</span>
+                          </div>
+                          <span className="absolute -bottom-[3.125rem] left-1/2 h-[4.625rem] w-px -translate-x-1/2" style={{ backgroundColor: item.color }} aria-hidden="true" />
+                          <span className="absolute -bottom-[3.375rem] left-1/2 h-2 w-2 -translate-x-1/2 rounded-full ring-2 ring-white/80" style={{ backgroundColor: item.color }} aria-hidden="true" />
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="grid grid-cols-[minmax(0,1fr)_14rem] items-start gap-8">
+                      <div className="overflow-hidden border border-slate-300 bg-[#fbfcfc] shadow-[0_24px_70px_rgb(15_40_58_/_0.12)]">
+                        <table className="w-full table-fixed border-collapse text-left text-sm text-slate-800">
+                          <caption className="border-b border-slate-300 bg-[#173e5d] px-5 py-3 text-left font-mono text-[0.68rem] font-semibold uppercase tracking-[0.14em] text-blue-50">
+                            LLaMA-3.1-8B <span className="mx-2 text-white/35">/</span> replication results
+                          </caption>
+                          <colgroup>
+                            <col className="w-[11rem]" />
+                            <col className="w-[8rem]" />
+                            <col span={6} />
+                          </colgroup>
+                          <thead className="text-xs text-slate-700">
+                            <tr>
+                              <th scope="col" rowSpan={2} className="sticky left-0 z-20 border-r border-slate-300 bg-[#f4f6f7] px-5 py-4 align-bottom font-semibold">Conditioning</th>
+                              <th scope="col" rowSpan={2} className="border-r border-slate-300 bg-[#f4f6f7] px-5 py-4 align-bottom font-semibold">Matching</th>
+                              <th scope="colgroup" colSpan={2} className="border-r border-[#b66046]/25 bg-[#f6eae5] px-3 py-3 text-center font-semibold text-[#7e3928]">ATP Wave 34</th>
+                              <th scope="colgroup" colSpan={2} className="border-r border-[#376f91]/25 bg-[#e8f0f5] px-3 py-3 text-center font-semibold text-[#285d7d]">ATP Wave 92</th>
+                              <th scope="colgroup" colSpan={2} className="bg-[#e8f1ed] px-3 py-3 text-center font-semibold text-[#356451]">ATP Wave 99</th>
+                            </tr>
+                            <tr className="border-t border-slate-300 bg-[#f4f6f7] font-mono">
+                              <th scope="col" className="px-3 py-3 text-right font-semibold text-[#8f402d]">WD ↓</th>
+                              <th scope="col" className="border-r border-slate-300 px-3 py-3 text-right font-semibold text-[#8f402d]">Fro. ↓</th>
+                              <th scope="col" className="px-3 py-3 text-right font-semibold text-[#285d7d]">WD ↓</th>
+                              <th scope="col" className="border-r border-slate-300 px-3 py-3 text-right font-semibold text-[#285d7d]">Fro. ↓</th>
+                              <th scope="col" className="px-3 py-3 text-right font-semibold text-[#356451]">WD ↓</th>
+                              <th scope="col" className="px-4 py-3 text-right font-semibold text-[#356451]">Fro. ↓</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-200 font-mono tabular-nums">
+                            {ATP_RESULTS.map((result) => (
+                              <tr
+                                key={`${result.conditioning}-${result.matching}`}
+                                className={cn(
+                                  'transition-colors hover:bg-[#edf3f6]',
+                                  result.conditioning === 'Anamnesis' && 'bg-[#fff7da]',
+                                  result.conditioning === 'Human' && 'border-t-2 border-slate-400 bg-[#eef1f2]',
+                                  result.conditioning === 'Anamnesis' && result.matching === 'max weight' && 'border-t-2 border-slate-300',
+                                )}
+                              >
+                                <th
+                                  scope="row"
+                                  className={cn(
+                                    'sticky left-0 z-10 border-r border-slate-300 bg-[#fbfcfc] px-5 py-4 font-sans font-semibold',
+                                    result.conditioning === 'Anamnesis' && 'bg-[#fff7da] text-[#7a5600]',
+                                    result.conditioning === 'Human' && 'bg-[#eef1f2]',
+                                  )}
+                                >
+                                  {result.conditioning}
+                                </th>
+                                <td className="border-r border-slate-300 px-5 py-4 font-sans text-slate-500">{result.matching}</td>
+                                <td className="bg-[#b66046]/[0.035] px-3 py-4 text-right">{result.wave34}</td>
+                                <td className="border-r border-slate-300 bg-[#b66046]/[0.035] px-3 py-4 text-right">{result.fro34}</td>
+                                <td className="bg-[#376f91]/[0.035] px-3 py-4 text-right">{result.wave92}</td>
+                                <td className="border-r border-slate-300 bg-[#376f91]/[0.035] px-3 py-4 text-right">{result.fro92}</td>
+                                <td className="bg-[#4f7b68]/[0.035] px-3 py-4 text-right">{result.wave99}</td>
+                                <td className="bg-[#4f7b68]/[0.035] px-4 py-4 text-right">{result.fro99}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <aside className="relative mt-[5.4rem] border-y border-r border-dashed border-brand-blue/45 bg-white/55 px-5 py-5" aria-label="Metric definitions">
+                        <span className="absolute -left-7 top-5 h-px w-7 bg-brand-blue/60" aria-hidden="true" />
+                        <span className="absolute -left-9 top-4 h-2 w-2 rounded-full bg-brand-blue ring-2 ring-white/80" aria-hidden="true" />
+                        <p className="font-mono text-[0.65rem] font-bold uppercase tracking-[0.16em] text-brand-blue">Metrics · lower is better</p>
+                        <dl className="mt-4 space-y-4 text-xs leading-5 text-slate-600">
+                          <div>
+                            <dt className="font-mono text-sm font-bold text-brand-navy">WD</dt>
+                            <dd>Response distributions</dd>
+                          </div>
+                          <div>
+                            <dt className="font-mono text-sm font-bold text-brand-navy">Fro.</dt>
+                            <dd>Cross-question correlations</dd>
+                          </div>
+                        </dl>
+                      </aside>
+                    </div>
+                  </div>
+                </div>
+                <figcaption className="mt-4 text-xs leading-5 text-slate-500">
+                  Wasserstein distance (WD) and Frobenius norm (Fro.) compare each simulated distribution with held-out human responses.
+                </figcaption>
+              </figure>
+
+              <div className="mt-16 grid gap-8 border-t border-slate-300 pt-10 md:grid-cols-[12rem_1fr] lg:mt-20">
+                <h3 className="text-xl font-semibold">Read the research</h3>
+                <div className="grid border-t border-slate-300 sm:grid-cols-2 sm:gap-x-10">
                   {PUBLICATIONS.map((publication) => (
                     <a
                       key={publication.title}
                       href={publication.href}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="group flex min-h-24 items-center justify-between gap-5 py-5 transition-colors hover:text-brand-gold"
+                      className="group flex min-h-28 items-center justify-between gap-5 border-b border-slate-300 py-5 transition-colors hover:text-brand-blue"
                     >
                       <span>
                         <span className="block font-semibold">{publication.title}</span>
-                        <span className="mt-1 block text-sm leading-6 text-blue-100/70 group-hover:text-blue-50">{publication.description}</span>
+                        <span className="mt-1 block text-sm leading-6 text-slate-600 group-hover:text-slate-800">{publication.description}</span>
                       </span>
                       <ExternalLink className="h-5 w-5 shrink-0 transition-transform duration-200 ease-out group-hover:-translate-y-0.5 group-hover:translate-x-0.5" aria-hidden="true" />
                       <span className="sr-only">(opens in a new tab)</span>
@@ -365,18 +489,6 @@ export function Home() {
             </div>
           </section>
 
-          <section className="bg-background px-4 py-20 sm:px-6 sm:py-28 lg:px-8">
-            <div className="mx-auto flex max-w-5xl flex-col items-center text-center">
-              <h2 className="max-w-[20ch] text-balance text-3xl font-semibold tracking-tight sm:text-5xl">Bring virtual participants into your research workflow.</h2>
-              <p className="mt-6 max-w-2xl text-pretty text-lg leading-8 text-muted-foreground">
-                Construct a survey, target a demographic sample, run backstory-conditioned personas, and inspect the resulting distributions in one platform.
-              </p>
-              <div className="mt-9 flex flex-col gap-3 sm:flex-row">
-                <Link to="/register" className={buttonVariants({ size: 'lg' })}>Get started <ArrowRight className="h-4 w-4" aria-hidden="true" /></Link>
-                <Link to="/about" className={buttonVariants({ variant: 'outline', size: 'lg' })}>Learn about the team</Link>
-              </div>
-            </div>
-          </section>
         </main>
 
         <footer className="border-t border-border bg-muted/25 px-4 py-8 sm:px-6 lg:px-8">
@@ -387,9 +499,9 @@ export function Home() {
             </div>
             <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
               <Link to="/about" className="transition-colors hover:text-foreground">About</Link>
-              <a href="https://arxiv.org/abs/2407.06576" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-foreground">Research</a>
+              <a href="https://arxiv.org/abs/2607.10628" target="_blank" rel="noopener noreferrer" className="transition-colors hover:text-foreground">Research</a>
               <a href="https://github.com/DavidMChan/Anamnesis" target="_blank" rel="noopener noreferrer" className="inline-flex items-center gap-1.5 transition-colors hover:text-foreground">
-                <Github className="h-4 w-4" />
+                <Github className="h-4 w-4" aria-hidden="true" />
                 GitHub
               </a>
               <span>© {new Date().getFullYear()} The Regents of the University of California</span>

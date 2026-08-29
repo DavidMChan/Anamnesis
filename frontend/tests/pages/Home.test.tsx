@@ -63,6 +63,7 @@ describe('Home Page - Auth Redirect Guard', () => {
 
       expect(screen.getByRole('link', { name: /anamnesis home/i })).toBeInTheDocument()
       expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/conditioning llms to simulate/i)
+      expect(screen.getByRole('heading', { name: /random labels don’t reproduce real populations/i })).toBeInTheDocument()
       const signInLinks = screen.getAllByRole('link', { name: /sign in/i })
       expect(signInLinks.length).toBeGreaterThan(0)
       const getStartedLinks = screen.getAllByRole('link', { name: /get started/i })
