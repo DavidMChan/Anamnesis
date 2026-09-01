@@ -1,5 +1,5 @@
 import { Link } from 'react-router-dom'
-import { ArrowRight, ExternalLink, Github, Globe2, Linkedin } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ExternalLink, Github, Globe2, Linkedin } from 'lucide-react'
 import { useAuthContext } from '@/contexts/AuthContext'
 import { PublicLayout } from '@/components/layout/Layout'
 import { buttonVariants } from '@/components/ui/button'
@@ -73,6 +73,14 @@ export function About() {
         </header>
 
         <main className="mx-auto max-w-5xl px-4 pb-24 pt-28 sm:px-6 sm:pt-36 lg:px-8">
+          <Link
+            to="/"
+            className="mb-8 inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            <ArrowLeft className="h-4 w-4" aria-hidden="true" />
+            Back to home
+          </Link>
+
           <section aria-labelledby="team-heading">
             <h1 id="team-heading" className="text-balance text-4xl font-semibold tracking-tight sm:text-6xl">Team</h1>
             <p className="mt-5 max-w-3xl text-pretty text-lg leading-8 text-muted-foreground sm:text-xl">

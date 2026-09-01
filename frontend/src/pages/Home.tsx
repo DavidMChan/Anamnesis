@@ -1,10 +1,13 @@
-import { Link, Navigate } from 'react-router-dom'
+import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import {
   ArrowRight,
   ExternalLink,
   Github,
+  Play,
   Sparkles,
   UserRound,
+  X,
 } from 'lucide-react'
 import { useAuthContext } from '@/contexts/AuthContext'
 import { PublicLayout } from '@/components/layout/Layout'
@@ -92,13 +95,30 @@ const PUBLICATIONS = [
   },
 ]
 
+const DEMO_VIDEO_ID = 'g4l8Y_ilyW0'
+
 export function Home() {
   const { user } = useAuthContext()
+  const [isVideoOpen, setIsVideoOpen] = useState(false)
+  const videoTriggerRef = useRef<HTMLButtonElement>(null)
 
-  // Redirect logged-in users to surveys (don't wait for loading - that can hang)
-  if (user) {
-    return <Navigate to="/surveys" replace />
-  }
+  useEffect(() => {
+    if (!isVideoOpen) return
+
+    const previousOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setIsVideoOpen(false)
+    }
+    window.addEventListener('keydown', handleKeyDown)
+
+    return () => {
+      document.body.style.overflow = previousOverflow
+      window.removeEventListener('keydown', handleKeyDown)
+      videoTriggerRef.current?.focus()
+    }
+  }, [isVideoOpen])
 
   return (
     <PublicLayout>
@@ -132,8 +152,16 @@ export function Home() {
 
             <div className="flex shrink-0 items-center gap-1 sm:gap-2">
               <Link to="/about" className={cn(buttonVariants({ variant: 'ghost', size: 'sm' }), 'hidden sm:inline-flex')}>About</Link>
-              <Link to="/login" className={buttonVariants({ variant: 'ghost', size: 'sm' })}>Sign in</Link>
-              <Link to="/register" className={cn(buttonVariants({ size: 'sm' }), 'hidden sm:inline-flex')}>Get started</Link>
+              {user ? (
+                <Link to="/surveys" className={buttonVariants({ size: 'sm' })}>
+                  Dashboard <ArrowRight className="h-3.5 w-3.5" aria-hidden="true" />
+                </Link>
+              ) : (
+                <>
+                  <Link to="/login" className={buttonVariants({ variant: 'ghost', size: 'sm' })}>Sign in</Link>
+                  <Link to="/register" className={cn(buttonVariants({ size: 'sm' }), 'hidden sm:inline-flex')}>Get started</Link>
+                </>
+              )}
             </div>
           </nav>
         </header>
@@ -147,10 +175,11 @@ export function Home() {
                   href="https://arxiv.org/abs/2607.10628"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="mb-6 inline-flex items-center gap-2 rounded-full border border-white/20 bg-white/8 px-3 py-1.5 text-sm font-semibold text-blue-50 transition-colors hover:border-brand-gold/60 hover:text-brand-gold"
+                  className="group mb-6 inline-flex items-center gap-2.5 rounded-full border border-white/20 bg-white/8 py-1.5 pl-3.5 pr-4 transition-colors hover:border-brand-gold/60"
                 >
-                  EMNLP 2026 Demo <span className="text-white/35" aria-hidden="true">·</span> Read the paper
-                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                  <span className="text-[0.7rem] font-bold uppercase tracking-[0.1em] text-brand-gold">EMNLP 2026 Demo</span>
+                  <span className="text-sm font-medium text-blue-50 transition-colors group-hover:text-white">Read the paper</span>
+                  <ExternalLink className="h-3.5 w-3.5 text-blue-50/60 transition-colors group-hover:text-brand-gold" aria-hidden="true" />
                   <span className="sr-only">(opens in a new tab)</span>
                 </a>
                 <h1 className="text-balance text-[clamp(2rem,4vw,3.5rem)] font-semibold leading-[1.06] tracking-[-0.03em]">
@@ -174,12 +203,15 @@ export function Home() {
                   >
                     Access the platform <ArrowRight className="h-4 w-4" aria-hidden="true" />
                   </Link>
-                  <a
-                    href="#difference"
-                    className={cn(buttonVariants({ variant: 'outline', size: 'lg' }), 'border-white/30 bg-transparent text-white hover:bg-white/10 hover:text-white')}
+                  <button
+                    type="button"
+                    ref={videoTriggerRef}
+                    onClick={() => setIsVideoOpen(true)}
+                    className={cn(buttonVariants({ variant: 'outline', size: 'lg' }), 'border-white/30 bg-white/10 text-white hover:bg-white/15 hover:text-white')}
                   >
-                    See how it works
-                  </a>
+                    <Play className="h-4 w-4 fill-current" aria-hidden="true" />
+                    See demo video
+                  </button>
                 </div>
               </div>
 
@@ -508,6 +540,40 @@ export function Home() {
             </div>
           </div>
         </footer>
+
+        {isVideoOpen && (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Anamnesis demo video"
+            onClick={() => setIsVideoOpen(false)}
+          >
+            <div
+              className="relative w-full max-w-3xl overflow-hidden rounded-2xl bg-black shadow-2xl"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <button
+                type="button"
+                onClick={() => setIsVideoOpen(false)}
+                autoFocus
+                aria-label="Close video"
+                className="absolute right-3 top-3 z-10 flex h-9 w-9 items-center justify-center rounded-full bg-black/60 text-white transition-colors hover:bg-black/80"
+              >
+                <X className="h-5 w-5" aria-hidden="true" />
+              </button>
+              <div className="aspect-video w-full">
+                <iframe
+                  className="h-full w-full"
+                  src={`https://www.youtube-nocookie.com/embed/${DEMO_VIDEO_ID}?autoplay=1&rel=0`}
+                  title="Anamnesis demo video"
+                  allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
+                  allowFullScreen
+                />
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </PublicLayout>
   )

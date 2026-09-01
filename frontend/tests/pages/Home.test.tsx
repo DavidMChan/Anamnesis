@@ -22,22 +22,6 @@ vi.mock('@/contexts/AuthContext', () => ({
   useAuthContext: () => mockAuthContext,
 }))
 
-// Track navigation
-let navigatedTo: string | null = null
-
-vi.mock('react-router-dom', async () => {
-  const actual = await vi.importActual('react-router-dom')
-  return {
-    ...actual,
-    Navigate: ({ to }: { to: string }) => {
-      navigatedTo = to
-      return <div data-testid="navigate-mock">Redirecting to {to}</div>
-    },
-    useNavigate: () => vi.fn(),
-    useLocation: () => ({ pathname: '/', state: null }),
-  }
-})
-
 function renderHome() {
   return render(
     <MemoryRouter initialEntries={['/']}>
@@ -46,10 +30,9 @@ function renderHome() {
   )
 }
 
-describe('Home Page - Auth Redirect Guard', () => {
+describe('Home Page - Auth-aware CTAs', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    navigatedTo = null
     // Reset to unauthenticated state
     mockAuthContext.user = null
     mockAuthContext.loading = false
@@ -68,18 +51,24 @@ describe('Home Page - Auth Redirect Guard', () => {
       expect(signInLinks.length).toBeGreaterThan(0)
       const getStartedLinks = screen.getAllByRole('link', { name: /get started/i })
       expect(getStartedLinks.length).toBeGreaterThan(0)
+      expect(screen.queryByRole('link', { name: /dashboard/i })).not.toBeInTheDocument()
     })
   })
 
   describe('Authenticated User', () => {
-    it('should redirect to /surveys when user is already logged in', () => {
+    it('should stay on the home page and show a Dashboard CTA instead of redirecting', () => {
       mockAuthContext.user = mockUser
 
       renderHome()
 
-      expect(navigatedTo).toBe('/surveys')
-      // Should not show the home page hero content
-      expect(screen.queryByRole('heading', { level: 1 })).not.toBeInTheDocument()
+      // Should still show the home page hero content
+      expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent(/conditioning llms to simulate/i)
+
+      // Header swaps Sign in/Get started for a Dashboard link to /surveys
+      const dashboardLink = screen.getByRole('link', { name: /dashboard/i })
+      expect(dashboardLink).toHaveAttribute('href', '/surveys')
+      expect(screen.queryByRole('link', { name: /sign in/i })).not.toBeInTheDocument()
+      expect(screen.queryByRole('link', { name: /get started/i })).not.toBeInTheDocument()
     })
   })
 })

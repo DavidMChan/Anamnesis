@@ -74,7 +74,12 @@ export function Sidebar() {
   const sidebarContent = (
     <>
       {/* Logo */}
-      <div className="flex items-center gap-3 px-4 py-4 pt-6 pb-2">
+      <Link
+        to="/"
+        onClick={() => setIsOpen(false)}
+        className="flex items-center gap-3 px-4 py-4 pt-6 pb-2 transition-opacity hover:opacity-80"
+        aria-label="Anamnesis home"
+      >
         <div className="flex h-10 w-10 items-center justify-center rounded-full">
           <img
             src="/Anamnesis.svg"
@@ -85,7 +90,7 @@ export function Sidebar() {
         <div className="flex flex-col">
           <span className="text-lg font-light tracking-tight">ANAMNESIS</span>
         </div>
-      </div>
+      </Link>
 
       {/* Divider */}
       <div className="mx-3 my-4 h-px bg-border" />
